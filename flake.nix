@@ -1,10 +1,17 @@
 {
   description = "Laser Vector Prep - browser-only vector/toolpath preprocessor for galvo lasers";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # Provides the date-pinned nightly from rust-toolchain.toml (nixpkgs has no nightly).
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, rust-overlay }:
     let
       systems = [
         "aarch64-darwin"
@@ -12,35 +19,34 @@
         "x86_64-linux"
         "aarch64-linux"
       ];
-      forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      forAll = f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs {
+        inherit system;
+        overlays = [ rust-overlay.overlays.default ];
+      }));
     in
     {
-      devShells = forAll (pkgs: {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            # Rust. nixpkgs' rustc bundles the wasm32-unknown-unknown std, so no overlay is needed.
-            rustc
-            cargo
-            clippy
-            rustfmt
-            rust-analyzer
-            lld # nixpkgs' rustc links wasm32 with the system lld, not a bundled rust-lld
-            # Rust -> JS glue. Its version must equal the `wasm-bindgen` crate in Cargo.lock
-            # (`just check-wasm-bindgen` enforces this).
-            wasm-bindgen-cli
-            binaryen # wasm-opt
-            # Web
-            nodejs_24
-            # Task runner
-            just
-          ];
+      devShells = forAll (pkgs:
+        let
+          rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+        in
+        {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              rust # rustc, cargo, clippy, rustfmt, rust-analyzer, rust-src, wasm32 target
+              # Rust -> JS glue. Its version must equal the `wasm-bindgen` crate in Cargo.lock
+              # (`just check-wasm-bindgen` enforces this).
+              wasm-bindgen-cli
+              binaryen # wasm-opt
+              nodejs_24
+              just
+            ];
 
-          RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+            RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
 
-          shellHook = ''
-            echo "lvp dev shell: rustc $(rustc --version | cut -d' ' -f2), node $(node --version), wasm-bindgen $(wasm-bindgen --version | cut -d' ' -f2)"
-          '';
-        };
-      });
+            shellHook = ''
+              echo "lvp dev shell: $(rustc --version | cut -d' ' -f2-4), node $(node --version), wasm-bindgen $(wasm-bindgen --version | cut -d' ' -f2)"
+            '';
+          };
+        });
     };
 }
