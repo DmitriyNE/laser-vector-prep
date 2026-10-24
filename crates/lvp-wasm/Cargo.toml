@@ -1,0 +1,13 @@
+[package]
+name = "lvp-wasm"
+description = "wasm-bindgen surface over lvp-core, consumed by web/ inside a Web Worker."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lvp-core.workspace = true
+wasm-bindgen.workspace = true

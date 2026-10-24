@@ -1,0 +1,11 @@
+[package]
+name = "lvp-core"
+description = "Laser Vector Prep geometry core: units, primitives, flattening. No browser or wasm dependencies."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest.workspace = true
