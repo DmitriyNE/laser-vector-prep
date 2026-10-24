@@ -10,6 +10,7 @@ use cavalier_contours::polyline::PlineSource;
 use crate::diag::{Diagnostic, Severity};
 use crate::geom::{self, BBox, Point};
 use crate::model::*;
+use crate::order::{self, GroupPlan, PassPaths};
 use crate::patterns::{self, Geometry};
 use crate::pline::{self, Pline};
 use crate::profile;
@@ -154,8 +155,13 @@ pub struct PassResult {
     pub group: GroupId,
     pub paths: Vec<Pline>,
     pub diagnostics: Vec<Diagnostic>,
+    /// Ordering constraints `(before, after)` over `paths` (cutting: holes first).
+    pub precedence: Vec<(usize, usize)>,
     pub cached: bool,
 }
+
+/// Cached pattern output of one pass: fingerprint, paths, diagnostics, precedence.
+type CachedPass = (u64, Vec<Pline>, Vec<Diagnostic>, Vec<(usize, usize)>);
 
 #[derive(Clone, Debug, Default)]
 pub struct Evaluation {
@@ -169,11 +175,25 @@ pub struct Evaluation {
     pub unbound_layers: Vec<(String, String)>,
     /// Profile-level diagnostics (validation, cycles, bindings).
     pub diagnostics: Vec<Diagnostic>,
+    /// Path-order plan per output group, in profile order (spec §7).
+    pub groups: Vec<(GroupId, GroupPlan)>,
 }
 
 impl Evaluation {
     pub fn pass(&self, id: &PassId) -> Option<&PassResult> {
         self.passes.iter().find(|(p, _)| p == id).map(|(_, r)| r)
+    }
+
+    pub fn group_plan(&self, id: &GroupId) -> Option<&GroupPlan> {
+        self.groups.iter().find(|(g, _)| g == id).map(|(_, p)| p)
+    }
+
+    /// Paths of every pass, for resolving a plan's references.
+    pub fn pass_paths(&self) -> BTreeMap<PassId, Vec<Pline>> {
+        self.passes
+            .iter()
+            .map(|(id, r)| (id.clone(), r.paths.clone()))
+            .collect()
     }
 
     /// Every diagnostic from every level, with layer/pass context.
@@ -209,7 +229,8 @@ impl Evaluation {
 #[derive(Default)]
 pub struct Evaluator {
     layer_cache: HashMap<LayerId, (u64, Geometry, Vec<Diagnostic>)>,
-    pass_cache: HashMap<PassId, (u64, Vec<Pline>, Vec<Diagnostic>)>,
+    pass_cache: HashMap<PassId, CachedPass>,
+    plan_cache: HashMap<GroupId, (u64, GroupPlan)>,
 }
 
 /// Kahn's algorithm over layer→layer edges; returns `(order, cyclic)`.
@@ -269,6 +290,7 @@ impl Evaluator {
     pub fn clear(&mut self) {
         self.layer_cache.clear();
         self.pass_cache.clear();
+        self.plan_cache.clear();
     }
 
     pub fn evaluate(&mut self, profile: &Profile, sources: &Sources) -> Evaluation {
@@ -361,15 +383,22 @@ impl Evaluator {
                 hash_json(&mut h, &pass.pattern);
                 lr.fingerprint.hash(&mut h);
                 let fp = h.finish();
-                let (paths, diagnostics, cached) = match self.pass_cache.get(&pass.id) {
-                    Some((cfp, paths, diags)) if *cfp == fp => (paths.clone(), diags.clone(), true),
+                let (paths, diagnostics, precedence, cached) = match self.pass_cache.get(&pass.id) {
+                    Some((cfp, paths, diags, prec)) if *cfp == fp => {
+                        (paths.clone(), diags.clone(), prec.clone(), true)
+                    }
                     _ => {
                         let out = patterns::generate(&pass.pattern, &lr.geometry);
                         self.pass_cache.insert(
                             pass.id.clone(),
-                            (fp, out.paths.clone(), out.diagnostics.clone()),
+                            (
+                                fp,
+                                out.paths.clone(),
+                                out.diagnostics.clone(),
+                                out.precedence.clone(),
+                            ),
                         );
-                        (out.paths, out.diagnostics, false)
+                        (out.paths, out.diagnostics, out.precedence, false)
                     }
                 };
                 ev.passes.push((
@@ -379,6 +408,7 @@ impl Evaluator {
                         group: pass.group.clone(),
                         paths,
                         diagnostics,
+                        precedence,
                         cached,
                     },
                 ));
@@ -386,7 +416,64 @@ impl Evaluator {
         }
         ev.bindings = bindings;
         ev.unbound_layers = unbound;
+        self.plan_groups(profile, &mut ev);
         ev
+    }
+
+    /// Plan the path order of every output group (spec §7), cached per group on the
+    /// geometry of its passes, the settings and the protected regions.
+    fn plan_groups(&mut self, profile: &Profile, ev: &mut Evaluation) {
+        let settings = &profile.optimizer;
+        // Protected region: union of the configured layers' regions, with a fingerprint.
+        let mut protected: Option<Region> = None;
+        let mut protected_fp = DefaultHasher::new();
+        for id in &settings.protected {
+            match ev.layers.get(id) {
+                Some(lr) => {
+                    lr.fingerprint.hash(&mut protected_fp);
+                    if let Geometry::Region(r) = &lr.geometry
+                        && !r.is_empty()
+                    {
+                        protected = Some(match protected.take() {
+                            Some(acc) => acc.union(r),
+                            None => r.clone(),
+                        });
+                    }
+                }
+                None => {
+                    ev.diagnostics.push(Diagnostic::warning(
+                        "order.protected_unknown",
+                        format!("protected layer {id} does not exist"),
+                    ));
+                }
+            }
+        }
+        let protected_fp = protected_fp.finish();
+        let mut plans = Vec::new();
+        for group in &profile.output_groups {
+            let passes: Vec<PassPaths<'_>> = ev
+                .passes
+                .iter()
+                .filter(|(_, r)| r.group == group.id)
+                .map(|(id, r)| PassPaths {
+                    id: id.clone(),
+                    paths: &r.paths,
+                    precedence: &r.precedence,
+                })
+                .collect();
+            let mode = group.order_mode.unwrap_or(settings.mode);
+            let fp = order::fingerprint(&passes, mode, settings, protected_fp);
+            let plan = match self.plan_cache.get(&group.id) {
+                Some((cfp, plan)) if *cfp == fp => plan.clone(),
+                _ => {
+                    let plan = order::plan(&passes, mode, settings, protected.as_ref());
+                    self.plan_cache.insert(group.id.clone(), (fp, plan.clone()));
+                    plan
+                }
+            };
+            plans.push((group.id.clone(), plan));
+        }
+        ev.groups = plans;
     }
 
     fn layer_fingerprint(

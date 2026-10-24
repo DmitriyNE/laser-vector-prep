@@ -27,7 +27,7 @@
     <button disabled={blocked} onclick={() => store.exportPdf()}>Export PDF</button>
     <button disabled={blocked} onclick={() => store.exportPdfPerGroup()}>Export one PDF per group</button>
   </div>
-  <p class="hint">Path order in the PDF follows the generated order; the laser software may reorder it.</p>
+  <p class="hint">Path order in the PDF follows the planned order (see Path order); the laser software may still reorder it.</p>
 </section>
 
 <style>

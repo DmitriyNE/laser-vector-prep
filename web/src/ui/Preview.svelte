@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Preview } from "../core/types.js";
+  import type { Heatmap, Preview } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
 
   let { store }: { store: ProjectStore } = $props();
@@ -14,7 +14,50 @@
 
   type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; closedHoles?: boolean };
   let items: Item[] = [];
+  /** Heatmap images in document mm: drawn under the geometry when enabled. */
+  type HeatImage = { key: string; canvas: HTMLCanvasElement; x: number; top: number; wMm: number; hMm: number };
+  let heatImages: HeatImage[] = [];
   let fetchToken = 0;
+
+  /** Turn a coverage raster into an image: protected cells tinted, coverage from amber to red. */
+  function heatImage(key: string, h: Heatmap): HeatImage {
+    const canvas = document.createElement("canvas");
+    canvas.width = h.width;
+    canvas.height = h.height;
+    const ctx = canvas.getContext("2d")!;
+    const img = ctx.createImageData(h.width, h.height);
+    let peak = 1;
+    for (let i = 0; i < h.counts.length; i++) if (h.mask[i] && h.counts[i]! > peak) peak = h.counts[i]!;
+    for (let iy = 0; iy < h.height; iy++) {
+      const row = h.height - 1 - iy; // raster y goes up, image rows go down
+      for (let ix = 0; ix < h.width; ix++) {
+        const i = iy * h.width + ix;
+        const o = (row * h.width + ix) * 4;
+        const c = h.counts[i]!;
+        if (h.mask[i]) {
+          if (c > 0) {
+            const t = Math.min(1, c / peak);
+            img.data[o] = 255;
+            img.data[o + 1] = Math.round(180 * (1 - t));
+            img.data[o + 2] = 0;
+            img.data[o + 3] = Math.round(110 + 120 * t);
+          } else {
+            img.data[o] = 255;
+            img.data[o + 1] = 200;
+            img.data[o + 2] = 0;
+            img.data[o + 3] = 28;
+          }
+        } else if (c > 0) {
+          img.data[o] = 128;
+          img.data[o + 1] = 128;
+          img.data[o + 2] = 128;
+          img.data[o + 3] = 22;
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return { key, canvas, x: h.originX, top: h.originY + h.height * h.cellMm, wMm: h.width * h.cellMm, hMm: h.height * h.cellMm };
+  }
 
   function toScreen(x: number, y: number, w: number, h: number): [number, number] {
     return [w / 2 + (x - cx) * ppm, h / 2 - (y - cy) * ppm];
@@ -67,6 +110,7 @@
         if (p) next.push({ key: `layer:${l.id}`, preview: p, color: "rgba(60,60,60,0.9)", width: 1.5, dash: [], closedHoles: true });
       }
     }
+    const nextHeat: HeatImage[] = [];
     if (ev) {
       for (const pass of ev.passes) {
         if (store.hiddenPasses.has(pass.id)) continue;
@@ -74,14 +118,24 @@
         if (g && !g.visible) continue;
         const p = await store.preview("pass", pass.id);
         if (p) next.push({ key: `pass:${pass.id}`, preview: p, color: g ? rgbCss(g.color) : "black", width: 1, dash: [] });
+      }
+      // Jumps and footprint heatmaps are per output group (planned order), preview only.
+      for (const gs of ev.groups) {
+        const g = store.group(gs.id);
+        if (g && !g.visible) continue;
         if (store.showJumps) {
-          const j = await store.previewJumps(pass.id);
-          if (j) next.push({ key: `jumps:${pass.id}`, preview: j, color: "rgba(220,0,200,0.8)", width: 1, dash: [4, 3] });
+          const j = await store.previewJumps(gs.id);
+          if (j) next.push({ key: `jumps:${gs.id}`, preview: j, color: "rgba(220,0,200,0.8)", width: 1, dash: [4, 3] });
+        }
+        if (store.showHeatmap && gs.heatmap) {
+          const h = await store.heatmap(gs.id);
+          if (h) nextHeat.push(heatImage(`heat:${gs.id}`, h));
         }
       }
     }
     if (token !== fetchToken) return; // a newer fetch is in flight
     items = next;
+    heatImages = nextHeat;
     if (!fitted) fit();
     draw();
   }
@@ -99,6 +153,11 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     drawGrid(ctx, w, h);
+    ctx.imageSmoothingEnabled = false;
+    for (const hi of heatImages) {
+      const [sx, sy] = toScreen(hi.x, hi.top, w, h);
+      ctx.drawImage(hi.canvas, sx, sy, hi.wMm * ppm, hi.hMm * ppm);
+    }
     const sel = store.selection;
     for (const it of items) {
       const selected =
@@ -223,6 +282,7 @@
     void store.showSources;
     void store.showLayers;
     void store.showJumps;
+    void store.showHeatmap;
     void store.hiddenSourceLayers;
     void store.hiddenLayers;
     void store.hiddenPasses;
@@ -255,7 +315,8 @@
     <button onclick={fit} title="Fit (double-click)">fit</button>
     <label><input type="checkbox" bind:checked={store.showSources} /> sources</label>
     <label><input type="checkbox" bind:checked={store.showLayers} /> regions</label>
-    <label><input type="checkbox" bind:checked={store.showJumps} /> jumps (preview only)</label>
+    <label title="hypothetical straight beam-off jumps of the planned order; never exported"><input type="checkbox" bind:checked={store.showJumps} /> jumps</label>
+    <label title="jump footprint coverage over protected regions (relative, not a dose)"><input type="checkbox" bind:checked={store.showHeatmap} /> heatmap</label>
     {#if store.hiddenCount}<button onclick={() => store.showAll()} title="show every hidden source layer, region and pass">show all ({store.hiddenCount} hidden)</button>{/if}
     <span class="coords">
       {#if cursorMm}{cursorMm[0].toFixed(3)}, {cursorMm[1].toFixed(3)} mm{/if}

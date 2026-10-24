@@ -3,6 +3,28 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — M3 step 2: path order planning
+
+Per-group plans (D24) with the three spec modes, precedence from cutting passes (holes before
+their outer, emitted by the boundary trace), orientation and seam choice, a raster footprint
+model for the bleed penalty and the heatmap, and before/after statistics in a new "Path
+order" panel. Export follows the plan; jump and heatmap overlays are per group. Groups can
+override the mode.
+
+Learned:
+
+- The first draft re-polished and re-evaluated the whole sequence for every candidate move
+  and probed capsules with a 7 × 7 block per half-cell step: 90 s for 250 hatch rows.
+  Delta evaluation of the affected jumps, a precomputed disk stencil with an exact distance
+  filter, probes shared per node, and pruning candidates whose extra travel exceeds the
+  best possible bleed gain brought the same test to 0.5 s.
+- A neighbour search that scanned full squares per ring was O(ring³) on a grid of
+  1 × 2000 cells; building the grid from the larger extent and walking ring boundaries fixed
+  both the shape and the scan.
+- Length-only polishing after a bleed-aware search undoes its decisions; the DP now takes
+  the footprint probe into its transition costs.
+- With no assumed start point the first path must be movable: 2-opt may reverse a prefix.
+
 ## 2026-10-24 — M3 step 1: Gerber
 
 Shared `source::SourceDocument` for every reader, `read_any` with content-first format

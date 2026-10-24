@@ -50,6 +50,9 @@ pub struct PatternOutput {
     pub paths: Vec<Pline>,
     pub diagnostics: Vec<Diagnostic>,
     pub stats: PatternStats,
+    /// Ordering constraints `(before, after)` as indices into `paths` that any path-order
+    /// optimisation must keep (cutting: holes before the contour that contains them).
+    pub precedence: Vec<(usize, usize)>,
 }
 
 /// Upper bound on contour rings, as a guard against a pitch far below the geometry size.
@@ -75,7 +78,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             reverse,
             inner_first,
         } => with_region(geometry, "boundary trace", |region| {
-            let paths = trace::boundary_trace(
+            let (paths, precedence) = trace::boundary_trace_ordered(
                 region,
                 &trace::TraceParams {
                     side: *side,
@@ -94,6 +97,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
                 },
                 paths,
                 diagnostics: Vec::new(),
+                precedence,
             }
         }),
         Pattern::Hatch {

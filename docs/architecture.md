@@ -39,7 +39,8 @@ Pure Rust, host-testable, no browser dependencies. All lengths in millimetres.
 | `profile` | Versioned JSON parsing with migrations, structural validation, built-in presets. |
 | `eval` | Binding resolution (matched / missing / ambiguous) by layer name, file + layer, file-name glob or layer function, dependency order with cycle rejection, source interpretation (closed loops, stroke expansion, hatches), envelope providers (named boundary, bounding box / circle, buffer, convex hull), boolean composition `union(A) op union(B)`, pattern passes, fingerprint cache. |
 | `patterns` | Passthrough; inward contour fill (`gapfill`: Voronoi medial-axis centrelines for cores narrower than a pitch, missed-area audit); boundary trace (`trace`: inside / on / outside, kerf, rings, holes first); parallel hatch, crosshatch and boundary + hatch (`hatch`: exact line/arc crossings on a global phase lattice, serpentine). |
-| `export` | Flattened export paths per output group; `export::pdf` writes deterministic 1:1 vector PDFs (strokes only). |
+| `order` | Path-order plans per output group (D24): precedence-aware nearest-entry construction, or-opt / 2-opt improvement with delta evaluation, orientation and seam DP; raster footprint model for the bleed penalty, statistics (jumps, length, crossings, protected coverage, peak stacking) and the heatmap. |
+| `export` | Flattened export paths per output group in planned order; `export::pdf` writes deterministic 1:1 vector PDFs (strokes only). |
 | `project` | The worker-side facade: sources, profile, evaluation, JSON summaries, preview buffers, jump previews, export. |
 | `diag` | `Diagnostic { severity, code, message, context }` used everywhere; codes are stable dotted identifiers. |
 
@@ -56,7 +57,9 @@ Invariants worth knowing:
 - Domains are explicit envelope layers (D19). A subtraction whose B reaches outside A
   reports `eval.subject_outside_domain`; an envelope without reference geometry is
   `eval.envelope_unbounded`. No bounding box is ever assumed.
-- Preview jumps (`Project::preview_jumps`) are hypothetical and never reach an exporter.
+- Preview jumps (`Project::preview_jumps`) are hypothetical straight lines between the
+  planned path endpoints of one group; they and the footprint heatmap never reach an
+  exporter. Plans never alter mark geometry (D24).
 
 ## Wasm adapter (`crates/lvp-wasm`)
 

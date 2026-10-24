@@ -115,6 +115,8 @@ export interface WorkingLayer {
   referenceOnly: boolean;
 }
 
+export type OptimizerMode = "asGenerated" | "minimumJump" | "bleedAware";
+
 export interface OutputGroup {
   id: string;
   name: string;
@@ -122,6 +124,20 @@ export interface OutputGroup {
   strokeWidthMm?: number | null;
   export: boolean;
   visible: boolean;
+  /** Per-group path-order mode; null follows the profile's optimizer mode. */
+  orderMode?: OptimizerMode | null;
+}
+
+/** Path-order planning (spec §7). Geometric prediction only, never a machine setting. */
+export interface OptimizerSettings {
+  mode: OptimizerMode;
+  footprintMm: number;
+  bleedWeight: number;
+  protected: string[];
+  cellMm: number;
+  startMm?: [number, number] | null;
+  endMm?: [number, number] | null;
+  maxSweeps: number;
 }
 
 export interface Profile {
@@ -132,7 +148,7 @@ export interface Profile {
   workingLayers: WorkingLayer[];
   outputGroups: OutputGroup[];
   export: { strokeWidthMm: number; marginMm: number; separateFiles: boolean; flattenToleranceMm: number };
-  optimizer: { mode: "asGenerated" | "minimumJump" | "bleedAware" };
+  optimizer: OptimizerSettings;
 }
 
 export interface BindingSummary {
@@ -171,6 +187,29 @@ export interface PassSummary {
   diagnostics: Diagnostic[];
 }
 
+/** Statistics of a path sequence under the straight-jump assumption. */
+export interface OrderStats {
+  paths: number;
+  jumps: number;
+  jumpLengthMm: number;
+  longestJumpMm: number;
+  crossings: number;
+  coveredMm2?: number;
+  overlapIntegral?: number;
+  peakCoverage?: number;
+  objective: number;
+}
+
+export interface GroupSummary {
+  id: string;
+  name: string;
+  mode: OptimizerMode;
+  paths: number;
+  before: OrderStats;
+  after: OrderStats;
+  heatmap: boolean;
+}
+
 export interface EvaluationSummary {
   revision: number;
   boundsMm: Bounds | null;
@@ -178,8 +217,20 @@ export interface EvaluationSummary {
   unboundLayers: [string, string][];
   layers: LayerSummary[];
   passes: PassSummary[];
+  groups: GroupSummary[];
   diagnostics: Diagnostic[];
   hasErrors: boolean;
+}
+
+/** Jump footprint coverage raster over protected regions; row-major from the origin, y up. */
+export interface Heatmap {
+  originX: number;
+  originY: number;
+  cellMm: number;
+  width: number;
+  height: number;
+  counts: Uint16Array;
+  mask: Uint8Array;
 }
 
 /** Flattened polylines: path i spans coords[2*starts[i] .. 2*starts[i+1]]. */

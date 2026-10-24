@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 
-use lvp_core::model::{LayerId, PassId};
+use lvp_core::model::{GroupId, LayerId, PassId};
 use lvp_core::profile;
 use lvp_core::project::{PreviewBuffer, Project};
 use wasm_bindgen::prelude::*;
@@ -178,9 +178,69 @@ pub fn preview_source(file: usize, layer: &str, tolerance_mm: f64) -> Option<Pre
 }
 
 /// Hypothetical straight beam-off jumps of a pass, preview only.
+/// Hypothetical jumps of an output group's planned order (preview only, never exported).
 #[wasm_bindgen]
-pub fn preview_jumps(id: &str) -> Option<Preview> {
-    with(|p| p.preview_jumps(&PassId::new(id)).map(Into::into))
+pub fn preview_jumps(group_id: &str) -> Option<Preview> {
+    with(|p| p.preview_jumps(&GroupId::new(group_id)).map(Into::into))
+}
+
+/// Jump footprint coverage raster over the protected regions of a group.
+#[wasm_bindgen]
+pub struct HeatmapBuffer {
+    origin_x: f64,
+    origin_y: f64,
+    cell_mm: f64,
+    width: u32,
+    height: u32,
+    counts: Vec<u16>,
+    mask: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl HeatmapBuffer {
+    #[wasm_bindgen(getter)]
+    pub fn origin_x(&self) -> f64 {
+        self.origin_x
+    }
+    #[wasm_bindgen(getter)]
+    pub fn origin_y(&self) -> f64 {
+        self.origin_y
+    }
+    #[wasm_bindgen(getter)]
+    pub fn cell_mm(&self) -> f64 {
+        self.cell_mm
+    }
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+    #[wasm_bindgen(getter)]
+    pub fn counts(&self) -> Vec<u16> {
+        self.counts.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn mask(&self) -> Vec<u8> {
+        self.mask.clone()
+    }
+}
+
+#[wasm_bindgen]
+pub fn heatmap(group_id: &str) -> Option<HeatmapBuffer> {
+    with(|p| {
+        p.heatmap(&GroupId::new(group_id)).map(|h| HeatmapBuffer {
+            origin_x: h.origin.x,
+            origin_y: h.origin.y,
+            cell_mm: h.cell_mm,
+            width: h.width as u32,
+            height: h.height as u32,
+            counts: h.counts.clone(),
+            mask: h.mask.clone(),
+        })
+    })
 }
 
 /// Colour-separated PDF of every exporting group.

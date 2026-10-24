@@ -251,3 +251,21 @@ a per-layer `function` string that each reader fills in when the format declares
 first-match-wins slot semantics and the explicit-mapping UI are unchanged. The source
 document type is shared by all readers (`source::SourceDocument`); a file is detected by
 extension and content, never by trusting the extension alone.
+
+## D24 — Path order planning: per-group plans, raster footprint, squared coverage (2026-10-24)
+
+The spec's optimizer (§7) is implemented as a plan per output group that reorders paths,
+reverses open paths and rotates the seam of closed loops, never touching mark geometry.
+Construction is a deterministic nearest-entry walk over a grid of entry points (both ends
+of open paths, every vertex of a loop) that only offers paths whose precedence
+predecessors are done; cutting passes emit "hole before its outer" constraints. Improvement
+is or-opt and 2-opt with spatial neighbour candidates and delta evaluation of the affected
+jumps only; a prefix reversal is allowed when no start point is assumed so the first path is
+not pinned. Orientation and seam are then settled by a small dynamic programme.
+
+The bleed penalty is geometric: each jump's footprint is a capsule of the configured width,
+accumulated on a raster whose cells are flagged protected by a scanline fill of the
+protected layers' regions. The objective is jump length plus `bleed_weight × Σ coverage²`
+over protected cells, scaled to millimetres. Squaring is what turns "avoid hotspots" into a
+number: stacking two footprints on one spot costs four, spreading them costs two. The same
+raster is the preview heatmap. Nothing here is a dose and the labels say so.

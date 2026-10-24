@@ -10,6 +10,7 @@ use crate::eval::{BindingStatus, Evaluation, Evaluator, Sources};
 use crate::export::{self, ExportError, GroupFile};
 use crate::geom::BBox;
 use crate::model::*;
+use crate::order::{self, Heatmap, Stats};
 use crate::patterns::Geometry;
 use crate::pline::{self, Pline};
 use crate::profile::{self, ProfileError};
@@ -118,6 +119,21 @@ pub struct PassSummary {
     pub diagnostics: Vec<DiagnosticJson>,
 }
 
+/// Path-order plan of one output group: what the planner changed and what it predicts
+/// under the straight-jump assumption. Nothing here is a dose or a machine setting.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupSummary {
+    pub id: GroupId,
+    pub name: String,
+    pub mode: OptimizerMode,
+    pub paths: usize,
+    pub before: Stats,
+    pub after: Stats,
+    /// A footprint heatmap over protected regions exists for this group.
+    pub heatmap: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvaluationSummary {
@@ -127,6 +143,7 @@ pub struct EvaluationSummary {
     pub unbound_layers: Vec<(String, String)>,
     pub layers: Vec<LayerSummary>,
     pub passes: Vec<PassSummary>,
+    pub groups: Vec<GroupSummary>,
     pub diagnostics: Vec<DiagnosticJson>,
     pub has_errors: bool,
 }
@@ -449,6 +466,22 @@ impl Project {
                 }
             })
             .collect();
+        let groups = ev
+            .groups
+            .iter()
+            .filter_map(|(id, plan)| {
+                let g = self.profile.group(id)?;
+                Some(GroupSummary {
+                    id: id.clone(),
+                    name: g.name.clone(),
+                    mode: plan.mode,
+                    paths: plan.order.len(),
+                    before: plan.before.clone(),
+                    after: plan.after.clone(),
+                    heatmap: plan.heatmap.is_some(),
+                })
+            })
+            .collect();
         Some(EvaluationSummary {
             revision: self.revision,
             bounds_mm: bbox_json(all_bounds),
@@ -456,6 +489,7 @@ impl Project {
             unbound_layers: ev.unbound_layers.clone(),
             layers,
             passes,
+            groups,
             diagnostics: diags(&ev.diagnostics),
             has_errors: ev.has_errors(),
         })
@@ -494,25 +528,27 @@ impl Project {
 
     /// Hypothetical straight beam-off jumps between consecutive paths of a pass, in planner
     /// order. Preview only; never exported.
-    pub fn preview_jumps(&self, id: &PassId) -> Option<PreviewBuffer> {
-        let pr = self.last.as_ref()?.pass(id)?;
+    /// Hypothetical straight beam-off jumps of a group's planned order (preview only).
+    pub fn preview_jumps(&self, group: &GroupId) -> Option<PreviewBuffer> {
+        let ev = self.last.as_ref()?;
+        let plan = ev.group_plan(group)?;
+        let paths = ev.pass_paths();
         let mut b = PreviewBuffer {
             starts: vec![0],
             ..Default::default()
         };
-        for w in pr.paths.windows(2) {
-            let from = if w[0].is_closed() {
-                w[0].at(0)
-            } else {
-                w[0].last()?
-            };
-            let to = w[1].at(0);
+        for (from, to) in order::jumps(plan, &paths, &self.profile.optimizer) {
             b.coords
                 .extend([from.x as f32, from.y as f32, to.x as f32, to.y as f32]);
             b.starts.push((b.coords.len() / 2) as u32);
             b.closed.push(0);
         }
         Some(b)
+    }
+
+    /// Jump footprint coverage over the protected regions, for the preview overlay.
+    pub fn heatmap(&self, group: &GroupId) -> Option<&Heatmap> {
+        self.last.as_ref()?.group_plan(group)?.heatmap.as_ref()
     }
 
     pub fn export_pdf(&self) -> Result<Vec<u8>, ExportError> {
@@ -586,8 +622,18 @@ mod tests {
         assert_eq!(buf.starts.len(), fill.paths + 1);
         assert!(buf.starts.windows(2).all(|w| w[1] > w[0]));
         assert_eq!(*buf.starts.last().unwrap() as usize * 2, buf.coords.len());
-        let jumps = p.preview_jumps(&fill.id).unwrap();
+        // Jumps are planned per group: the copper group holds only the fill pass here.
+        let jumps = p.preview_jumps(&GroupId::new("grp-copper")).unwrap();
         assert_eq!(jumps.path_count(), fill.paths - 1);
+        let summary = p.summary().unwrap();
+        let copper = summary
+            .groups
+            .iter()
+            .find(|g| g.id == GroupId::new("grp-copper"))
+            .unwrap();
+        assert_eq!(copper.paths, fill.paths);
+        assert_eq!(copper.after.jumps, fill.paths - 1);
+        assert_eq!(copper.mode, OptimizerMode::AsGenerated);
         let layer = p.preview_layer(&LayerId::new("wl-copper"), 0.01).unwrap();
         assert_eq!(layer.path_count(), 11);
         let src = p.preview_source(0, "ROUTE_TOOL_PATH", 0.01).unwrap();
@@ -615,8 +661,9 @@ mod tests {
             .preview_pass(&PassId::new("pass-copper-fill"), 0.01)
             .unwrap();
         assert_eq!(pass.path_count(), 0);
-        let jumps = p.preview_jumps(&PassId::new("pass-copper-fill")).unwrap();
+        let jumps = p.preview_jumps(&GroupId::new("grp-copper")).unwrap();
         assert_eq!(jumps.path_count(), 0);
+        assert!(p.heatmap(&GroupId::new("grp-copper")).is_none());
         assert!(p.preview_layer(&LayerId::new("nope"), 0.01).is_none());
         assert!(p.preview_source(7, "x", 0.01).is_none());
     }

@@ -601,6 +601,11 @@ impl Region {
     }
 }
 
+/// Whether `p` lies inside a single closed loop (either orientation).
+pub fn loop_contains(l: &Pline, p: Point) -> bool {
+    l.winding_number(v2(p)) != 0
+}
+
 /// `LoopRule::MergeThenNest`: union crossing clusters, then nest by containment parity.
 fn merge_then_nest(ccw: Vec<Pline>) -> Vec<Pline> {
     if ccw.is_empty() {

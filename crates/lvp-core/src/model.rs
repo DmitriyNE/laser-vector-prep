@@ -386,6 +386,9 @@ pub struct OutputGroup {
     pub export: bool,
     #[serde(default = "default_true")]
     pub visible: bool,
+    /// Per-group path-order mode; `None` follows the profile's optimizer mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_mode: Option<OptimizerMode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -421,11 +424,71 @@ pub enum OptimizerMode {
     BleedAware,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+/// Path-order planning within each output group (spec §7). Everything here is geometric
+/// prediction under the stated assumption of straight beam-off jumps between emitted path
+/// endpoints; nothing is a machine setting or a calibrated dose.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerSettings {
     #[serde(default)]
     pub mode: OptimizerMode,
+    /// Assumed width of a jump's influence footprint (mm): the geometric surrogate used for
+    /// the bleed penalty and the heatmap.
+    #[serde(default = "default_footprint")]
+    pub footprint_mm: f64,
+    /// Weight of the bleed penalty (squared footprint overlap over protected regions, in
+    /// mm) relative to jump length (mm) in `bleedAware` mode.
+    #[serde(default = "default_one_f64")]
+    pub bleed_weight: f64,
+    /// Working layers whose regions are protected (keep-clear): the bleed penalty and the
+    /// heatmap are evaluated over their union. Empty means no protected region.
+    #[serde(default)]
+    pub protected: Vec<LayerId>,
+    /// Raster cell size for the footprint model (mm); coarsened automatically for very
+    /// large groups.
+    #[serde(default = "default_cell")]
+    pub cell_mm: f64,
+    /// Assumed position of the beam before the first path, if the user knows it. Never
+    /// invented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_mm: Option<[f64; 2]>,
+    /// Assumed position the beam returns to after the last path, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_mm: Option<[f64; 2]>,
+    /// Upper bound on local-improvement sweeps (determinism and bounded time).
+    #[serde(default = "default_sweeps")]
+    pub max_sweeps: u32,
+}
+
+fn default_footprint() -> f64 {
+    0.1
+}
+
+fn default_one_f64() -> f64 {
+    1.0
+}
+
+fn default_cell() -> f64 {
+    0.05
+}
+
+fn default_sweeps() -> u32 {
+    20
+}
+
+impl Default for OptimizerSettings {
+    fn default() -> Self {
+        Self {
+            mode: OptimizerMode::default(),
+            footprint_mm: default_footprint(),
+            bleed_weight: default_one_f64(),
+            protected: Vec::new(),
+            cell_mm: default_cell(),
+            start_mm: None,
+            end_mm: None,
+            max_sweeps: default_sweeps(),
+        }
+    }
 }
 
 /// A geometry-preparation profile: everything needed to turn matching source layers into

@@ -1,5 +1,5 @@
 import init, * as wasm from "../wasm/lvp_wasm.js";
-import type { Preview } from "../core/types.js";
+import type { Heatmap, Preview } from "../core/types.js";
 import type { Payload, Request, Response } from "./protocol.js";
 
 // Shared-memory wasm: instantiate, then start the rayon pool (one Web Worker per thread).
@@ -51,6 +51,13 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       return preview(wasm.preview_source(req.file, req.layer, req.toleranceMm));
     case "previewJumps":
       return preview(wasm.preview_jumps(req.id));
+    case "heatmap": {
+      const h = wasm.heatmap(req.id);
+      if (!h) return { result: null, transfer: [] };
+      const out: Heatmap = { originX: h.origin_x, originY: h.origin_y, cellMm: h.cell_mm, width: h.width, height: h.height, counts: h.counts, mask: h.mask };
+      h.free();
+      return { result: out, transfer: [out.counts.buffer, out.mask.buffer] };
+    }
     case "exportPdf": {
       const bytes = wasm.export_pdf();
       return { result: bytes, transfer: [bytes.buffer] };

@@ -10,7 +10,7 @@ test("service worker isolates the page and the app runs offline", async ({ page,
   // First visit: the worker installs and reloads the page once.
   await page.waitForFunction(() => globalThis.crossOriginIsolated === true, null, { timeout: 60_000 });
   await waitForApp(page);
-  await expect(page.locator(".panel")).toHaveCount(7);
+  await expect(page.locator(".panel")).toHaveCount(8);
   const cacheKeys: string[] = await page.evaluate(() => caches.keys());
   expect(cacheKeys.some((k) => k.startsWith("lvp-"))).toBe(true);
 
@@ -18,7 +18,7 @@ test("service worker isolates the page and the app runs offline", async ({ page,
   await page.reload();
   await page.waitForFunction(() => globalThis.crossOriginIsolated === true, null, { timeout: 60_000 });
   await waitForApp(page);
-  await expect(page.locator(".panel")).toHaveCount(7);
+  await expect(page.locator(".panel")).toHaveCount(8);
   const threads = await page.evaluate(() => (globalThis as unknown as { lvp: { threads: number | null } }).lvp.threads);
   expect(threads).toBeGreaterThan(0);
   await context.setOffline(false);

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Operand, StrokeWidth } from "../core/types.js";
+  import type { Operand, StrokeWidth, OptimizerMode } from "../core/types.js";
   import { hexRgb, rgbHex, type ProjectStore } from "../state/project.svelte.js";
 
   let { store }: { store: ProjectStore } = $props();
@@ -329,6 +329,14 @@
     </label>
     <label class="check"><input type="checkbox" bind:checked={group.export} onchange={touch} /> export</label>
     <label class="check"><input type="checkbox" bind:checked={group.visible} onchange={touch} /> visible in preview</label>
+    <label>Path order
+      <select value={group.orderMode ?? ""} onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; store.update(() => { group.orderMode = v === "" ? null : (v as OptimizerMode); }); }}>
+        <option value="">follow profile ({store.profile.optimizer.mode})</option>
+        <option value="asGenerated">as generated</option>
+        <option value="minimumJump">minimum jump</option>
+        <option value="bleedAware">bleed-aware</option>
+      </select>
+    </label>
   {:else if binding}
     <label>Slot name <input bind:value={binding.name} oninput={touch} /></label>
     <label class="check"><input type="checkbox" bind:checked={binding.required} onchange={touch} /> required (output is blocked while unmapped)</label>

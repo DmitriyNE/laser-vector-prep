@@ -483,6 +483,7 @@ fn group(id: &str, name: &str, color: Rgb) -> OutputGroup {
         stroke_width_mm: None,
         export: true,
         visible: true,
+        order_mode: None,
     }
 }
 
@@ -743,6 +744,7 @@ pub fn pcb_positive_ldi() -> Profile {
             stroke_width_mm: None,
             export: true,
             visible: true,
+            order_mode: None,
         },
         OutputGroup {
             id: GroupId::new("grp-outline"),
@@ -751,6 +753,7 @@ pub fn pcb_positive_ldi() -> Profile {
             stroke_width_mm: None,
             export: true,
             visible: true,
+            order_mode: None,
         },
     ];
     p.working_layers = vec![

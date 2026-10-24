@@ -7,7 +7,7 @@
   function add() {
     const id = shortId("grp");
     store.update((p) => {
-      p.outputGroups.push({ id, name: `Group ${p.outputGroups.length + 1}`, color: [0, 160, 0], strokeWidthMm: null, export: true, visible: true });
+      p.outputGroups.push({ id, name: `Group ${p.outputGroups.length + 1}`, color: [0, 160, 0], strokeWidthMm: null, export: true, visible: true, orderMode: null });
     });
     store.selection = { kind: "group", id };
   }

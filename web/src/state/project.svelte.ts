@@ -9,6 +9,7 @@ import type {
   Preview,
   Profile,
   SourceSummary,
+  Heatmap,
 } from "../core/types.js";
 import { GeometryWorker, WorkerCrashed } from "../worker/client.js";
 import { download, shortId } from "../util/download.js";
@@ -47,7 +48,7 @@ export class ProjectStore {
     workingLayers: [],
     outputGroups: [],
     export: { strokeWidthMm: 0.0254, marginMm: 5, separateFiles: false, flattenToleranceMm: 0.001 },
-    optimizer: { mode: "asGenerated" },
+    optimizer: { mode: "asGenerated", footprintMm: 0.1, bleedWeight: 1, protected: [], cellMm: 0.05, maxSweeps: 20 },
   });
   /** Saved profile the edits are based on; `null` while based on a preset or an import. */
   activeSavedId: string | null = $state(null);
@@ -65,6 +66,7 @@ export class ProjectStore {
   hiddenLayers = $state(new Set<string>());
   hiddenPasses = $state(new Set<string>());
   showJumps = $state(false);
+  showHeatmap = $state(false);
   showSources = $state(true);
   showLayers = $state(true);
 
@@ -185,8 +187,14 @@ export class ProjectStore {
     return this.worker.call({ kind: "previewSource", file, layer, toleranceMm: PREVIEW_TOLERANCE_MM });
   }
 
-  previewJumps(id: string): Promise<Preview | null> {
-    return this.worker.call({ kind: "previewJumps", id });
+  /** Hypothetical jumps of an output group's planned order. */
+  previewJumps(groupId: string): Promise<Preview | null> {
+    return this.worker.call({ kind: "previewJumps", id: groupId });
+  }
+
+  /** Footprint coverage raster of a group over the protected regions, if any. */
+  heatmap(groupId: string): Promise<Heatmap | null> {
+    return this.worker.call({ kind: "heatmap", id: groupId });
   }
 
   // ---- profiles ----------------------------------------------------------------------

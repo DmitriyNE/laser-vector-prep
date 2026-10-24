@@ -55,8 +55,10 @@ describe("lvp-wasm project API", () => {
     expect(preview.coords.length).toBe(preview.starts[pass.paths]! * 2);
     expect(preview.closed.length).toBe(pass.paths);
     preview.free();
-    const jumps = wasm.preview_jumps(pass.id)!;
+    // Jumps are planned per output group; the copper group holds only this pass.
+    const jumps = wasm.preview_jumps(pass.group)!;
     expect(jumps.closed.length).toBe(pass.paths - 1);
+    expect(wasm.heatmap(pass.group)).toBeUndefined();
     jumps.free();
 
     const pdf = wasm.export_pdf();

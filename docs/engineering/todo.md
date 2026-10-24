@@ -73,10 +73,14 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       aperture's extent (diagnosed); exact swept rectangles if a real file needs them
 - [ ] Gerber: deprecated image transforms (OF, SF, MI, AS, IR) and IPNEG are diagnosed, not
       applied
-- [ ] Path optimizer: nearest-endpoint baseline, 2-opt / or-opt moves, open-path reversal,
+- [x] Path optimizer: nearest-endpoint baseline, 2-opt / or-opt moves, open-path reversal,
       seam choice on loops; modes as-generated / minimum jump / bleed-aware with protected
       regions; jump footprint heatmap; inside-before-outside constraint for cutting passes;
-      objective before/after in the UI
+      objective before/after in the UI (D24)
+- [ ] Optimizer: seam choice is vertex-granular; splitting a line or arc at the closest
+      point would be exact too and shorten the entry jump further
+- [ ] Optimizer: the improvement phase is single-threaded; the candidate evaluation is
+      embarrassingly parallel if large fills make it slow
 - [ ] SVG reader via usvg (text refused, clip paths applied as intersections, masks/filters
       diagnosed)
 - [ ] Vector PDF reader: lopdf object model + own content-stream interpreter (paths,

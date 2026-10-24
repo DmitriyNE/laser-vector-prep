@@ -6,6 +6,7 @@
   import ExportPanel from "./ui/ExportPanel.svelte";
   import GroupsPanel from "./ui/GroupsPanel.svelte";
   import LayersPanel from "./ui/LayersPanel.svelte";
+  import OrderPanel from "./ui/OrderPanel.svelte";
   import Preview from "./ui/Preview.svelte";
   import ProfilesBar from "./ui/ProfilesBar.svelte";
   import PropertiesPanel from "./ui/PropertiesPanel.svelte";
@@ -40,6 +41,7 @@
     <aside class="right">
       <PropertiesPanel {store} />
       <GroupsPanel {store} />
+      <OrderPanel {store} />
       <ExportPanel {store} />
       <DiagnosticsPanel {store} />
     </aside>

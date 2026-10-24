@@ -36,17 +36,57 @@ pub fn ring_offsets(p: &TraceParams) -> Vec<f64> {
 }
 
 pub fn boundary_trace(region: &Region, p: &TraceParams) -> Vec<Pline> {
+    boundary_trace_ordered(region, p).0
+}
+
+/// Boundary trace plus the ordering constraints `(hole index, outer index)` that a path
+/// optimiser must keep when `inner_first` is set: every hole before the island it belongs
+/// to. Without `inner_first` there are no constraints.
+pub fn boundary_trace_ordered(
+    region: &Region,
+    p: &TraceParams,
+) -> (Vec<Pline>, Vec<(usize, usize)>) {
     let mut out: Vec<Pline> = Vec::new();
+    let mut precedence = Vec::new();
     for d in ring_offsets(p) {
         let ring = region.offset(d);
         // Holes (clockwise) first when cutting: inner features before the outer contour.
         let (holes, outers): (Vec<&Pline>, Vec<&Pline>) =
             ring.loops.iter().partition(|l| l.area() < 0.0);
+        let base = out.len();
         let ordered: Vec<&Pline> = if p.inner_first {
-            holes.into_iter().chain(outers).collect()
+            holes
+                .iter()
+                .copied()
+                .chain(outers.iter().copied())
+                .collect()
         } else {
-            outers.into_iter().chain(holes).collect()
+            outers
+                .iter()
+                .copied()
+                .chain(holes.iter().copied())
+                .collect()
         };
+        if p.inner_first {
+            // Each hole precedes the outer that contains it (the outer with the smallest
+            // area among those containing one of its points).
+            for (hi, hole) in holes.iter().enumerate() {
+                let probe = hole.at(0);
+                let probe = crate::geom::Point::new(probe.x, probe.y);
+                let mut best: Option<(usize, f64)> = None;
+                for (oi, outer) in outers.iter().enumerate() {
+                    if crate::region::loop_contains(outer, probe) {
+                        let a = outer.area();
+                        if best.is_none_or(|(_, ba)| a < ba) {
+                            best = Some((oi, a));
+                        }
+                    }
+                }
+                if let Some((oi, _)) = best {
+                    precedence.push((base + hi, base + holes.len() + oi));
+                }
+            }
+        }
         for l in ordered {
             let mut path = l.clone();
             if p.reverse {
@@ -55,7 +95,7 @@ pub fn boundary_trace(region: &Region, p: &TraceParams) -> Vec<Pline> {
             out.push(path);
         }
     }
-    out
+    (out, precedence)
 }
 
 #[cfg(test)]
