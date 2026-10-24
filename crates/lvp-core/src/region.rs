@@ -112,11 +112,89 @@ fn bbox_overlap(a: &BBox, b: &BBox, pad: f64) -> bool {
         && b.min.y - pad <= a.max.y
 }
 
+/// Uniform grid over loop bounding boxes: candidates for a box or point query in O(local).
+struct BBoxGrid {
+    origin: Point,
+    cell: f64,
+    cells: HashMap<(i32, i32), Vec<usize>>,
+    boxes: Vec<BBox>,
+}
+
+impl BBoxGrid {
+    fn new(boxes: Vec<BBox>) -> Self {
+        let all = boxes
+            .iter()
+            .copied()
+            .reduce(|a, b| a.union(b))
+            .unwrap_or(BBox::at(Point::new(0.0, 0.0)));
+        // Aim for a few loops per cell; never below a sane minimum cell size.
+        let n = boxes.len().max(1) as f64;
+        let extent = all.width().max(all.height()).max(1e-6);
+        let cell = (extent / n.sqrt()).max(extent * 1e-4);
+        let mut g = BBoxGrid {
+            origin: all.min,
+            cell,
+            cells: HashMap::new(),
+            boxes,
+        };
+        for i in 0..g.boxes.len() {
+            let b = g.boxes[i];
+            let (x0, y0, x1, y1) = g.span(&b);
+            for cx in x0..=x1 {
+                for cy in y0..=y1 {
+                    g.cells.entry((cx, cy)).or_default().push(i);
+                }
+            }
+        }
+        g
+    }
+
+    fn span(&self, b: &BBox) -> (i32, i32, i32, i32) {
+        let f = |v: f64, o: f64| ((v - o) / self.cell).floor() as i32;
+        (
+            f(b.min.x, self.origin.x),
+            f(b.min.y, self.origin.y),
+            f(b.max.x, self.origin.x),
+            f(b.max.y, self.origin.y),
+        )
+    }
+
+    /// Indices whose box overlaps `b` (expanded by `pad`), each once, ascending.
+    fn query_box(&self, b: &BBox, pad: f64) -> Vec<usize> {
+        let q = BBox {
+            min: Point::new(b.min.x - pad, b.min.y - pad),
+            max: Point::new(b.max.x + pad, b.max.y + pad),
+        };
+        let (x0, y0, x1, y1) = self.span(&q);
+        let mut out: Vec<usize> = Vec::new();
+        for cx in x0..=x1 {
+            for cy in y0..=y1 {
+                if let Some(ids) = self.cells.get(&(cx, cy)) {
+                    out.extend(
+                        ids.iter()
+                            .copied()
+                            .filter(|&i| bbox_overlap(&self.boxes[i], &q, 0.0)),
+                    );
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Indices whose box contains `p` (expanded by `pad`).
+    fn query_point(&self, p: Point, pad: f64) -> Vec<usize> {
+        self.query_box(&BBox::at(p), pad)
+    }
+}
+
 /// Sum of winding numbers of the loops of one operand around `p`.
-fn winding(loops: &[Tagged], operand: u8, p: Point, pad: f64) -> i32 {
-    loops
-        .iter()
-        .filter(|l| l.operand == operand && bbox_overlap(&l.bbox, &BBox::at(p), pad))
+fn winding(loops: &[Tagged], grid: &BBoxGrid, operand: u8, p: Point, pad: f64) -> i32 {
+    grid.query_point(p, pad)
+        .into_iter()
+        .map(|i| &loops[i])
+        .filter(|l| l.operand == operand)
         .map(|l| l.pline.winding_number(v2(p)))
         .sum()
 }
@@ -305,11 +383,13 @@ fn resolve(a: &[Pline], b: &[Pline], inside: &dyn Fn(i32, i32) -> bool) -> Vec<P
         .unwrap_or(1.0);
     let tol = Tolerances::for_extent(extent);
 
+    let grid = BBoxGrid::new(loops.iter().map(|l| l.bbox).collect());
+
     // 1. Intersections -> split points per loop.
     let mut splits: Vec<Vec<(usize, Vector2<f64>)>> = vec![Vec::new(); loops.len()];
     for i in 0..loops.len() {
-        for j in (i + 1)..loops.len() {
-            if !bbox_overlap(&loops[i].bbox, &loops[j].bbox, tol.join) {
+        for j in grid.query_box(&loops[i].bbox, tol.join) {
+            if j <= i {
                 continue;
             }
             let ix = loops[i].pline.find_intersects(&loops[j].pline);
@@ -362,10 +442,13 @@ fn resolve(a: &[Pline], b: &[Pline], inside: &dyn Fn(i32, i32) -> bool) -> Vec<P
         let left = Point::new(mid.x + n.x * tol.probe, mid.y + n.y * tol.probe);
         let right = Point::new(mid.x - n.x * tol.probe, mid.y - n.y * tol.probe);
         let pad = tol.probe * 2.0;
-        let in_left = inside(winding(&loops, 0, left, pad), winding(&loops, 1, left, pad));
+        let in_left = inside(
+            winding(&loops, &grid, 0, left, pad),
+            winding(&loops, &grid, 1, left, pad),
+        );
         let in_right = inside(
-            winding(&loops, 0, right, pad),
-            winding(&loops, 1, right, pad),
+            winding(&loops, &grid, 0, right, pad),
+            winding(&loops, &grid, 1, right, pad),
         );
         if in_left == in_right {
             continue;
@@ -484,15 +567,15 @@ impl Region {
     pub fn islands(&self) -> Vec<Region> {
         let outers: Vec<&Pline> = self.outers().collect();
         let mut groups: Vec<Vec<Pline>> = outers.iter().map(|o| vec![(*o).clone()]).collect();
+        let grid = BBoxGrid::new(outers.iter().filter_map(|o| pline::bounds(o)).collect());
         for h in self.holes() {
             let probe = h.at(0).pos();
             // Smallest outer containing the hole.
-            let owner = outers
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| o.winding_number(probe) != 0)
-                .min_by(|(_, a), (_, b)| a.area().total_cmp(&b.area()))
-                .map(|(i, _)| i);
+            let owner = grid
+                .query_point(pt(probe), 0.0)
+                .into_iter()
+                .filter(|&i| outers[i].winding_number(probe) != 0)
+                .min_by(|&a, &b| outers[a].area().total_cmp(&outers[b].area()));
             if let Some(i) = owner {
                 groups[i].push(h.clone());
             }
@@ -542,9 +625,10 @@ fn merge_then_nest(ccw: Vec<Pline>) -> Vec<Pline> {
         }
         i
     }
+    let grid = BBoxGrid::new(boxes.clone());
     for i in 0..ccw.len() {
-        for j in (i + 1)..ccw.len() {
-            if !bbox_overlap(&boxes[i], &boxes[j], tol.join) {
+        for j in grid.query_box(&boxes[i], tol.join) {
+            if j <= i {
                 continue;
             }
             let ix = ccw[i].find_intersects(&ccw[j]);
@@ -575,11 +659,12 @@ fn merge_then_nest(ccw: Vec<Pline>) -> Vec<Pline> {
 
     // Nest: depth parity decides outer (even) vs hole (odd). Loops are non-crossing now.
     let n = merged.len();
+    let merged_grid = BBoxGrid::new(merged.iter().filter_map(pline::bounds).collect());
     let mut depth = vec![0usize; n];
     for i in 0..n {
         let probe = merged[i].at(0).pos();
-        for (j, other) in merged.iter().enumerate() {
-            if i != j && other.winding_number(probe) != 0 {
+        for j in merged_grid.query_point(pt(probe), 0.0) {
+            if i != j && merged[j].winding_number(probe) != 0 {
                 depth[i] += 1;
             }
         }
