@@ -9,7 +9,7 @@ import type {
   Profile,
   SourceSummary,
 } from "../core/types.js";
-import { GeometryWorker } from "../worker/client.js";
+import { GeometryWorker, WorkerCrashed } from "../worker/client.js";
 import { download } from "../util/download.js";
 import * as db from "./profileStore.js";
 import type { SavedProfile } from "./profileStore.js";
@@ -66,8 +66,11 @@ export class ProjectStore {
 
   #evalToken = 0;
   #debounce: ReturnType<typeof setTimeout> | undefined;
+  /** Imported files, kept (in memory only) so sources can be re-imported after a crash. */
+  #files: File[] = [];
 
   async init() {
+    this.worker.onCrash = (msg) => void this.recover(msg);
     try {
       this.coreVersion = await this.worker.call({ kind: "version" });
       this.threads = await this.worker.call({ kind: "threads" });
@@ -97,6 +100,7 @@ export class ProjectStore {
         const bytes = new Uint8Array(await f.arrayBuffer());
         const summary = await this.worker.call({ kind: "addDxf", name: f.name, bytes });
         this.sources = [...this.sources, summary];
+        this.#files.push(f);
       } catch (e) {
         this.error = `${f.name}: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -106,8 +110,28 @@ export class ProjectStore {
 
   async removeSource(index: number) {
     await this.worker.call({ kind: "removeSource", index });
+    this.#files.splice(index, 1);
     this.sources = await this.worker.call({ kind: "sources" });
     if (this.selection.kind === "source") this.selection = { kind: "none" };
+    await this.evaluate();
+  }
+
+  /** The wasm instance trapped: a fresh worker is up; re-import the files and re-evaluate. */
+  async recover(message: string) {
+    this.error = `Geometry worker crashed (${message}); restarted and re-imported sources.`;
+    const files = this.#files;
+    this.#files = [];
+    this.sources = [];
+    this.evaluation = null;
+    for (const f of files) {
+      try {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        this.sources = [...this.sources, await this.worker.call({ kind: "addDxf", name: f.name, bytes })];
+        this.#files.push(f);
+      } catch {
+        // keep going; the diagnostics panel shows what is missing
+      }
+    }
     await this.evaluate();
   }
 
@@ -136,7 +160,9 @@ export class ProjectStore {
       this.previewRevision++;
       this.error = null;
     } catch (e) {
-      if (token === this.#evalToken) this.error = e instanceof Error ? e.message : String(e);
+      if (token === this.#evalToken && !(e instanceof WorkerCrashed)) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
     } finally {
       if (token === this.#evalToken) this.evaluating = false;
     }

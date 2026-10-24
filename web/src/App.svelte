@@ -14,6 +14,8 @@
   // coi-serviceworker reloads the page once to get there; until then we just wait.
   const isolated = globalThis.crossOriginIsolated === true;
   const store = new ProjectStore();
+  // Debug and end-to-end test hook: the store is reachable from the console.
+  (globalThis as { lvp?: ProjectStore }).lvp = store;
 
   onMount(() => {
     if (isolated) void store.init();

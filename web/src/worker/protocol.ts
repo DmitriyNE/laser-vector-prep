@@ -52,12 +52,19 @@ export type ResultOf<K extends Kind> = K extends "version"
                           ? GroupPdf[]
                           : never;
 
-/** What actually travels to the worker: a payload tagged with a request id. */
-export type Request = Payload & { id: number };
+/**
+ * What actually travels to the worker. The request id lives in its own field: several
+ * payloads carry an `id` of their own (layer, pass), so the envelope never spreads them.
+ */
+export interface Request {
+  rid: number;
+  payload: Payload;
+}
 
 export type Response =
-  | { id: number; ok: true; result: unknown }
-  | { id: number; ok: false; error: string };
+  | { rid: number; ok: true; result: unknown }
+  /** `fatal` means the wasm instance trapped and must be replaced. */
+  | { rid: number; ok: false; error: string; fatal: boolean };
 
 /** Buffers in a payload that should be transferred rather than copied. */
 export function transferables(p: Payload): Transferable[] {

@@ -592,6 +592,23 @@ mod tests {
     }
 
     #[test]
+    fn previews_of_empty_layers_and_passes_are_empty_buffers() {
+        let mut p = Project::new();
+        p.evaluate();
+        let layer = p.preview_layer(&LayerId::new("wl-copper"), 0.01).unwrap();
+        assert_eq!(layer.path_count(), 0);
+        assert_eq!(layer.starts, vec![0]);
+        let pass = p
+            .preview_pass(&PassId::new("pass-copper-fill"), 0.01)
+            .unwrap();
+        assert_eq!(pass.path_count(), 0);
+        let jumps = p.preview_jumps(&PassId::new("pass-copper-fill")).unwrap();
+        assert_eq!(jumps.path_count(), 0);
+        assert!(p.preview_layer(&LayerId::new("nope"), 0.01).is_none());
+        assert!(p.preview_source(7, "x", 0.01).is_none());
+    }
+
+    #[test]
     fn bad_profile_json_leaves_state_unchanged() {
         let mut p = Project::new();
         let before = p.profile_json();

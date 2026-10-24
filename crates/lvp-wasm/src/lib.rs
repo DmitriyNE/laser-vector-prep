@@ -19,6 +19,13 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
+/// Panic messages go to the worker console instead of a bare `unreachable` trap.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+fn start() {
+    console_error_panic_hook::set_once();
+}
+
 thread_local! {
     static PROJECT: RefCell<Project> = RefCell::new(Project::new());
 }

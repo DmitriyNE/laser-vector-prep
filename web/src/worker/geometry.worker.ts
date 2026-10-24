@@ -1,6 +1,6 @@
 import init, * as wasm from "../wasm/lvp_wasm.js";
 import type { Preview } from "../core/types.js";
-import type { Request, Response } from "./protocol.js";
+import type { Payload, Request, Response } from "./protocol.js";
 
 // Shared-memory wasm: instantiate, then start the rayon pool (one Web Worker per thread).
 const ready = (async () => {
@@ -15,7 +15,7 @@ function preview(p: wasm.Preview | undefined): { result: Preview | null; transfe
   return { result: out, transfer: [out.coords.buffer, out.starts.buffer, out.closed.buffer] };
 }
 
-function handle(req: Request): { result: unknown; transfer: Transferable[] } {
+function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
   switch (req.kind) {
     case "version":
       return { result: wasm.core_version(), transfer: [] };
@@ -65,14 +65,18 @@ function handle(req: Request): { result: unknown; transfer: Transferable[] } {
 }
 
 self.onmessage = async (ev: MessageEvent<Request>) => {
-  const req = ev.data;
+  const { rid, payload } = ev.data;
   try {
     await ready;
-    const { result, transfer } = handle(req);
-    const res: Response = { id: req.id, ok: true, result };
+    const { result, transfer } = handle(payload);
+    const res: Response = { rid, ok: true, result };
     self.postMessage(res, { transfer });
   } catch (e) {
-    const res: Response = { id: req.id, ok: false, error: e instanceof Error ? e.message : String(e) };
+    // Full detail (including wasm stack frames) stays in the worker console. A wasm trap
+    // (RuntimeError) leaves the instance in an unknown state: tell the client to replace it.
+    console.error(`geometry worker: ${payload.kind} failed`, e);
+    const fatal = e instanceof WebAssembly.RuntimeError;
+    const res: Response = { rid, ok: false, error: e instanceof Error ? e.message : String(e), fatal };
     self.postMessage(res);
   }
 };
