@@ -47,6 +47,8 @@ Invariants worth knowing:
   paths reports `eval.open_linework_in_region` and stays empty.
 - Layer list order never changes semantics; evaluation follows the dependency graph and
   rejects cycles with `eval.cycle`.
+- A layer combines two operand groups, each a union: `union(inputs) op union(operands)`.
+  Neither list order nor click order matters.
 - A missing required binding blocks dependent output (`eval.binding_missing`); nothing is
   substituted silently.
 - Preview jumps (`Project::preview_jumps`) are hypothetical and never reach an exporter.

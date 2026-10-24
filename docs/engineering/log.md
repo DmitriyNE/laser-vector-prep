@@ -3,6 +3,25 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — Stroke construction and silent boolean failures
+
+While verifying the two-group subtraction in the browser, "copper minus a band around the
+outline" came back empty. Root cause was not the subtraction but the stroke of the closed
+outline (D18): capsule unions with coincident caps and near-tangent arcs made the boolean
+drop a chain silently, and in release the gap fill produced garbage through the same path.
+Fixed by offset-based strokes, by snapping intersection points onto their segments before
+slicing, by deriving uncovered cores from an offset instead of stroking rings (also much
+faster: the core suite went from 4.5 s to 0.5 s), and by a debug assertion on dangling
+chains so the suite now fails loudly on inconsistent booleans.
+
+## 2026-10-24 — Two operand groups (schema v2)
+
+Owner feedback: subtraction depended on checkbox click order. Model changed to
+`union(A) op union(B)` with two groups (D17), first real migration v1 → v2 with tests;
+the properties panel shows A and B as separate groups and the layers list labels the op
+as "A − B" etc. Stored profiles are pushed through the worker on load so they come back
+migrated.
+
 ## 2026-10-24 — Bindings made visible
 
 Owner feedback after the M1 demo: managing layer bindings was unclear. Their model:

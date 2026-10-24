@@ -159,3 +159,25 @@ are therefore snapped to the finest i32 grid (never a coarse one, which folded t
 slivers onto themselves) and checked with exact integer orientation tests before the
 diagram is built; invalid slivers are skipped and reported (`pattern.gap_fill_skipped`).
 Curved Voronoi edges are chord-approximated, which is exact enough for sub-pitch slivers.
+
+## D17 — Layer operations take two operand groups; schema v2 (2026-10-24)
+
+Owner feedback: subtraction as "first checked input minus the rest" depended on click
+order. Every binary operation is now `union(A) op union(B)` with `inputs` (A) and
+`operands` (B) as two independent checkbox groups; union simply merges both. This is the
+first real schema migration (v1 → v2): the first v1 input stays in A, the rest move to B.
+Clipping (M2) will be intersection with B. Saved v1 profiles are migrated on load by the
+worker, and the UI reads the migrated form back rather than trusting stored JSON.
+
+## D18 — Strokes are built from side offsets, not capsule unions (2026-10-24)
+
+The first `stroke` unioned one capsule per segment. Adjacent capsules share identical cap
+circles and touch neighbouring arcs tangentially, and a DXF bulge rounded to six decimals
+turned exact tangencies into near-tangent intersections that the n-loop boolean could not
+classify consistently; the hole of a stroked outline vanished silently. Strokes now come
+from cavalier offsets: a closed path is `offset(+r) − offset(−r)` of its filled loop, an
+open path is its two side offsets joined by semicircular caps; capsules remain only as a
+fallback when an offset fragments. The stitcher also asserts in debug builds when a chain
+does not close, so an inconsistent boolean fails a test instead of returning a partial
+result. Contour fill's uncovered cores are likewise derived by offsetting the region past
+the last ring rather than by stroking the rings.
