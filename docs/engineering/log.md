@@ -3,6 +3,38 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — M2: geometry and layers
+
+Commit per sub-step:
+
+1. `BBoxGrid` spatial index in the boolean engine (D21): dense boards from seconds to
+   about a hundred milliseconds.
+2. Envelope layers with the five domain providers and their diagnostics (D19); one
+   evaluator test inverts the same subject against all five.
+3. Pattern family: boundary trace (inside / on / outside, kerf, rings, holes first), parallel
+   hatch and crosshatch with exact line/arc crossings on a global phase lattice, and
+   boundary + hatch. Proptests check that every emitted segment stays inside the region
+   and that nothing bridges a hole.
+4. UI editors for envelope layers and the new patterns; the layer list labels the operation
+   ("A − B") and the pattern.
+5. Playwright end-to-end suite on the installed Chrome (D20): import → evaluate → export
+   PDF, slot mapping, two-group subtraction with hatch, service worker + offline.
+6. Built-in presets for the spec's four scenarios (positive LDI, negative background hatch,
+   general marking, boundary cutting), each evaluated against a fixture in
+   `crates/lvp-core/tests/presets.rs`.
+
+Learned:
+
+- A scanline exactly through a polygon vertex yields two crossings or none depending on
+  rounding; the hatch nudges such lines by a sub-epsilon instead of special-casing vertices.
+- Fixture bulges are written with six decimals, so areas and perimeters derived from arcs
+  reproduce to about 1e-6 mm, not 1e-9. Fixture-level tests use 1e-4.
+- Under Playwright the coi-serviceworker never isolated the page: the reload on
+  `updatefound` raced the precache and landed on an uncontrolled page. Waiting for
+  `navigator.serviceWorker.ready` fixed it (D20).
+- Playwright's `channel: "chrome"` needs no download and runs headless with service workers
+  and `SharedArrayBuffer`; `context.setOffline(true)` plus a reload proves the offline path.
+
 ## 2026-10-24 — Stroke construction and silent boolean failures
 
 While verifying the two-group subtraction in the browser, "copper minus a band around the

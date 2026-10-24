@@ -184,3 +184,46 @@ fallback when an offset fragments. The stitcher also asserts in debug builds whe
 does not close, so an inconsistent boolean fails a test instead of returning a partial
 result. Contour fill's uncovered cores are likewise derived by offsetting the region past
 the last ring rather than by stroking the rings.
+
+## D19 — Envelopes are a layer kind (2026-10-24)
+
+The spec's five domain providers for inverted regions could have been a property of every
+region layer (an implicit domain applied before subtraction) or a layer of their own. Owner
+chose a separate `envelope` layer kind: it has a reference set (its inputs) and a provider
+(`namedBoundary`, `boundingBox`, `boundingCircle`, `buffer`, `convexHull`), produces a
+region, and is used as an ordinary operand, so an inversion stays the plain `A − B` the rest
+of the model already has. Consequences: the domain is visible and previewable in the layer
+list; one envelope can serve several layers (the negative preset subtracts a buffered copper
+from a named board interior); reference-only envelopes are never exported. The point-based
+providers (box, circle, hull) work from the reference's points, so open widthless linework
+is a valid reference for them; the region-based ones (named boundary, buffer) go through the
+normal region interpretation and report open linework the way a region layer does. No
+reference geometry at all is `eval.envelope_unbounded`; a margin or distance that collapses
+the shape is `eval.envelope_collapsed`. A subtraction whose B reaches outside A reports
+`eval.subject_outside_domain` instead of clipping silently.
+
+## D20 — End-to-end tests: Playwright on the installed Chrome (2026-10-24)
+
+Choices: keep the DevTools-protocol scripts as a manual check; Playwright with its own
+downloaded browsers; Playwright driving the Chrome already on the machine
+(`channel: "chrome"`). Owner chose the last. Rationale: no browser download outside Nix, and
+the thing under test is the real production bundle (`web/dist`) with shared memory, the
+rayon pool, the service worker and offline mode, which only a real browser exercises.
+`just e2e` is separate from `just test` because it needs `just build` and a local Chrome.
+The suite runs two servers: Vite preview with COOP/COEP headers, and a header-less static
+server for the service-worker path.
+
+Found while writing the suite: the page half of coi-serviceworker reloaded on `updatefound`,
+before the (precaching) worker had activated, so a fresh browser profile ended on an
+uncontrolled, un-isolated page. It now reloads after `navigator.serviceWorker.ready`, at
+most once per session, which also makes the first visit deterministic for users.
+
+## D21 — Boolean engine indexes loop bounding boxes (2026-10-24)
+
+`resolve` compared every loop pair and probed winding against every loop, quadratic in the
+number of loops; a dense 5000-pad board took 3 s per boolean. A uniform grid over loop
+bounding boxes (`region::BBoxGrid`) now serves pair candidates, winding probes, nesting and
+island grouping. Chosen over an R-tree crate because loops on PCB artwork are similar in
+size, the grid is deterministic and adds no dependency. Measured on synthetic boards: dense
+5000 pads 3.0 s → 121 ms, sparse 240 → 21 ms, one large blob 530 → 92 ms. This closes the
+M1 question whether `i_overlay` would be needed for performance.

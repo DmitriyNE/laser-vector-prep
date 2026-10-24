@@ -16,5 +16,6 @@ Quick start (needs [Nix](https://nixos.org) with flakes):
 nix develop -c just build   # static site in web/dist
 nix develop -c just dev     # dev server
 nix develop -c just test    # Rust + TypeScript tests
+nix develop -c just e2e     # browser tests in the installed Chrome (after just build)
 nix develop -c just fixtures  # regenerate fixtures/ from the generator
 ```

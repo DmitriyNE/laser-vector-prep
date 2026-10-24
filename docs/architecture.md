@@ -31,12 +31,12 @@ Pure Rust, host-testable, no browser dependencies. All lengths in millimetres.
 |---|---|
 | `geom`, `units`, `flatten`, `arc` | Points, boxes, units (DXF `$INSUNITS` mapping), bounded-error arc flattening, DXF bulge/angle semantics. `geom::EPS_MM` is the numerical noise floor. |
 | `pline` | Line-and-arc polylines (`cavalier_contours::Polyline<f64>`), construction helpers, flattening, `sanitize` (every polyline entering the kernel). |
-| `region` | Planar regions (CCW outers, CW holes) and the n-loop boolean engine built on cavalier's pairwise primitives; offsets via `Shape`; stroke expansion by capsule union. See D7. |
+| `region` | Planar regions (CCW outers, CW holes) and the n-loop boolean engine built on cavalier's pairwise primitives, with a bounding-box grid (`BBoxGrid`) for pair candidates, winding probes and nesting; offsets via `Shape`; strokes from side offsets. See D7, D18, D21. |
 | `dxf::read` / `dxf::write` | DXF subset reader (LINE, ARC, CIRCLE, LWPOLYLINE/POLYLINE, ELLIPSE, SPLINE, HATCH, INSERT, SOLID) with diagnostics for everything else; R2000 writer used for fixtures and later export. |
 | `model` | Configuration types = the profile schema (serde, camelCase): source bindings, working layers, passes, output groups, export and optimizer settings. |
 | `profile` | Versioned JSON parsing with migrations, structural validation, built-in presets. |
-| `eval` | Binding resolution (matched / missing / ambiguous), dependency order with cycle rejection, source interpretation (closed loops, stroke expansion, hatches), boolean composition, pattern passes, fingerprint cache. |
-| `patterns` | Passthrough and inward contour fill; `patterns::gapfill` adds Voronoi medial-axis centrelines for cores narrower than a pitch and the missed-area audit. |
+| `eval` | Binding resolution (matched / missing / ambiguous), dependency order with cycle rejection, source interpretation (closed loops, stroke expansion, hatches), envelope providers (named boundary, bounding box / circle, buffer, convex hull), boolean composition `union(A) op union(B)`, pattern passes, fingerprint cache. |
+| `patterns` | Passthrough; inward contour fill (`gapfill`: Voronoi medial-axis centrelines for cores narrower than a pitch, missed-area audit); boundary trace (`trace`: inside / on / outside, kerf, rings, holes first); parallel hatch, crosshatch and boundary + hatch (`hatch`: exact line/arc crossings on a global phase lattice, serpentine). |
 | `export` | Flattened export paths per output group; `export::pdf` writes deterministic 1:1 vector PDFs (strokes only). |
 | `project` | The worker-side facade: sources, profile, evaluation, JSON summaries, preview buffers, jump previews, export. |
 | `diag` | `Diagnostic { severity, code, message, context }` used everywhere; codes are stable dotted identifiers. |
@@ -51,6 +51,9 @@ Invariants worth knowing:
   Neither list order nor click order matters.
 - A missing required binding blocks dependent output (`eval.binding_missing`); nothing is
   substituted silently.
+- Domains are explicit envelope layers (D19). A subtraction whose B reaches outside A
+  reports `eval.subject_outside_domain`; an envelope without reference geometry is
+  `eval.envelope_unbounded`. No bounding box is ever assumed.
 - Preview jumps (`Project::preview_jumps`) are hypothetical and never reach an exporter.
 
 ## Wasm adapter (`crates/lvp-wasm`)
@@ -70,7 +73,8 @@ failures. The rayon pool is started by the host (`initThreadPool`) once per work
 | `src/state/project.svelte.ts` | `ProjectStore`: UI state, editable profile, debounced evaluation that only accepts the newest result, profile persistence, export. |
 | `src/state/profileStore.ts` | IndexedDB for named profiles and the last-used profile; no drawing bytes. |
 | `src/ui/*.svelte` | Panels from the spec: sources, layers, properties, output groups, profiles bar, export, diagnostics, canvas preview. |
-| `sw/coi-serviceworker.js` | Vendored coi-serviceworker, extended to precache the bundle for offline use; emitted by the Vite build with the asset manifest. |
+| `sw/coi-serviceworker.js` | Vendored coi-serviceworker, extended to precache the bundle for offline use; emitted by the Vite build with the asset manifest. The page half reloads once the registration is active. |
+| `e2e/`, `playwright.config.ts` | Playwright suite against the production bundle in the installed Chrome: workflow (import, evaluate, export, slots, two operand groups) and service worker + offline; `static-server.mjs` serves `dist/` without isolation headers. |
 
 ## Data flow of an edit
 
