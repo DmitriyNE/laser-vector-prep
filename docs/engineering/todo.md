@@ -36,6 +36,9 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
       `crossOriginIsolated === true`; today this is a manual DevTools-protocol check
 - [ ] Check Firefox: module workers + SharedArrayBuffer + the coi-serviceworker reload
 - [ ] Decide `--max-memory` (1 GiB today) once real fine-pitch workloads exist
+- [ ] Cold `just build` takes ~5 min on an M-series Mac: `-Z build-std` rebuilds the wasm
+      std and the release profile uses fat LTO. Incremental rebuilds are seconds. Revisit
+      (thin LTO, sccache) if it starts to hurt
 
 ## M2 — geometry and layers
 
