@@ -42,7 +42,7 @@
   const cov = (s: OrderStats) => (s.coveredMm2 === undefined ? "–" : s.coveredMm2.toFixed(2));
 </script>
 
-<section class="panel">
+<section class="panel order">
   <h2>Path order</h2>
   <label>Mode
     <select value={opt.mode} onchange={setMode}>
@@ -77,25 +77,26 @@
     {/if}
   </div>
   {#if groups.length}
-    <table>
-      <thead>
-        <tr><th>Group</th><th>Paths</th><th>Jumps</th><th>Travel mm</th><th>Longest</th><th>Cross</th><th>Covered mm²</th><th>Peak</th></tr>
-      </thead>
-      <tbody>
-        {#each groups as g (g.id)}
-          <tr class="group-row" data-group={g.id}>
-            <td title={g.mode}>{g.name}<span class="mode"> {g.mode === "asGenerated" ? "" : g.mode === "minimumJump" ? "min jump" : "bleed"}</span></td>
-            <td>{g.paths}</td>
-            <td>{g.after.jumps}</td>
-            <td class="num">{pair(g.before.jumpLengthMm, g.after.jumpLengthMm)}</td>
-            <td class="num">{pair(g.before.longestJumpMm, g.after.longestJumpMm)}</td>
-            <td class="num">{pair(g.before.crossings, g.after.crossings, (v) => String(v))}</td>
-            <td class="num">{g.before.coveredMm2 === undefined ? "–" : `${cov(g.before)} → ${cov(g.after)}`}</td>
-            <td class="num">{g.before.peakCoverage === undefined ? "–" : pair(g.before.peakCoverage, g.after.peakCoverage ?? 0, (v) => String(v))}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Group</th><th>Paths</th><th title="total jump length, before → after">Travel mm</th><th title="longest single jump">Longest</th><th title="jump–jump crossings">Cross</th><th title="protected area under jump footprints">Cover mm²</th><th title="most footprints stacked on one protected spot">Peak</th></tr>
+        </thead>
+        <tbody>
+          {#each groups as g (g.id)}
+            <tr class="group-row" data-group={g.id}>
+              <td title={g.mode}>{g.name}<span class="mode"> {g.mode === "asGenerated" ? "" : g.mode === "minimumJump" ? "min jump" : "bleed"}</span></td>
+              <td class="num">{g.paths}</td>
+              <td class="num">{pair(g.before.jumpLengthMm, g.after.jumpLengthMm)}</td>
+              <td class="num">{pair(g.before.longestJumpMm, g.after.longestJumpMm)}</td>
+              <td class="num">{pair(g.before.crossings, g.after.crossings, (v) => String(v))}</td>
+              <td class="num">{g.before.coveredMm2 === undefined ? "–" : `${cov(g.before)} → ${cov(g.after)}`}</td>
+              <td class="num">{g.before.peakCoverage === undefined ? "–" : pair(g.before.peakCoverage, g.after.peakCoverage ?? 0, (v) => String(v))}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   {/if}
   <p class="hint">
     Before → after the plan, assuming straight beam-off jumps between the emitted paths. The laser software may execute in another
@@ -149,11 +150,13 @@
     font-size: 11px;
     opacity: 0.8;
   }
+  .scroll {
+    overflow-x: auto;
+    margin-top: 0.4rem;
+  }
   table {
-    width: 100%;
     border-collapse: collapse;
     font-size: 11px;
-    margin-top: 0.4rem;
   }
   th,
   td {

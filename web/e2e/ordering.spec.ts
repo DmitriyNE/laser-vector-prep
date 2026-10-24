@@ -27,7 +27,7 @@ test("path order planning: minimum jump shortens travel, bleed-aware protects co
   await expect(page.locator(".group-row").first()).toContainText("Copper");
 
   // Minimum jump from the panel.
-  await page.locator(".panel", { hasText: "Path order" }).locator("select").first().selectOption("minimumJump");
+  await page.locator(".panel.order").locator("select").first().selectOption("minimumJump");
   await page.waitForFunction(() => {
     const lvp = (globalThis as unknown as { lvp: { evaluating: boolean; evaluation: { groups: { mode: string }[] } } }).lvp;
     return !lvp.evaluating && lvp.evaluation.groups[0]?.mode === "minimumJump";
@@ -40,8 +40,8 @@ test("path order planning: minimum jump shortens travel, bleed-aware protects co
   expect(ev.hasErrors).toBe(false);
 
   // Bleed-aware with the copper layer protected gives coverage numbers and a heatmap.
-  await page.locator(".panel", { hasText: "Path order" }).locator("select").first().selectOption("bleedAware");
-  await page.locator(".panel", { hasText: "Path order" }).getByLabel("Copper", { exact: true }).check();
+  await page.locator(".panel.order").locator("select").first().selectOption("bleedAware");
+  await page.locator(".panel.order").getByLabel("Copper", { exact: true }).check();
   await page.waitForFunction(() => {
     const lvp = (globalThis as unknown as { lvp: { evaluating: boolean; evaluation: { groups: { mode: string; heatmap: boolean }[] } } }).lvp;
     return !lvp.evaluating && lvp.evaluation.groups[0]?.mode === "bleedAware" && lvp.evaluation.groups[0]?.heatmap;
@@ -64,7 +64,7 @@ test("path order planning: minimum jump shortens travel, bleed-aware protects co
   await page.locator(".hud").getByLabel("jumps").check();
   await page.locator(".hud").getByLabel("heatmap").check();
   await settle(page);
-  await expect(page.locator(".panel", { hasText: "Path order" }).locator("table")).toContainText("Copper");
+  await expect(page.locator(".panel.order").locator("table")).toContainText("Copper");
 
   // Export still works and keeps every path.
   const download = page.waitForEvent("download");
