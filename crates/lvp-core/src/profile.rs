@@ -115,6 +115,26 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                 format!("source binding {:?} has no matching rules", b.name),
             ));
         }
+        for r in &b.rules {
+            let empty = match r {
+                MatchRule::LayerName { name, .. } => name.trim().is_empty(),
+                MatchRule::FileLayer { file, name } => {
+                    file.trim().is_empty() || name.trim().is_empty()
+                }
+                MatchRule::FileName { pattern, .. } | MatchRule::Function { pattern } => {
+                    pattern.trim().is_empty()
+                }
+            };
+            if empty {
+                out.push(Diagnostic::warning(
+                    "profile.binding_rule_empty",
+                    format!(
+                        "source binding {:?} has a rule with an empty name or pattern",
+                        b.name
+                    ),
+                ));
+            }
+        }
     }
     for g in &profile.output_groups {
         dup(g.id.as_str(), "output group", &mut out);
@@ -409,6 +429,43 @@ fn dxf_layer(name: &str) -> MatchRule {
     }
 }
 
+fn function(pattern: &str) -> MatchRule {
+    MatchRule::Function {
+        pattern: pattern.into(),
+    }
+}
+
+fn gerber_file(pattern: &str) -> MatchRule {
+    MatchRule::FileName {
+        format: Some(SourceFormat::Gerber),
+        pattern: pattern.into(),
+    }
+}
+
+/// Rules for the top copper layer: DXF layer name, then Gerber X2 function, then the
+/// common Gerber file-name conventions (Protel/Altium, KiCad, Eagle).
+fn copper_rules() -> Vec<MatchRule> {
+    vec![
+        dxf_layer("TOP_LAYER"),
+        function("Copper,L1,Top"),
+        gerber_file("*.gtl"),
+        gerber_file("*-F_Cu.gbr"),
+        gerber_file("*.cmp"),
+    ]
+}
+
+/// Rules for the mechanical outline: DXF layer name, then Gerber profile function, then
+/// file-name conventions.
+fn outline_rules() -> Vec<MatchRule> {
+    vec![
+        dxf_layer("ROUTE_TOOL_PATH"),
+        function("Profile*"),
+        gerber_file("*.gko"),
+        gerber_file("*.gm1"),
+        gerber_file("*-Edge_Cuts.gbr"),
+    ]
+}
+
 fn slot(id: &str, name: &str, required: bool, rules: Vec<MatchRule>) -> SourceBinding {
     SourceBinding {
         id: SourceId::new(id),
@@ -499,14 +556,9 @@ pub fn pcb_negative_hatch() -> Profile {
         "PCB negative (background hatch)",
     );
     p.source_bindings = vec![
-        slot("src-copper", "Copper", true, vec![dxf_layer("TOP_LAYER")]),
+        slot("src-copper", "Copper", true, copper_rules()),
         // Required here: it is the domain of the inversion.
-        slot(
-            "src-outline",
-            "Board outline",
-            true,
-            vec![dxf_layer("ROUTE_TOOL_PATH")],
-        ),
+        slot("src-outline", "Board outline", true, outline_rules()),
     ];
     p.output_groups = vec![
         group("grp-background", "Background", Rgb::BLUE),
@@ -626,16 +678,13 @@ pub fn boundary_cutting() -> Profile {
         "builtin-boundary-cutting",
         "Boundary cutting (contour trace)",
     );
-    p.source_bindings = vec![slot(
-        "src-cut",
-        "Cut outline",
-        true,
-        vec![
-            dxf_layer("ROUTE_TOOL_PATH"),
-            dxf_layer("CUT"),
-            dxf_layer("OUTLINE"),
-        ],
-    )];
+    let mut rules = vec![
+        dxf_layer("ROUTE_TOOL_PATH"),
+        dxf_layer("CUT"),
+        dxf_layer("OUTLINE"),
+    ];
+    rules.extend(outline_rules().into_iter().skip(1));
+    p.source_bindings = vec![slot("src-cut", "Cut outline", true, rules)];
     p.output_groups = vec![group("grp-cut", "Cut", Rgb::RED)];
     p.working_layers = vec![layer(
         "wl-cut",
@@ -668,24 +717,8 @@ pub fn pcb_positive_ldi() -> Profile {
         "PCB positive LDI (contour fill)",
     );
     p.source_bindings = vec![
-        SourceBinding {
-            id: SourceId::new("src-copper"),
-            name: "Copper".into(),
-            required: true,
-            rules: vec![MatchRule::LayerName {
-                format: Some(SourceFormat::Dxf),
-                name: "TOP_LAYER".into(),
-            }],
-        },
-        SourceBinding {
-            id: SourceId::new("src-outline"),
-            name: "Board outline".into(),
-            required: false,
-            rules: vec![MatchRule::LayerName {
-                format: Some(SourceFormat::Dxf),
-                name: "ROUTE_TOOL_PATH".into(),
-            }],
-        },
+        slot("src-copper", "Copper", true, copper_rules()),
+        slot("src-outline", "Board outline", false, outline_rules()),
     ];
     p.output_groups = vec![
         OutputGroup {

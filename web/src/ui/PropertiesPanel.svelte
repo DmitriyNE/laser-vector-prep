@@ -121,7 +121,15 @@
     store.update(() => {
       const r = binding.rules[i];
       if (!r) return;
-      binding.rules[i] = kind === "fileLayer" ? { kind: "fileLayer", file: "", name: r.name } : { kind: "layerName", format: "dxf", name: r.name };
+      const text = "name" in r ? r.name : r.pattern;
+      binding.rules[i] =
+        kind === "fileLayer"
+          ? { kind: "fileLayer", file: "", name: text }
+          : kind === "fileName"
+            ? { kind: "fileName", format: "gerber", pattern: text }
+            : kind === "function"
+              ? { kind: "function", pattern: text }
+              : { kind: "layerName", format: "dxf", name: text };
     });
   }
 
@@ -330,17 +338,28 @@
         <div class="rule">
           <select value={rule.kind} onchange={(e) => setRuleKind(i, (e.currentTarget as HTMLSelectElement).value)}>
             <option value="layerName">layer name</option>
+            <option value="function">layer function</option>
+            <option value="fileName">file name pattern</option>
             <option value="fileLayer">file + layer</option>
           </select>
           {#if rule.kind === "fileLayer"}
             <input placeholder="file name" bind:value={rule.file} oninput={touch} />
+            <input placeholder="layer name" bind:value={rule.name} oninput={touch} />
+          {:else if rule.kind === "layerName"}
+            <input placeholder="layer name" bind:value={rule.name} oninput={touch} />
+          {:else if rule.kind === "fileName"}
+            <input placeholder="*.gtl" bind:value={rule.pattern} oninput={touch} title="case-insensitive; * and ? wildcards" />
+          {:else}
+            <input placeholder="Copper,L1,Top" bind:value={rule.pattern} oninput={touch} title="Gerber X2 file function or IPC-2581 layer function; * and ? wildcards" />
           {/if}
-          <input placeholder="layer name" bind:value={rule.name} oninput={touch} />
           <button title="remove rule" onclick={() => removeRule(i)}>×</button>
         </div>
       {/each}
       <button onclick={addRule}>+ rule</button>
-      <p class="hint">Layer-name rules travel with the profile to new designs; file + layer rules pin one imported file.</p>
+      <p class="hint">
+        Layer-name, function and file-pattern rules travel with the profile to new designs; file + layer rules pin one imported file.
+        Patterns are case-insensitive globs (* and ?).
+      </p>
     </fieldset>
     <p class="hint">Used by: {store.bindingUsers(binding.id).join(", ") || "no working layer"}</p>
     <button onclick={deleteBinding}>delete slot</button>
@@ -348,6 +367,7 @@
     {@const mapped = store.bindingOf(sourceFile.name, sourceLayer.name)}
     <p><strong>{sourceLayer.name}</strong> in {sourceFile.name}</p>
     <p class="hint">
+      {#if sourceLayer.function}Declared function: {sourceLayer.function}.{/if}
       {sourceLayer.closedPaths} closed, {sourceLayer.openPaths} open path(s), {sourceLayer.hatches} hatch(es).
       {#if sourceLayer.boundsMm}Bounds {sourceLayer.boundsMm.map((v) => v.toFixed(3)).join(", ")} mm.{/if}
       Imported layers are immutable; map them onto a profile slot in the Sources list ("→ slot"),

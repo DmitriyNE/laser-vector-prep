@@ -6,7 +6,6 @@ use cavalier_contours::polyline::PlineSource;
 use serde::Serialize;
 
 use crate::diag::{Diagnostic, Severity};
-use crate::dxf::read::{DxfDocument, DxfReadError, Primitive, ReadOptions, read_bytes};
 use crate::eval::{BindingStatus, Evaluation, Evaluator, Sources};
 use crate::export::{self, ExportError, GroupFile};
 use crate::geom::BBox;
@@ -14,6 +13,7 @@ use crate::model::*;
 use crate::patterns::Geometry;
 use crate::pline::{self, Pline};
 use crate::profile::{self, ProfileError};
+use crate::source::{Primitive, ReadError, ReadOptions, SourceDocument, read_any};
 use crate::units::Unit;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -53,6 +53,8 @@ fn bbox_json(b: Option<BBox>) -> Option<[f64; 4]> {
 pub struct SourceLayerSummary {
     pub name: String,
     pub color: Option<i16>,
+    /// Declared layer function (Gerber X2, IPC-2581), if any.
+    pub function: Option<String>,
     pub closed_paths: usize,
     pub open_paths: usize,
     pub hatches: usize,
@@ -64,7 +66,7 @@ pub struct SourceLayerSummary {
 pub struct SourceSummary {
     pub index: usize,
     pub name: String,
-    pub format: &'static str,
+    pub format: SourceFormat,
     pub version: Option<String>,
     /// Declared units; `None` means the file was unitless and `assumed_units` applied.
     pub units: Option<String>,
@@ -202,18 +204,28 @@ impl Project {
         self.read_options.assume_units = units;
     }
 
-    pub fn add_dxf(&mut self, name: &str, bytes: &[u8]) -> Result<SourceSummary, DxfReadError> {
-        let doc = read_bytes(bytes, &self.read_options)?;
-        let idx = self.sources.add_dxf(name, doc);
+    /// Import a file of any supported format (detected from content and name).
+    pub fn add_source(&mut self, name: &str, bytes: &[u8]) -> Result<SourceSummary, ReadError> {
+        let doc = read_any(name, bytes, &self.read_options)?;
+        let idx = self.sources.add(name, doc);
         Ok(self.source_summary(idx).expect("just added"))
     }
 
-    pub fn replace_dxf(
+    pub fn replace_source(
         &mut self,
         index: usize,
         bytes: &[u8],
-    ) -> Result<SourceSummary, DxfReadError> {
-        let doc = read_bytes(bytes, &self.read_options)?;
+    ) -> Result<SourceSummary, ReadError> {
+        let name = self
+            .sources
+            .files
+            .get(index)
+            .map(|f| f.name.clone())
+            .ok_or_else(|| ReadError {
+                format: None,
+                message: format!("no source at index {index}"),
+            })?;
+        let doc = read_any(&name, bytes, &self.read_options)?;
         self.sources.replace(index, doc);
         Ok(self.source_summary(index).expect("exists"))
     }
@@ -232,6 +244,7 @@ impl Project {
                 let mut s = SourceLayerSummary {
                     name: l.name.clone(),
                     color: l.color,
+                    function: l.function.clone(),
                     closed_paths: 0,
                     open_paths: 0,
                     hatches: 0,
@@ -276,7 +289,7 @@ impl Project {
         Some(SourceSummary {
             index,
             name: f.name.clone(),
-            format: "dxf",
+            format: f.format,
             version: f.doc.version.clone(),
             units: f.doc.units.map(|u| format!("{u:?}")),
             assumed_units: format!("{:?}", self.read_options.assume_units),
@@ -292,7 +305,7 @@ impl Project {
             .collect()
     }
 
-    pub fn document(&self, index: usize) -> Option<&DxfDocument> {
+    pub fn document(&self, index: usize) -> Option<&SourceDocument> {
         self.sources.files.get(index).map(|f| &f.doc)
     }
 
@@ -537,7 +550,7 @@ mod tests {
     fn import_evaluate_preview_export() {
         let mut p = Project::new();
         coarse(&mut p);
-        let s = p.add_dxf("board-islands.dxf", &board()).unwrap();
+        let s = p.add_source("board-islands.dxf", &board()).unwrap();
         assert_eq!(s.units.as_deref(), Some("Millimetre"));
         // Layer table declares "0" too; it is empty.
         assert_eq!(s.layers.len(), 3);
@@ -630,7 +643,7 @@ mod tests {
                 .any(|b| b.status == "missing" && b.required)
         );
         assert_eq!(p.export_pdf().unwrap_err(), ExportError::NothingToExport);
-        assert!(p.add_dxf("bad.dxf", b"not a dxf").is_err());
+        assert!(p.add_source("bad.dxf", b"not a dxf").is_err());
         assert!(p.source_summaries().is_empty());
     }
 }

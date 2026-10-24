@@ -36,6 +36,8 @@ export class ProjectStore {
 
   sources: SourceSummary[] = $state([]);
   presets: Profile[] = $state([]);
+  /** File extensions the core can read (lower case, no dot). */
+  acceptedExtensions: string[] = $state(["dxf"]);
   saved: SavedProfile[] = $state([]);
   profile: Profile = $state({
     schemaVersion: 1,
@@ -77,6 +79,7 @@ export class ProjectStore {
       this.coreVersion = await this.worker.call({ kind: "version" });
       this.threads = await this.worker.call({ kind: "threads" });
       this.presets = await this.worker.call({ kind: "presets" });
+      this.acceptedExtensions = await this.worker.call({ kind: "acceptedExtensions" });
       this.saved = await db.listProfiles();
       const lastId = await db.getSetting<string>(LAST_PROFILE_KEY);
       const last = this.saved.find((s) => s.id === lastId);
@@ -100,7 +103,7 @@ export class ProjectStore {
     for (const f of files) {
       try {
         const bytes = new Uint8Array(await f.arrayBuffer());
-        const summary = await this.worker.call({ kind: "addDxf", name: f.name, bytes });
+        const summary = await this.worker.call({ kind: "addSource", name: f.name, bytes });
         this.sources = [...this.sources, summary];
         this.#files.push(f);
       } catch (e) {
@@ -128,7 +131,7 @@ export class ProjectStore {
     for (const f of files) {
       try {
         const bytes = new Uint8Array(await f.arrayBuffer());
-        this.sources = [...this.sources, await this.worker.call({ kind: "addDxf", name: f.name, bytes })];
+        this.sources = [...this.sources, await this.worker.call({ kind: "addSource", name: f.name, bytes })];
         this.#files.push(f);
       } catch {
         // keep going; the diagnostics panel shows what is missing
@@ -322,34 +325,42 @@ export class ProjectStore {
 
   // ---- bindings: the profile's source slots, onto which imported layers are mapped ----
 
-  /** Add a slot; with `layerName` it starts with a portable layer-name rule. */
-  addBinding(name: string, layerName: string | null): string {
+  /** Add a slot, optionally with one starting rule. */
+  addBinding(name: string, rule: MatchRule | null): string {
     const id = shortId("src");
     this.update((p) => {
-      p.sourceBindings.push({
-        id,
-        name,
-        required: false,
-        rules: layerName ? [{ kind: "layerName", format: "dxf", name: layerName }] : [],
-      });
+      p.sourceBindings.push({ id, name, required: false, rules: rule ? [rule] : [] });
     });
     return id;
   }
 
-  /** Create a slot named after an imported layer and matching it by name. */
-  newBindingFromLayer(layer: string) {
-    const id = this.addBinding(layer, layer);
+  /**
+   * The most portable rule that matches an imported layer: its declared function when the
+   * format has one (Gerber X2, IPC-2581), the file name for one-layer-per-file formats, the
+   * layer name otherwise, and an explicit file+layer rule when the same layer name exists
+   * in several files.
+   */
+  portableRule(file: string, layer: string): MatchRule {
+    const src = this.sources.find((s) => s.name === file);
+    const sl = src?.layers.find((l) => l.name === layer);
+    if (sl?.function) return { kind: "function", pattern: sl.function };
+    if (src && src.format === "gerber") return { kind: "fileName", format: "gerber", pattern: file };
+    const filesWithName = this.sources.filter((s) => s.layers.some((l) => l.name === layer)).length;
+    if (filesWithName > 1) return { kind: "fileLayer", file, name: layer };
+    return { kind: "layerName", format: src?.format ?? "dxf", name: layer };
+  }
+
+  /** Create a slot named after an imported layer and matching it with a portable rule. */
+  newBindingFromLayer(file: string, layer: string) {
+    const src = this.sources.find((s) => s.name === file);
+    const name = src?.format === "gerber" ? file.replace(/\.[^.]+$/, "") : layer;
+    const id = this.addBinding(name, this.portableRule(file, layer));
     this.selection = { kind: "binding", id };
   }
 
-  /**
-   * Map an imported layer onto a slot. Stored as a rule in the profile: a portable
-   * layer-name rule, or an explicit file+layer rule when that name exists in several files.
-   */
+  /** Map an imported layer onto a slot, stored as a rule in the profile. */
   mapToBinding(bindingId: string, file: string, layer: string) {
-    const filesWithName = this.sources.filter((s) => s.layers.some((l) => l.name === layer)).length;
-    const rule: MatchRule =
-      filesWithName > 1 ? { kind: "fileLayer", file, name: layer } : { kind: "layerName", format: "dxf", name: layer };
+    const rule = this.portableRule(file, layer);
     this.update((p) => {
       const b = p.sourceBindings.find((x) => x.id === bindingId);
       if (!b) return;

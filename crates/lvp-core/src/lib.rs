@@ -18,6 +18,7 @@ pub mod pline;
 pub mod profile;
 pub mod project;
 pub mod region;
+pub mod source;
 pub mod units;
 
 /// Crate version, surfaced to the UI so exports can record which core produced them.

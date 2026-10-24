@@ -60,19 +60,26 @@ pub fn builtin_presets_json() -> Result<String, JsError> {
     json(&profile::builtin_presets())
 }
 
-/// Import a DXF file; returns its `SourceSummary` as JSON.
+/// Import a file of any supported format (detected from content and name); returns its
+/// `SourceSummary` as JSON.
 #[wasm_bindgen]
-pub fn add_dxf(name: &str, bytes: &[u8]) -> Result<String, JsError> {
-    with(|p| p.add_dxf(name, bytes).map_err(js).and_then(|s| json(&s)))
+pub fn add_source(name: &str, bytes: &[u8]) -> Result<String, JsError> {
+    with(|p| p.add_source(name, bytes).map_err(js).and_then(|s| json(&s)))
 }
 
 #[wasm_bindgen]
-pub fn replace_dxf(index: usize, bytes: &[u8]) -> Result<String, JsError> {
+pub fn replace_source(index: usize, bytes: &[u8]) -> Result<String, JsError> {
     with(|p| {
-        p.replace_dxf(index, bytes)
+        p.replace_source(index, bytes)
             .map_err(js)
             .and_then(|s| json(&s))
     })
+}
+
+/// File extensions the app accepts, as a JSON array (for file pickers).
+#[wasm_bindgen]
+pub fn accepted_extensions_json() -> Result<String, JsError> {
+    json(&lvp_core::source::all_extensions())
 }
 
 #[wasm_bindgen]

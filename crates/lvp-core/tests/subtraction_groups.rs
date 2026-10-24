@@ -14,7 +14,7 @@ fn copper_minus_outline_band_keeps_copper() {
     ))
     .unwrap();
     let mut sources = Sources::default();
-    sources.add_dxf(
+    sources.add(
         "board-islands.dxf",
         read_str(&text, &ReadOptions::default()).unwrap(),
     );

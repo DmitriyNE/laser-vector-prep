@@ -15,6 +15,7 @@ use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 use crate::arc::Arc;
 use crate::diag::{Diagnostic, Severity};
 use crate::geom::Point;
+use crate::model::SourceFormat;
 use crate::pline::{self, Pline};
 use crate::region::LoopRule;
 use crate::units::Unit;
@@ -22,62 +23,10 @@ use crate::units::Unit;
 /// Maximum nesting of block references before we give up (guards against cycles).
 const MAX_INSERT_DEPTH: usize = 32;
 
-#[derive(Clone, Debug)]
-pub struct ReadOptions {
-    /// Chordal tolerance for flattening ellipses, splines and non-uniformly scaled arcs.
-    pub tolerance_mm: f64,
-    /// Units applied when the file declares none (`$INSUNITS` 0 or missing).
-    pub assume_units: Unit,
-}
+pub use crate::source::{Primitive, ReadOptions, SourceLayer};
 
-impl Default for ReadOptions {
-    fn default() -> Self {
-        Self {
-            tolerance_mm: 0.001,
-            assume_units: Unit::Millimetre,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum Primitive {
-    /// Open or closed centreline. `width` is a constant stroke width in mm when the source
-    /// entity carried one (LWPOLYLINE/POLYLINE widths); `None` is a zero-width centreline.
-    Path { pline: Pline, width: Option<f64> },
-    /// Filled area bounded by loops, from HATCH, SOLID or TRACE.
-    Hatch {
-        loops: Vec<Pline>,
-        rule: LoopRule,
-        solid: bool,
-        pattern: String,
-    },
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct SourceLayer {
-    pub name: String,
-    /// AutoCAD Color Index from the layer table, if the layer was declared.
-    pub color: Option<i16>,
-    pub primitives: Vec<Primitive>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DxfDocument {
-    /// `$ACADVER`, e.g. `AC1015`.
-    pub version: Option<String>,
-    /// Declared drawing units; `None` when the file is unitless. Coordinates are always
-    /// returned in millimetres (using `ReadOptions::assume_units` for unitless files).
-    pub units: Option<Unit>,
-    /// Sorted by name. Includes declared-but-empty layers.
-    pub layers: Vec<SourceLayer>,
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-impl DxfDocument {
-    pub fn layer(&self, name: &str) -> Option<&SourceLayer> {
-        self.layers.iter().find(|l| l.name == name)
-    }
-}
+/// A DXF file read into the shared source model.
+pub type DxfDocument = crate::source::SourceDocument;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DxfReadError {
@@ -1404,6 +1353,7 @@ pub fn read_str(text: &str, opts: &ReadOptions) -> Result<DxfDocument, DxfReadEr
                 SourceLayer {
                     name: name.clone(),
                     color: *color,
+                    function: None,
                     primitives: Vec::new(),
                 },
             )
@@ -1443,6 +1393,7 @@ pub fn read_str(text: &str, opts: &ReadOptions) -> Result<DxfDocument, DxfReadEr
             .or_insert_with(|| SourceLayer {
                 name: layer,
                 color: None,
+                function: None,
                 primitives: Vec::new(),
             })
             .primitives
@@ -1450,6 +1401,7 @@ pub fn read_str(text: &str, opts: &ReadOptions) -> Result<DxfDocument, DxfReadEr
     }
 
     Ok(DxfDocument {
+        format: SourceFormat::Dxf,
         version,
         units,
         layers: by_name.into_values().collect(),

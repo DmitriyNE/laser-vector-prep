@@ -19,7 +19,7 @@ fn fixture(name: &str) -> Sources {
     let path = format!("{}/../../fixtures/dxf/{name}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&path).unwrap();
     let mut s = Sources::default();
-    s.add_dxf(name, read_str(&text, &ReadOptions::default()).unwrap());
+    s.add(name, read_str(&text, &ReadOptions::default()).unwrap());
     s
 }
 
@@ -181,7 +181,7 @@ fn boundary_cutting_preset_traces_outline_holes_first() {
         Entity::rect(Point::new(5.0, 3.0), Point::new(8.0, 7.0)),
     );
     let mut sources = Sources::default();
-    sources.add_dxf(
+    sources.add(
         "part.dxf",
         read_str(&d.to_dxf(), &ReadOptions::default()).unwrap(),
     );

@@ -8,20 +8,20 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use cavalier_contours::polyline::PlineSource;
 
 use crate::diag::{Diagnostic, Severity};
-use crate::dxf::read::{DxfDocument, Primitive};
 use crate::geom::{self, BBox, Point};
 use crate::model::*;
 use crate::patterns::{self, Geometry};
 use crate::pline::{self, Pline};
 use crate::profile;
 use crate::region::{self, LoopRule, Region};
+use crate::source::{Primitive, SourceDocument, glob_match};
 
 /// One imported file.
 #[derive(Clone, Debug)]
 pub struct LoadedSource {
     pub name: String,
     pub format: SourceFormat,
-    pub doc: DxfDocument,
+    pub doc: SourceDocument,
     /// Changes whenever the file's content changes; part of every dependent fingerprint.
     pub revision: u64,
 }
@@ -33,11 +33,11 @@ pub struct Sources {
 }
 
 impl Sources {
-    pub fn add_dxf(&mut self, name: impl Into<String>, doc: DxfDocument) -> usize {
+    pub fn add(&mut self, name: impl Into<String>, doc: SourceDocument) -> usize {
         self.next_revision += 1;
         self.files.push(LoadedSource {
             name: name.into(),
-            format: SourceFormat::Dxf,
+            format: doc.format,
             doc,
             revision: self.next_revision,
         });
@@ -45,9 +45,10 @@ impl Sources {
     }
 
     /// Replace a file's document (same slot, new revision).
-    pub fn replace(&mut self, index: usize, doc: DxfDocument) {
+    pub fn replace(&mut self, index: usize, doc: SourceDocument) {
         self.next_revision += 1;
         if let Some(f) = self.files.get_mut(index) {
+            f.format = doc.format;
             f.doc = doc;
             f.revision = self.next_revision;
         }
@@ -100,6 +101,15 @@ pub fn resolve_bindings(
                             format.is_none_or(|fm| fm == f.format) && &l.name == name
                         }
                         MatchRule::FileLayer { file, name } => &f.name == file && &l.name == name,
+                        MatchRule::FileName { format, pattern } => {
+                            format.is_none_or(|fm| fm == f.format)
+                                && !l.primitives.is_empty()
+                                && glob_match(pattern, &f.name)
+                        }
+                        MatchRule::Function { pattern } => l
+                            .function
+                            .as_deref()
+                            .is_some_and(|fun| glob_match(pattern, fun)),
                     };
                     if hit {
                         hits.push((i, l.name.clone()));
@@ -747,7 +757,7 @@ mod tests {
     use crate::profile::pcb_positive_ldi;
     use crate::units::Unit;
 
-    fn board() -> DxfDocument {
+    fn board() -> SourceDocument {
         let mut d = Document::new(Unit::Millimetre);
         d.layer("TOP_LAYER", 5).layer("ROUTE_TOOL_PATH", 1);
         d.add(
@@ -782,7 +792,7 @@ mod tests {
     #[test]
     fn preset_evaluates_fixture_like_board() {
         let mut sources = Sources::default();
-        sources.add_dxf("board.dxf", board());
+        sources.add("board.dxf", board());
         let profile = pcb_positive_ldi();
         let mut ev = Evaluator::new();
         let e = ev.evaluate(&profile, &sources);
@@ -812,9 +822,94 @@ mod tests {
     }
 
     #[test]
+    fn file_name_and_function_rules_match_single_layer_files() {
+        use crate::source::{SourceDocument, SourceLayer};
+        let gerber = |name: &str, function: Option<&str>| SourceDocument {
+            format: SourceFormat::Gerber,
+            version: None,
+            units: Some(Unit::Millimetre),
+            layers: vec![SourceLayer {
+                name: name.into(),
+                color: None,
+                function: function.map(str::to_string),
+                primitives: vec![Primitive::Hatch {
+                    loops: vec![pline::rect(Point::new(0.0, 0.0), Point::new(1.0, 1.0))],
+                    rule: LoopRule::NonZero,
+                    solid: true,
+                    pattern: String::new(),
+                }],
+            }],
+            diagnostics: Vec::new(),
+        };
+        let mut sources = Sources::default();
+        sources.add(
+            "board-F_Cu.gbr",
+            gerber("board-F_Cu.gbr", Some("Copper,L1,Top")),
+        );
+        sources.add("board.GKO", gerber("board.GKO", None));
+        sources.add("board.dxf", board());
+
+        // The presets' copper slot hits the X2 function; the outline slot falls through to
+        // the `*.gko` glob. The DXF layer-name rules come first but do not match these files
+        // alone.
+        let profile = pcb_positive_ldi();
+        let (bindings, unbound) = resolve_bindings(&profile, &sources);
+        // The DXF file also has TOP_LAYER and ROUTE_TOOL_PATH, so the first rule wins there.
+        assert_eq!(
+            bindings[&SourceId::new("src-copper")],
+            BindingStatus::Matched(2, "TOP_LAYER".into())
+        );
+        assert_eq!(
+            bindings[&SourceId::new("src-outline")],
+            BindingStatus::Matched(2, "ROUTE_TOOL_PATH".into())
+        );
+        assert_eq!(unbound.len(), 2);
+
+        sources.remove(2);
+        let (bindings, unbound) = resolve_bindings(&profile, &sources);
+        assert_eq!(
+            bindings[&SourceId::new("src-copper")],
+            BindingStatus::Matched(0, "board-F_Cu.gbr".into())
+        );
+        assert_eq!(
+            bindings[&SourceId::new("src-outline")],
+            BindingStatus::Matched(1, "board.GKO".into())
+        );
+        assert!(unbound.is_empty());
+
+        // A function glob is independent of the file name; a file glob respects the format.
+        let mut p = Profile::empty("t", "t");
+        p.source_bindings = vec![
+            SourceBinding {
+                id: SourceId::new("a"),
+                name: "a".into(),
+                required: true,
+                rules: vec![MatchRule::Function {
+                    pattern: "copper,*,top".into(),
+                }],
+            },
+            SourceBinding {
+                id: SourceId::new("b"),
+                name: "b".into(),
+                required: true,
+                rules: vec![MatchRule::FileName {
+                    format: Some(SourceFormat::Dxf),
+                    pattern: "*.gko".into(),
+                }],
+            },
+        ];
+        let (bindings, _) = resolve_bindings(&p, &sources);
+        assert_eq!(
+            bindings[&SourceId::new("a")],
+            BindingStatus::Matched(0, "board-F_Cu.gbr".into())
+        );
+        assert_eq!(bindings[&SourceId::new("b")], BindingStatus::Missing);
+    }
+
+    #[test]
     fn cache_invalidates_only_dependents() {
         let mut sources = Sources::default();
-        sources.add_dxf("board.dxf", board());
+        sources.add("board.dxf", board());
         let mut profile = pcb_positive_ldi();
         let mut ev = Evaluator::new();
         let first = ev.evaluate(&profile, &sources);
@@ -866,7 +961,7 @@ mod tests {
         profile.working_layers.push(mk(&a, &b));
         profile.working_layers.push(mk(&b, &a));
         let mut sources = Sources::default();
-        sources.add_dxf("board.dxf", board());
+        sources.add("board.dxf", board());
         let e = Evaluator::new().evaluate(&profile, &sources);
         let cyc: Vec<&Diagnostic> = e
             .diagnostics
@@ -890,7 +985,7 @@ mod tests {
             Entity::rect(Point::new(0.0, 0.0), Point::new(1.0, 1.0)),
         );
         let mut sources = Sources::default();
-        sources.add_dxf(
+        sources.add(
             "x.dxf",
             read_str(&d.to_dxf(), &ReadOptions::default()).unwrap(),
         );
@@ -915,8 +1010,8 @@ mod tests {
     #[test]
     fn ambiguous_bindings_need_explicit_mapping() {
         let mut sources = Sources::default();
-        sources.add_dxf("a.dxf", board());
-        sources.add_dxf("b.dxf", board());
+        sources.add("a.dxf", board());
+        sources.add("b.dxf", board());
         let mut profile = pcb_positive_ldi();
         let e = Evaluator::new().evaluate(&profile, &sources);
         assert!(
@@ -950,7 +1045,7 @@ mod tests {
             },
         );
         let mut sources = Sources::default();
-        sources.add_dxf(
+        sources.add(
             "x.dxf",
             read_str(&d.to_dxf(), &ReadOptions::default()).unwrap(),
         );
@@ -986,7 +1081,7 @@ mod tests {
             Entity::rect(Point::new(5.0, 0.0), Point::new(15.0, 10.0)),
         );
         let mut sources = Sources::default();
-        sources.add_dxf(
+        sources.add(
             "x.dxf",
             read_str(&d.to_dxf(), &ReadOptions::default()).unwrap(),
         );
@@ -1109,7 +1204,7 @@ mod tests {
     #[test]
     fn same_subject_inverts_against_all_five_domain_providers() {
         let mut sources = Sources::default();
-        sources.add_dxf("board.dxf", board());
+        sources.add("board.dxf", board());
         let mut profile = pcb_positive_ldi();
         let copper = Operand::Layer(LayerId::new("wl-copper"));
         let providers = [
@@ -1213,7 +1308,7 @@ mod tests {
     #[test]
     fn envelope_parameters_recompute_dependents_only() {
         let mut sources = Sources::default();
-        sources.add_dxf("board.dxf", board());
+        sources.add("board.dxf", board());
         let mut profile = pcb_positive_ldi();
         profile.working_layers.push(envelope_layer(
             "env",
@@ -1253,7 +1348,7 @@ mod tests {
     #[test]
     fn unbounded_or_missing_domains_are_errors_not_guesses() {
         let mut sources = Sources::default();
-        sources.add_dxf("board.dxf", board());
+        sources.add("board.dxf", board());
         let mut profile = pcb_positive_ldi();
         profile.source_bindings.push(SourceBinding {
             id: SourceId::new("src-none"),

@@ -15,6 +15,8 @@ export type Bounds = [number, number, number, number];
 export interface SourceLayerSummary {
   name: string;
   color: number | null;
+  /** Declared layer function (Gerber X2 file function, IPC-2581 layer function), if any. */
+  function: string | null;
   closedPaths: number;
   openPaths: number;
   hatches: number;
@@ -24,7 +26,7 @@ export interface SourceLayerSummary {
 export interface SourceSummary {
   index: number;
   name: string;
-  format: string;
+  format: SourceFormat;
   version: string | null;
   units: string | null;
   assumedUnits: string;
@@ -47,11 +49,13 @@ export type LayerOp = "union" | "intersection" | "subtraction" | "xor";
 export type LoopRule = "evenOdd" | "nonZero" | "mergeThenNest";
 export type StrokeWidth = "none" | "original" | { fixed: { mm: number } };
 export type Operand = { source: string } | { layer: string };
-export type SourceFormat = "dxf" | "gerber" | "svg" | "pdf";
+export type SourceFormat = "dxf" | "gerber" | "svg" | "pdf" | "gds" | "ipc2581";
 
 export type MatchRule =
   | { kind: "layerName"; format?: SourceFormat | null; name: string }
-  | { kind: "fileLayer"; file: string; name: string };
+  | { kind: "fileLayer"; file: string; name: string }
+  | { kind: "fileName"; format?: SourceFormat | null; pattern: string }
+  | { kind: "function"; pattern: string };
 
 export interface SourceBinding {
   id: string;

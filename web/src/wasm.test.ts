@@ -33,7 +33,7 @@ describe("lvp-wasm project API", () => {
   });
 
   it("imports the board fixture, evaluates and exports a PDF", async () => {
-    const summary = JSON.parse(wasm.add_dxf("board-islands.dxf", new Uint8Array(await fixture()))) as SourceSummary;
+    const summary = JSON.parse(wasm.add_source("board-islands.dxf", new Uint8Array(await fixture()))) as SourceSummary;
     expect(summary.units).toBe("Millimetre");
     expect(summary.layers.map((l) => l.name)).toContain("TOP_LAYER");
 
@@ -67,7 +67,7 @@ describe("lvp-wasm project API", () => {
   });
 
   it("rejects bad input as exceptions and keeps state", () => {
-    expect(() => wasm.add_dxf("x.dxf", new Uint8Array([1, 2, 3]))).toThrow();
+    expect(() => wasm.add_source("x.dxf", new Uint8Array([1, 2, 3]))).toThrow();
     const before = wasm.profile_json();
     expect(() => wasm.set_profile_json('{"schemaVersion": 99}')).toThrow(/newer/);
     expect(wasm.profile_json()).toBe(before);

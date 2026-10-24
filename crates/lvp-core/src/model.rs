@@ -60,6 +60,9 @@ pub enum SourceFormat {
     Gerber,
     Svg,
     Pdf,
+    Gds,
+    #[serde(rename = "ipc2581")]
+    Ipc2581,
 }
 
 /// Ordered matching rules binding a profile slot to imported source layers.
@@ -76,6 +79,19 @@ pub enum MatchRule {
     /// Explicit user mapping to a layer of a specific file (by file name).
     #[serde(rename_all = "camelCase")]
     FileLayer { file: String, name: String },
+    /// Case-insensitive glob (`*`, `?`) on the file name, optionally restricted to one
+    /// format; meant for one-layer-per-file formats such as Gerber (`*.gtl`, `*-F_Cu.gbr`).
+    /// Matches every non-empty layer of the file, so it is ambiguous on multi-layer files.
+    #[serde(rename_all = "camelCase")]
+    FileName {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<SourceFormat>,
+        pattern: String,
+    },
+    /// Case-insensitive glob on the layer's declared function (Gerber X2 `TF.FileFunction`
+    /// such as `Copper,L1,Top`, IPC-2581 `layerFunction`), independent of names.
+    #[serde(rename_all = "camelCase")]
+    Function { pattern: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

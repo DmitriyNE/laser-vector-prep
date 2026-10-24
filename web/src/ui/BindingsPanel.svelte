@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { MatchRule } from "../core/types.js";
   import type { ProjectStore } from "../state/project.svelte.js";
 
   let { store }: { store: ProjectStore } = $props();
@@ -15,6 +16,19 @@
     if (!v) return;
     const [file, layer] = v.split("\u0000");
     if (file && layer) store.mapToBinding(bindingId, file, layer);
+  }
+
+  function ruleText(r: MatchRule): string {
+    switch (r.kind) {
+      case "layerName":
+        return `name "${r.name}"${r.format ? ` (${r.format})` : ""}`;
+      case "fileLayer":
+        return `${r.file} : ${r.name}`;
+      case "fileName":
+        return `file ${r.pattern}${r.format ? ` (${r.format})` : ""}`;
+      case "function":
+        return `function ${r.pattern}`;
+    }
   }
 </script>
 
@@ -39,7 +53,7 @@
         </select>
       </div>
       <div class="meta">
-        rules: {b.rules.map((r) => (r.kind === "layerName" ? `name "${r.name}"${r.format ? ` (${r.format})` : ""}` : `${r.file} : ${r.name}`)).join(", ") || "none"}
+        rules: {b.rules.map(ruleText).join(", ") || "none"}
         · {users.length ? `used by ${users.join(", ")}` : "unused"}
         {#if st?.status === "ambiguous"}<span class="err"> · {st.candidates.length} layers match, pick one above</span>{/if}
       </div>
@@ -49,7 +63,7 @@
     <div class="extra">
       <span class="meta">imported, not mapped:</span>
       {#each store.evaluation.unboundLayers as [file, layer] (file + layer)}
-        <span class="chip">{file} : {layer} <button title="new slot matching this layer name" onclick={() => store.newBindingFromLayer(layer)}>+ slot</button></span>
+        <span class="chip">{file} : {layer} <button title="new slot matching this layer" onclick={() => store.newBindingFromLayer(file, layer)}>+ slot</button></span>
       {/each}
     </div>
   {/if}

@@ -23,10 +23,12 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       return { result: wasm.thread_count(), transfer: [] };
     case "presets":
       return { result: JSON.parse(wasm.builtin_presets_json()), transfer: [] };
-    case "addDxf":
-      return { result: JSON.parse(wasm.add_dxf(req.name, req.bytes)), transfer: [] };
-    case "replaceDxf":
-      return { result: JSON.parse(wasm.replace_dxf(req.index, req.bytes)), transfer: [] };
+    case "addSource":
+      return { result: JSON.parse(wasm.add_source(req.name, req.bytes)), transfer: [] };
+    case "replaceSource":
+      return { result: JSON.parse(wasm.replace_source(req.index, req.bytes)), transfer: [] };
+    case "acceptedExtensions":
+      return { result: JSON.parse(wasm.accepted_extensions_json()), transfer: [] };
     case "removeSource":
       wasm.remove_source(req.index);
       return { result: undefined, transfer: [] };

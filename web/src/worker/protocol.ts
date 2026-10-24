@@ -7,8 +7,9 @@ export type Payload =
   | { kind: "version" }
   | { kind: "threads" }
   | { kind: "presets" }
-  | { kind: "addDxf"; name: string; bytes: Uint8Array }
-  | { kind: "replaceDxf"; index: number; bytes: Uint8Array }
+  | { kind: "addSource"; name: string; bytes: Uint8Array }
+  | { kind: "replaceSource"; index: number; bytes: Uint8Array }
+  | { kind: "acceptedExtensions" }
   | { kind: "removeSource"; index: number }
   | { kind: "sources" }
   | { kind: "setProfile"; profile: Profile }
@@ -30,7 +31,9 @@ export type ResultOf<K extends Kind> = K extends "version"
     ? number
     : K extends "presets"
       ? Profile[]
-      : K extends "addDxf" | "replaceDxf"
+      : K extends "acceptedExtensions"
+        ? string[]
+      : K extends "addSource" | "replaceSource"
         ? SourceSummary
         : K extends "removeSource"
           ? void

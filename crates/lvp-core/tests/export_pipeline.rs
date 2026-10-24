@@ -13,7 +13,7 @@ fn board_sources() -> Sources {
     ))
     .unwrap();
     let mut s = Sources::default();
-    s.add_dxf(
+    s.add(
         "board-islands.dxf",
         read_str(&text, &ReadOptions::default()).unwrap(),
     );
