@@ -1,0 +1,277 @@
+{
+  "conventions": [
+    "all *_mm values are millimetres regardless of the file's $INSUNITS",
+    "bounds are of centrelines: polyline constant widths are not included",
+    "entity counts are of DXF entities as written, before any union or block resolution"
+  ],
+  "fixtures": [
+    {
+      "blocks": {},
+      "bounds_mm": [
+        -1.1102230246251565e-16,
+        -1.1102230246251565e-16,
+        25.0,
+        11.3
+      ],
+      "description": "Board outline (ROUTE_TOOL_PATH) and copper artwork (TOP_LAYER) with pads, traces, a slot and an annulus.",
+      "expect": {
+        "copper_bounds_mm": [
+          2.4,
+          2.0,
+          22.5,
+          9.3
+        ],
+        "copper_holes": 1,
+        "copper_islands": 10,
+        "copper_width_mm": 20.1,
+        "outline_size_mm": [
+          25.0,
+          11.3
+        ],
+        "trace_widths_mm": [
+          0.3,
+          0.25
+        ]
+      },
+      "file": "dxf/board-islands.dxf",
+      "layers": {
+        "ROUTE_TOOL_PATH": {
+          "bounds_mm": [
+            -1.1102230246251565e-16,
+            -1.1102230246251565e-16,
+            25.0,
+            11.3
+          ],
+          "entities": {
+            "LWPOLYLINE": 1
+          }
+        },
+        "TOP_LAYER": {
+          "bounds_mm": [
+            2.4,
+            2.0,
+            22.5,
+            9.3
+          ],
+          "entities": {
+            "CIRCLE": 8,
+            "LWPOLYLINE": 5
+          }
+        }
+      },
+      "name": "board-islands",
+      "notes": [
+        "copper_bounds_mm includes circle radii but not polyline widths (the widest trace stays inside the pads)",
+        "the trace on x = 3 overlaps both pads it joins; a union must count them as one island",
+        "the inner circle of the annulus is nested in the outer one and must become a hole, not a second island"
+      ],
+      "units": "mm"
+    },
+    {
+      "blocks": {},
+      "bounds_mm": [
+        0.0,
+        0.0,
+        31.0,
+        20.0
+      ],
+      "description": "Square with a square hole containing a circular island with its own square hole, plus a disjoint triangle and circle.",
+      "expect": {
+        "closed_contours": 6,
+        "filled_area_mm2": 298.41592653589794,
+        "holes": 2,
+        "nesting_depth": 4,
+        "top_level_regions": 3
+      },
+      "file": "dxf/nested-holes.dxf",
+      "layers": {
+        "SHAPES": {
+          "bounds_mm": [
+            0.0,
+            0.0,
+            31.0,
+            20.0
+          ],
+          "entities": {
+            "CIRCLE": 2,
+            "LWPOLYLINE": 4
+          }
+        }
+      },
+      "name": "nested-holes",
+      "notes": [
+        "even-odd and nonzero-with-orientation must agree here: every contour is a simple loop",
+        "the triangle and the small circle are separate top-level regions"
+      ],
+      "units": "mm"
+    },
+    {
+      "blocks": {},
+      "bounds_mm": [
+        0.0,
+        -5.0,
+        30.0,
+        12.0
+      ],
+      "description": "Lines, an arc, an open polyline and an almost-closed square on MARK; one closed rectangle on FILL.",
+      "expect": {
+        "FILL": {
+          "closed_contours": 1,
+          "open_paths": 0
+        },
+        "MARK": {
+          "closed_contours": 0,
+          "gap_mm": 0.5,
+          "open_paths": 7
+        }
+      },
+      "file": "dxf/open-linework.dxf",
+      "layers": {
+        "FILL": {
+          "bounds_mm": [
+            0.0,
+            -5.0,
+            10.0,
+            -1.0
+          ],
+          "entities": {
+            "LWPOLYLINE": 1
+          }
+        },
+        "MARK": {
+          "bounds_mm": [
+            0.0,
+            0.0,
+            30.0,
+            12.0
+          ],
+          "entities": {
+            "ARC": 1,
+            "LINE": 5,
+            "LWPOLYLINE": 1
+          }
+        }
+      },
+      "name": "open-linework",
+      "notes": [
+        "a region operation on MARK must fail with a diagnostic naming the open geometry, never auto-close",
+        "the arc is the lower half of a circle; its bounds reach y = 0"
+      ],
+      "units": "mm"
+    },
+    {
+      "blocks": {},
+      "bounds_mm": [
+        0.0,
+        0.0,
+        25.4,
+        12.7
+      ],
+      "description": "$INSUNITS = 1 (inches): a 1 x 0.5 in rectangle with a 0.1 in radius circle.",
+      "expect": {
+        "bounds_mm": [
+          0.0,
+          0.0,
+          25.4,
+          12.7
+        ],
+        "circle_radius_mm": 2.54,
+        "insunits": 1
+      },
+      "file": "dxf/units-inch.dxf",
+      "layers": {
+        "PART": {
+          "bounds_mm": [
+            0.0,
+            0.0,
+            25.4,
+            12.7
+          ],
+          "entities": {
+            "CIRCLE": 1,
+            "LWPOLYLINE": 1
+          }
+        }
+      },
+      "name": "units-inch",
+      "notes": [
+        "importers must convert on read; the UI must show 25.4 x 12.7 mm, not 1 x 0.5"
+      ],
+      "units": "in"
+    },
+    {
+      "blocks": {
+        "PAD": {
+          "entities": {
+            "CIRCLE": 1,
+            "LWPOLYLINE": 1
+          }
+        }
+      },
+      "bounds_mm": [
+        -2.0,
+        -1.414213562373095,
+        11.414213562373096,
+        12.0
+      ],
+      "description": "One block (circle + square) inserted four times: identity, rotated 45 deg, scaled 2x, scaled 0.5x and rotated 90 deg.",
+      "expect": {
+        "bounds_mm": [
+          -2.0,
+          -1.4142135623730951,
+          11.414213562373096,
+          12.0
+        ],
+        "insert_bounds_mm": [
+          [
+            -1.0,
+            -1.0,
+            1.0,
+            1.0
+          ],
+          [
+            8.585786437626904,
+            -1.4142135623730951,
+            11.414213562373096,
+            1.4142135623730951
+          ],
+          [
+            -2.0,
+            8.0,
+            2.0,
+            12.0
+          ],
+          [
+            9.5,
+            9.5,
+            10.5,
+            10.5
+          ]
+        ],
+        "inserts": 4,
+        "resolved_closed_contours": 8
+      },
+      "file": "dxf/blocks-insert.dxf",
+      "layers": {
+        "PADS": {
+          "bounds_mm": [
+            -2.0,
+            -1.414213562373095,
+            11.414213562373096,
+            12.0
+          ],
+          "entities": {
+            "INSERT": 4
+          }
+        }
+      },
+      "name": "blocks-insert",
+      "notes": [
+        "block entities sit on layer 0 and must inherit the INSERT's layer (PADS)",
+        "order of operations is scale, then rotate, then translate"
+      ],
+      "units": "mm"
+    }
+  ],
+  "generator": "lvp-fixtures 0.1.0 (`just fixtures`)"
+}

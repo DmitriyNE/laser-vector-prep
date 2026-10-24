@@ -1,5 +1,7 @@
 //! Basic planar primitives.
 
+use rayon::prelude::*;
+
 /// Numerical noise floor in millimetres (one picometre). Differences below this are
 /// floating-point rounding, not geometry, and are snapped rather than reported.
 pub const EPS_MM: f64 = 1e-9;
@@ -46,6 +48,18 @@ impl BBox {
             b.include(p);
         }
         Some(b)
+    }
+
+    /// Parallel variant of [`BBox::of_points`] for large buffers. Needs a rayon pool to
+    /// exist (on wasm: the thread pool must have been initialised by the host).
+    pub fn of_points_par<I>(points: I) -> Option<Self>
+    where
+        I: IntoParallelIterator<Item = Point>,
+    {
+        points
+            .into_par_iter()
+            .map(BBox::at)
+            .reduce_with(BBox::union)
     }
 
     pub fn include(&mut self, p: Point) {
@@ -126,6 +140,13 @@ mod tests {
                 prop_assert!(b.contains(*p));
             }
             prop_assert!(b.width() >= 0.0 && b.height() >= 0.0);
+        }
+
+        #[test]
+        fn parallel_bbox_matches_sequential(pts in prop::collection::vec(point(), 0..2000)) {
+            let seq = BBox::of_points(pts.iter().copied());
+            let par = BBox::of_points_par(pts.clone());
+            prop_assert_eq!(seq, par);
         }
 
         #[test]
