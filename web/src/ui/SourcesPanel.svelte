@@ -52,11 +52,15 @@
     <div class="source">
       <div class="head">
         <Eye hidden={store.sourceFileHidden(s.index)} what="all layers of this file" onToggle={() => store.toggleSourceFile(s.index)} onSolo={() => store.solo({ kind: "file", key: String(s.index) })} />
-        <strong title={s.name}>{s.name}</strong>
-        <span class="units" class:assumed={!s.units} title={s.units ? "declared units" : "no units in file; assumed"}>
-          {s.units ?? `${s.assumedUnits}?`}
-        </span>
-        <span class="size">{size(s.boundsMm)}</span>
+        <div class="file">
+          <strong title={s.name}>{s.name}</strong>
+          <span class="meta">
+            <span class="units" class:assumed={!s.units} title={s.units ? "declared units" : "no units in file; assumed"}>
+              {s.units ?? `${s.assumedUnits}?`}
+            </span>
+            · {size(s.boundsMm)}
+          </span>
+        </div>
         <button class="x" title="remove" onclick={() => store.removeSource(s.index)}>×</button>
       </div>
       <ul>
@@ -115,24 +119,25 @@
     gap: 0.4rem;
     align-items: center;
   }
-  .head strong {
+  .file {
     flex: 1;
+    min-width: 0;
+  }
+  .file strong,
+  .file .meta {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1.35;
   }
-  .units {
-    font-family: ui-monospace, monospace;
+  .file .meta {
+    opacity: 0.7;
     font-size: 11px;
+    font-family: ui-monospace, monospace;
   }
   .units.assumed {
     color: #c80;
-  }
-  .size {
-    opacity: 0.7;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    white-space: nowrap;
   }
   ul {
     list-style: none;
