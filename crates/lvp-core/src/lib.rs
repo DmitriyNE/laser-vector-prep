@@ -6,6 +6,7 @@
 //! says otherwise (DXF entities use degrees).
 
 pub mod arc;
+pub mod diag;
 pub mod dxf;
 pub mod flatten;
 pub mod geom;

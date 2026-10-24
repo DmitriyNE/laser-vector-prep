@@ -4,6 +4,8 @@
 pub enum Unit {
     Millimetre,
     Micrometre,
+    Centimetre,
+    Metre,
     Inch,
     /// Thousandth of an inch.
     Mil,
@@ -15,6 +17,8 @@ impl Unit {
         match self {
             Unit::Millimetre => 1.0,
             Unit::Micrometre => 0.001,
+            Unit::Centimetre => 10.0,
+            Unit::Metre => 1000.0,
             Unit::Inch => 25.4,
             Unit::Mil => 0.0254,
         }
@@ -27,6 +31,33 @@ impl Unit {
     pub fn from_mm(self, mm: f64) -> f64 {
         mm / self.mm_per_unit()
     }
+
+    /// DXF `$INSUNITS` code for this unit.
+    pub const fn dxf_insunits(self) -> u16 {
+        match self {
+            Unit::Inch => 1,
+            Unit::Millimetre => 4,
+            Unit::Centimetre => 5,
+            Unit::Metre => 6,
+            Unit::Mil => 9,
+            Unit::Micrometre => 13,
+        }
+    }
+
+    /// Unit for a DXF `$INSUNITS` code. `Ok(None)` is "unitless" (code 0); `Err` carries an
+    /// unsupported code (feet, miles, yards, parsecs...).
+    pub fn from_dxf_insunits(code: i64) -> Result<Option<Unit>, i64> {
+        Ok(Some(match code {
+            0 => return Ok(None),
+            1 => Unit::Inch,
+            4 => Unit::Millimetre,
+            5 => Unit::Centimetre,
+            6 => Unit::Metre,
+            9 => Unit::Mil,
+            13 => Unit::Micrometre,
+            other => return Err(other),
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -34,7 +65,14 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    const ALL: [Unit; 4] = [Unit::Millimetre, Unit::Micrometre, Unit::Inch, Unit::Mil];
+    const ALL: [Unit; 6] = [
+        Unit::Millimetre,
+        Unit::Micrometre,
+        Unit::Centimetre,
+        Unit::Metre,
+        Unit::Inch,
+        Unit::Mil,
+    ];
 
     #[test]
     fn validated_pdf_stroke_is_one_mil() {

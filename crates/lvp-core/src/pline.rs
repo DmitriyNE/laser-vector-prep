@@ -228,7 +228,8 @@ mod tests {
             for q in &pts {
                 prop_assert!((q.distance(Point::new(cx, cy)) - r).abs() <= 1e-9 * (r + cx.abs() + cy.abs()));
             }
-            prop_assert!((c.area() - PI * r * r).abs() <= 1e-9 * r * r);
+            // Shoelace cancellation grows with the distance from the origin.
+            prop_assert!((c.area() - PI * r * r).abs() <= 1e-10 * (r * r + cx * cx + cy * cy));
         }
 
         #[test]

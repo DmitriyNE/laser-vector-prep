@@ -296,15 +296,6 @@ pub fn fmt_num(v: f64) -> String {
     if s == "-0.0" { "0.0".to_string() } else { s }
 }
 
-fn insunits(u: Unit) -> u16 {
-    match u {
-        Unit::Inch => 1,
-        Unit::Millimetre => 4,
-        Unit::Mil => 9,
-        Unit::Micrometre => 13,
-    }
-}
-
 struct Writer<'a> {
     doc: &'a Document,
     out: String,
@@ -381,7 +372,7 @@ impl<'a> Writer<'a> {
         let seed = self.next_handle;
         self.hex(5, seed);
         self.pair(9, "$INSUNITS");
-        self.pair(70, insunits(self.doc.units).to_string());
+        self.pair(70, self.doc.units.dxf_insunits().to_string());
         self.pair(9, "$MEASUREMENT");
         self.pair(
             70,

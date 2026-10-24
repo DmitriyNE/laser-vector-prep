@@ -345,6 +345,8 @@ fn unit_name(u: Unit) -> &'static str {
     match u {
         Unit::Millimetre => "mm",
         Unit::Micrometre => "um",
+        Unit::Centimetre => "cm",
+        Unit::Metre => "m",
         Unit::Inch => "in",
         Unit::Mil => "mil",
     }
