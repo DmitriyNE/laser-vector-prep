@@ -34,6 +34,10 @@ Learned:
   `navigator.serviceWorker.ready` fixed it (D20).
 - Playwright's `channel: "chrome"` needs no download and runs headless with service workers
   and `SharedArrayBuffer`; `context.setOffline(true)` plus a reload proves the offline path.
+- The first thing the presets e2e test found was DEF-1: switching presets from the bar had
+  silently never worked, because `structuredClone` cannot clone a Svelte `$state` proxy and
+  the `change` handler threw. Anything that copies reactive state goes through
+  `$state.snapshot` first.
 
 ## 2026-10-24 — Stroke construction and silent boolean failures
 

@@ -189,7 +189,8 @@ export class ProjectStore {
   applyPreset(presetId: string) {
     const p = this.presets.find((x) => x.profileId === presetId);
     if (!p) return;
-    this.profile = structuredClone(p);
+    // Presets are reactive state; a plain snapshot is needed before cloning.
+    this.profile = structuredClone($state.snapshot(p)) as Profile;
     this.activeSavedId = null;
     this.basePresetId = presetId;
     this.dirty = false;
