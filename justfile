@@ -21,7 +21,7 @@ dev: deps wasm
     cd web && npm run dev
 
 # All automated tests: Rust unit + property tests, then TypeScript tests against the built wasm.
-test: wasm
+test: deps wasm
     cargo test --workspace
     cd web && npm run typecheck && npm run test
 

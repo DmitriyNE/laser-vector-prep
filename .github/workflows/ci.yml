@@ -1,0 +1,89 @@
+# Lint, test and build with the same Nix dev shell developers use, run the browser tests
+# against the production bundle in the runner's Google Chrome, and publish web/dist to
+# GitHub Pages after a green run on main. See docs/development.md ("Continuous integration").
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, test, build, browser tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Dependency sources and build outputs; the toolchain itself comes from Nix.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.npm
+            target
+          key: build-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml', 'Cargo.lock', 'web/package-lock.json') }}
+          restore-keys: build-${{ runner.os }}-
+
+      - name: Dev shell
+        run: nix develop -c true
+
+      - name: Lint
+        run: nix develop -c just lint
+
+      - name: Test
+        run: nix develop -c just test
+
+      - name: Build
+        run: nix develop -c just build
+
+      - name: Browser tests
+        run: nix develop -c just e2e
+
+      - name: Keep browser test traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-results
+          path: web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/dist
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

@@ -1,5 +1,10 @@
 # Laser Vector Prep
 
+[![CI](https://github.com/DmitriyNE/laser-vector-prep/actions/workflows/ci.yml/badge.svg)](https://github.com/DmitriyNE/laser-vector-prep/actions/workflows/ci.yml)
+
+**Open the app: <https://dmitriyne.github.io/laser-vector-prep/>** (runs entirely in the
+browser; files never leave your machine).
+
 Browser-only vector artwork and toolpath preprocessor for galvo laser software.
 Import DXF, Gerber, SVG, vector PDF, GDSII or IPC-2581, compose working layers
 (booleans, negative regions), generate fill/trace/hatch paths, plan the marking order,

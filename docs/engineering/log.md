@@ -3,6 +3,13 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — CI and GitHub Pages
+
+`.github/workflows/ci.yml`: lint, test, build and browser tests in the Nix dev shell on
+ubuntu-24.04, then deployment of `web/dist` to GitHub Pages from `main` (D27). Writing it
+showed that `just test` never installed npm dependencies; it only worked locally because
+`node_modules` existed. The recipe now depends on `deps`.
+
 ## 2026-10-25 — Arcs end to end
 
 Preview, PDF/SVG export and SVG/PDF import no longer tessellate circular arcs (D26). The

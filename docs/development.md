@@ -79,6 +79,26 @@ A failure keeps a trace under `web/test-results/`; open it with
 browser. `just test` does not include this suite because it needs a built bundle and a
 browser; the DevTools-protocol approach described above remains useful for one-off checks.
 
+## Continuous integration and deployment
+
+`.github/workflows/ci.yml` runs on every push to `main`, on pull requests and on demand.
+It installs Nix, enters the same dev shell as above and runs, in order:
+
+1. `just lint`
+2. `just test`
+3. `just build`
+4. `just e2e` (Playwright drives the Google Chrome preinstalled on the Ubuntu runner)
+
+Cargo and npm downloads and the `target/` directory are cached, keyed on `flake.lock`,
+`rust-toolchain.toml`, `Cargo.lock` and `web/package-lock.json`. A failed run keeps the
+Playwright traces as the `playwright-results` artifact for a week.
+
+After a green run on `main` the `deploy` job publishes `web/dist` to GitHub Pages:
+<https://dmitriyne.github.io/laser-vector-prep/>. Pages sends no isolation headers, so the
+first visit goes through the coi-serviceworker reload described below; the build uses
+relative URLs (`base: "./"`), so the site works under the `/laser-vector-prep/` sub-path.
+The repository's Pages source must be "GitHub Actions" (Settings → Pages).
+
 ## Shared-memory wasm and threads
 
 The wasm module uses a shared, imported linear memory and runs rayon on a pool of Web

@@ -111,5 +111,7 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 ## M4 — robustness/release
 
 - [ ] Fuzzing of parsers, geometry audits, large-file performance
-- [ ] Cross-browser tests, deployment docs
+- [x] CI on GitHub Actions and deployment to GitHub Pages (D27)
+- [ ] Cross-browser tests (Firefox in CI)
+- [ ] Cache the Nix store in CI if fetching the dev shell becomes the slow step
 - [ ] Optional: `nix build` package for the static site (D3)

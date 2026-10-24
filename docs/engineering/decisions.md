@@ -311,3 +311,15 @@ import. Owner approved removing all four:
   itself makes, so a circle drawn as four Béziers comes back as the exact circle it stands
   for rather than as a polygon within 1 µm of the Bézier. Ellipses and general Béziers
   are still flattened.
+
+## D27 — CI on GitHub Actions with the Nix dev shell; deploy to GitHub Pages (2026-10-25)
+
+Owner asked for CI with GitHub Actions and publishing to GitHub Pages. CI runs the same
+`nix develop -c just …` commands as a developer (lint, test, build, browser tests), so the
+pinned toolchain is the one CI uses and there is no second set of setup steps to drift.
+Browser tests use the runner's preinstalled Google Chrome, matching D20 (no Playwright
+browser download). Only cargo/npm downloads and `target/` are cached; the Nix store is
+fetched from cache.nixos.org each run until that proves slow. Pages deploys with the
+official `upload-pages-artifact` / `deploy-pages` actions after a green run on `main`; the
+static bundle already works from a sub-path and the service worker supplies the isolation
+headers Pages cannot send (D5).
