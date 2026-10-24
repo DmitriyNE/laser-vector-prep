@@ -82,34 +82,53 @@ fn scan(doc: &roxmltree::Document<'_>) -> Scan {
 }
 
 /// Flatten a tiny-skia path (already in absolute px coordinates) into polylines in mm.
-/// `height_px` flips y so the drawing is y-up; `tol_px` bounds the Bézier chord error.
-fn flatten_path(path: &tiny_skia_path::Path, height_px: f64, tol_px: f64) -> Vec<(Pline, bool)> {
+/// `height_px` flips y so the drawing is y-up; Béziers that are circular arcs become exact
+/// arcs, the others are flattened within `tol_mm`.
+fn flatten_path(path: &tiny_skia_path::Path, height_px: f64, tol_mm: f64) -> Vec<(Pline, bool)> {
     let to_mm = |p: tiny_skia_path::Point| {
         Point::new(p.x as f64 * MM_PER_PX, (height_px - p.y as f64) * MM_PER_PX)
     };
     let mut out: Vec<(Pline, bool)> = Vec::new();
-    let mut pts: Vec<Point> = Vec::new();
+    // Points with the bulge of the segment that starts at them.
+    let mut pts: Vec<(Point, f64)> = Vec::new();
     let mut last = tiny_skia_path::Point::zero();
-    let mut closed = false;
-    let flush = |pts: &mut Vec<Point>, closed: bool, out: &mut Vec<(Pline, bool)>| {
-        if pts.len() >= 2 {
-            let p = pline::from_points(pts.drain(..), closed);
-            if let Some(p) = pline::sanitize(&p) {
-                out.push((p, closed));
-            }
+    let flush = |pts: &mut Vec<(Point, f64)>, closed: bool, out: &mut Vec<(Pline, bool)>| {
+        let closed = closed || pline::returns_to_start(pts);
+        if pts.len() >= 2
+            && let Some(p) = pline::from_bulged_points(pts, closed)
+        {
+            out.push((p, closed));
         }
         pts.clear();
+    };
+    // Cubic in px: an exact arc when it is one, else flattened within the tolerance.
+    let cubic = |pts: &mut Vec<(Point, f64)>,
+                 p0: tiny_skia_path::Point,
+                 c1: tiny_skia_path::Point,
+                 c2: tiny_skia_path::Point,
+                 p3: tiny_skia_path::Point| {
+        let (q0, q1, q2, q3) = (to_mm(p0), to_mm(c1), to_mm(c2), to_mm(p3));
+        match crate::flatten::cubic_as_arc(q0, q1, q2, q3, tol_mm) {
+            Some(b) => {
+                if let Some(l) = pts.last_mut() {
+                    l.1 = b;
+                }
+                pts.push((q3, 0.0));
+            }
+            None => {
+                crate::flatten::flatten_cubic(q0, q1, q2, q3, tol_mm, &mut |q| pts.push((q, 0.0)))
+            }
+        }
     };
     for seg in path.segments() {
         match seg {
             PathSegment::MoveTo(p) => {
-                flush(&mut pts, closed, &mut out);
-                closed = false;
-                pts.push(to_mm(p));
+                flush(&mut pts, false, &mut out);
+                pts.push((to_mm(p), 0.0));
                 last = p;
             }
             PathSegment::LineTo(p) => {
-                pts.push(to_mm(p));
+                pts.push((to_mm(p), 0.0));
                 last = p;
             }
             PathSegment::QuadTo(c, p) => {
@@ -122,37 +141,18 @@ fn flatten_path(path: &tiny_skia_path::Path, height_px: f64, tol_px: f64) -> Vec
                     p.x + 2.0 / 3.0 * (c.x - p.x),
                     p.y + 2.0 / 3.0 * (c.y - p.y),
                 );
-                cubic(last, c1, c2, p, tol_px, &mut |q| pts.push(to_mm(q)), 0);
+                cubic(&mut pts, last, c1, c2, p);
                 last = p;
             }
             PathSegment::CubicTo(c1, c2, p) => {
-                cubic(last, c1, c2, p, tol_px, &mut |q| pts.push(to_mm(q)), 0);
+                cubic(&mut pts, last, c1, c2, p);
                 last = p;
             }
-            PathSegment::Close => {
-                flush(&mut pts, true, &mut out);
-                closed = false;
-            }
+            PathSegment::Close => flush(&mut pts, true, &mut out),
         }
     }
-    flush(&mut pts, closed, &mut out);
+    flush(&mut pts, false, &mut out);
     out
-}
-
-/// Cubic Bézier in px, flattened through the shared subdivision routine.
-fn cubic(
-    p0: tiny_skia_path::Point,
-    p1: tiny_skia_path::Point,
-    p2: tiny_skia_path::Point,
-    p3: tiny_skia_path::Point,
-    tol: f64,
-    emit: &mut dyn FnMut(tiny_skia_path::Point),
-    _depth: u32,
-) {
-    let c = |p: tiny_skia_path::Point| Point::new(p.x as f64, p.y as f64);
-    crate::flatten::flatten_cubic(c(p0), c(p1), c(p2), c(p3), tol, &mut |q| {
-        emit(tiny_skia_path::Point::from_xy(q.x as f32, q.y as f32))
-    });
 }
 
 /// Uniform scale factor of a transform (geometric mean of the axis scales), for widths.
@@ -162,7 +162,7 @@ fn scale_of(t: tiny_skia_path::Transform) -> f64 {
 }
 
 struct Walker<'a> {
-    tol_px: f64,
+    tol_mm: f64,
     height_px: f64,
     diags: Vec<Diagnostic>,
     counts: Counts,
@@ -214,7 +214,7 @@ impl Walker<'_> {
                         .fill()
                         .map(|f| f.rule())
                         .unwrap_or(usvg::FillRule::NonZero);
-                    let loops: Vec<Pline> = flatten_path(&data, self.height_px, self.tol_px)
+                    let loops: Vec<Pline> = flatten_path(&data, self.height_px, self.tol_mm)
                         .into_iter()
                         .map(|(mut l, _)| {
                             l.set_is_closed(true);
@@ -271,7 +271,7 @@ impl Walker<'_> {
         let Some(data) = p.data().clone().transform(p.abs_transform()) else {
             return;
         };
-        let parts = flatten_path(&data, self.height_px, self.tol_px);
+        let parts = flatten_path(&data, self.height_px, self.tol_mm);
         if parts.is_empty() {
             return;
         }
@@ -386,10 +386,10 @@ pub fn read_bytes(
     let options = usvg::Options::default();
     let tree = usvg::Tree::from_xmltree(&xml, &options).map_err(|e| err(format!("{e}")))?;
     let height_px = tree.size().height() as f64;
-    let tol_px = (opts.tolerance_mm / MM_PER_PX).max(1e-4);
+    let tol_mm = opts.tolerance_mm.max(1e-6);
 
     let mut walker = Walker {
-        tol_px,
+        tol_mm,
         height_px,
         diags: Vec::new(),
         counts: Counts::default(),
@@ -687,5 +687,39 @@ mod tests {
         assert!(read_bytes("x.svg", b"<svg", &ReadOptions::default()).is_err());
         assert!(read_bytes("x.svg", b"<not-svg/>", &ReadOptions::default()).is_err());
         assert!(read_bytes("x.svg", &[0xff, 0xfe], &ReadOptions::default()).is_err());
+    }
+
+    #[test]
+    fn circles_come_back_as_exact_arcs_and_ellipses_stay_flattened() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="20mm" viewBox="0 0 40 20">
+          <g id="C"><circle cx="10" cy="10" r="5" fill="#000"/><rect x="20" y="5" width="10" height="10" rx="2" fill="#000"/></g>
+          <g id="E"><ellipse cx="10" cy="10" rx="6" ry="3" fill="#000"/></g>
+        </svg>"##;
+        let doc = read(svg);
+        let c = doc.layer("C").unwrap();
+        let bulged = |l: &SourceLayer| {
+            l.primitives
+                .iter()
+                .flat_map(|p| match p {
+                    Primitive::Hatch { loops, .. } => loops.clone(),
+                    Primitive::Path { pline, .. } => vec![pline.clone()],
+                })
+                .map(|l| l.iter_vertexes().filter(|v| v.bulge != 0.0).count())
+                .sum::<usize>()
+        };
+        // Circle: four quarter arcs; rounded rectangle: four corner arcs.
+        assert_eq!(bulged(c), 8, "{:?}", c.primitives);
+        let r = region_of(c);
+        let want = PI * 25.0 + (100.0 - (4.0 - PI) * 4.0);
+        // f32 coordinates in usvg: about 1e-5 relative.
+        assert!((r.area() - want).abs() < 1e-3, "{} vs {want}", r.area());
+        // The ellipse has no circular arcs; it is flattened within the tolerance.
+        let e = doc.layer("E").unwrap();
+        assert_eq!(bulged(e), 0);
+        assert!(
+            (region_of(e).area() - PI * 18.0).abs() < 0.02,
+            "{}",
+            region_of(e).area()
+        );
     }
 }

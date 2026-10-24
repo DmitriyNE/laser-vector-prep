@@ -100,7 +100,7 @@ fn features() -> PdfFixture {
         }),
         notes: vec![
             "layers are optional-content group names where present, otherwise the paint colour as #rrggbb",
-            "the Bézier circle area is exact to the kappa approximation (about 0.03 %)",
+            "the four-Bézier circle is read back as an exact circle (four arcs)",
             "0.6 green rounds to 0x99; CMYK and gray paints are converted to RGB names the same way",
         ],
     }

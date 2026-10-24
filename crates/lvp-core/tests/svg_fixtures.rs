@@ -111,7 +111,7 @@ fn marking_fixture_matches_the_manifest() {
         close(
             fill.area(),
             e["expect"]["fill_area_mm2"].as_f64().unwrap(),
-            0.05
+            1e-3
         ),
         "{}",
         fill.area()

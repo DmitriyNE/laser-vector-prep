@@ -448,6 +448,64 @@ pub fn simplify(p: &Pline, tolerance: f64) -> Pline {
     out
 }
 
+/// Whether an open point sequence ends where it starts (at least three distinct points):
+/// such a path is a loop and is closed by the readers, as Gerber draw chains are.
+pub fn returns_to_start(pts: &[(Point, f64)]) -> bool {
+    pts.len() >= 3 && {
+        let (a, b) = (pts[0].0, pts[pts.len() - 1].0);
+        (a.x - b.x).abs() < REPEAT_EPS && (a.y - b.y).abs() < REPEAT_EPS
+    }
+}
+
+/// Polyline from `(point, bulge of the segment that starts there)` pairs. Repeated points
+/// are dropped (keeping the bulge of the segment that actually moves), and a closed
+/// polyline whose last point repeats the first loses that duplicate. Returns `None` when
+/// fewer than two distinct points remain.
+pub fn from_bulged_points(pts: &[(Point, f64)], closed: bool) -> Option<Pline> {
+    let mut v: Vec<(Point, f64)> = Vec::with_capacity(pts.len());
+    for &(p, b) in pts {
+        match v.last_mut() {
+            Some(last)
+                if (last.0.x - p.x).abs() < REPEAT_EPS && (last.0.y - p.y).abs() < REPEAT_EPS =>
+            {
+                // Same position: the later bulge describes the segment that leaves it.
+                last.1 = b;
+            }
+            _ => v.push((p, b)),
+        }
+    }
+    if closed
+        && v.len() >= 2
+        && (v[0].0.x - v[v.len() - 1].0.x).abs() < REPEAT_EPS
+        && (v[0].0.y - v[v.len() - 1].0.y).abs() < REPEAT_EPS
+    {
+        v.pop();
+    }
+    if v.len() < 2 {
+        return None;
+    }
+    let mut out = if closed {
+        Pline::new_closed()
+    } else {
+        Pline::new()
+    };
+    let n = v.len();
+    for (i, &(p, b)) in v.iter().enumerate() {
+        let next = if i + 1 < n {
+            Some(v[i + 1].0)
+        } else if closed {
+            Some(v[0].0)
+        } else {
+            None
+        };
+        match next {
+            Some(q) if b != 0.0 => add_bulge_segment(&mut out, p, q, b),
+            _ => out.add(p.x, p.y, 0.0),
+        }
+    }
+    sanitize(&out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

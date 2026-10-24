@@ -17,7 +17,7 @@ use lopdf::content::Content;
 use lopdf::{Dictionary, Document, Object, ObjectId};
 
 use crate::diag::Diagnostic;
-use crate::flatten::flatten_cubic;
+use crate::flatten::{cubic_as_arc, flatten_cubic};
 use crate::geom::Point;
 use crate::model::SourceFormat;
 use crate::pline::{self, Pline};
@@ -173,10 +173,13 @@ fn inherited<'a>(doc: &'a Document, page: ObjectId, key: &[u8]) -> Option<&'a Ob
     None
 }
 
+/// A subpath in mm: points with the bulge of the segment that starts at them.
+type Subpath = (Vec<(Point, f64)>, bool);
+
 struct PathBuilder {
     /// Subpaths in mm with their closed flag.
-    subpaths: Vec<(Vec<Point>, bool)>,
-    current: Vec<Point>,
+    subpaths: Vec<Subpath>,
+    current: Vec<(Point, f64)>,
     /// Current point in user space (for `v`/`y` control points), and subpath start.
     cur_user: (f64, f64),
     start_user: (f64, f64),
@@ -203,7 +206,7 @@ impl PathBuilder {
         }
     }
 
-    fn take(&mut self) -> Vec<(Vec<Point>, bool)> {
+    fn take(&mut self) -> Vec<Subpath> {
         self.flush(false);
         std::mem::take(&mut self.subpaths)
     }
@@ -244,7 +247,6 @@ impl Interp<'_> {
         let mut path = PathBuilder::new();
         let mut layer_stack: Vec<Option<String>> = Vec::new();
         let mut in_text = false;
-        let tol_pt = (self.tol_mm / self.mm_per_pt).max(1e-6);
         for op in &ops {
             let a = &op.operands;
             match op.operator.as_str() {
@@ -310,7 +312,7 @@ impl Interp<'_> {
                         path.cur_user = (v[0], v[1]);
                         path.start_user = path.cur_user;
                         let p = self.to_mm(&gs.ctm, v[0], v[1]);
-                        path.current.push(p);
+                        path.current.push((p, 0.0));
                     }
                 }
                 "l" => {
@@ -318,7 +320,7 @@ impl Interp<'_> {
                     if v.len() == 2 {
                         path.cur_user = (v[0], v[1]);
                         let p = self.to_mm(&gs.ctm, v[0], v[1]);
-                        path.current.push(p);
+                        path.current.push((p, 0.0));
                     }
                 }
                 "c" | "v" | "y" => {
@@ -330,19 +332,19 @@ impl Interp<'_> {
                         _ => continue,
                     };
                     let p0 = path.cur_user;
-                    // Flatten in device points so the tolerance is physical.
-                    let dev = |p: (f64, f64)| {
-                        let (x, y) = gs.ctm.apply(p.0, p.1);
-                        Point::new(x, y)
-                    };
-                    let (origin, mmpp) = (self.origin_pt, self.mm_per_pt);
-                    let mut pts = Vec::new();
-                    flatten_cubic(dev(p0), dev(p1), dev(p2), dev(p3), tol_pt, &mut |q| {
-                        pts.push(q)
-                    });
-                    for q in pts {
-                        path.current
-                            .push(Point::new((q.x - origin.0) * mmpp, (q.y - origin.1) * mmpp));
+                    // In millimetres so the tolerance is physical: an exact arc when the
+                    // curve is one, otherwise flattened.
+                    let [q0, q1, q2, q3] = [p0, p1, p2, p3].map(|q| self.to_mm(&gs.ctm, q.0, q.1));
+                    match cubic_as_arc(q0, q1, q2, q3, self.tol_mm) {
+                        Some(b) => {
+                            if let Some(last) = path.current.last_mut() {
+                                last.1 = b;
+                            }
+                            path.current.push((q3, 0.0));
+                        }
+                        None => flatten_cubic(q0, q1, q2, q3, self.tol_mm, &mut |q| {
+                            path.current.push((q, 0.0))
+                        }),
                     }
                     path.cur_user = p3;
                 }
@@ -356,9 +358,9 @@ impl Interp<'_> {
                         path.flush(false);
                         let (x, y, w, h) = (v[0], v[1], v[2], v[3]);
                         let corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
-                        let pts: Vec<Point> = corners
+                        let pts: Vec<(Point, f64)> = corners
                             .iter()
-                            .map(|(px, py)| self.to_mm(&gs.ctm, *px, *py))
+                            .map(|(px, py)| (self.to_mm(&gs.ctm, *px, *py), 0.0))
                             .collect();
                         path.subpaths.push((pts, true));
                         path.cur_user = (x, y);
@@ -393,8 +395,7 @@ impl Interp<'_> {
                     if let Some(rule) = path.pending_clip.take() {
                         let loops: Vec<Pline> = subpaths
                             .iter()
-                            .filter(|(pts, _)| pts.len() >= 3)
-                            .map(|(pts, _)| pline::from_points(pts.iter().copied(), true))
+                            .filter_map(|(pts, _)| pline::from_bulged_points(pts, true))
                             .collect();
                         let r = Region::from_loops(loops, rule);
                         gs.clip = Some(match gs.clip.take() {
@@ -532,15 +533,14 @@ impl Interp<'_> {
 
     fn emit_fill(
         &mut self,
-        subpaths: &[(Vec<Point>, bool)],
+        subpaths: &[Subpath],
         rule: LoopRule,
         gs: &GState,
         layer: Option<&str>,
     ) {
         let loops: Vec<Pline> = subpaths
             .iter()
-            .filter(|(pts, _)| pts.len() >= 3)
-            .filter_map(|(pts, _)| pline::sanitize(&pline::from_points(pts.iter().copied(), true)))
+            .filter_map(|(pts, _)| pline::from_bulged_points(pts, true))
             .filter(|l| l.area().abs() > 1e-12)
             .collect();
         if loops.is_empty() {
@@ -572,7 +572,7 @@ impl Interp<'_> {
         self.layer(&name).primitives.push(prim);
     }
 
-    fn emit_stroke(&mut self, subpaths: &[(Vec<Point>, bool)], gs: &GState, layer: Option<&str>) {
+    fn emit_stroke(&mut self, subpaths: &[Subpath], gs: &GState, layer: Option<&str>) {
         let width = gs.line_width * gs.ctm.scale() * self.mm_per_pt;
         let width = if width > 0.0 {
             Some(width)
@@ -587,8 +587,8 @@ impl Interp<'_> {
             .map(str::to_string)
             .unwrap_or_else(|| rgb_hex(gs.stroke_rgb));
         for (pts, closed) in subpaths {
-            let Some(pl) = pline::sanitize(&pline::from_points(pts.iter().copied(), *closed))
-            else {
+            let closed = *closed || pline::returns_to_start(pts);
+            let Some(pl) = pline::from_bulged_points(pts, closed) else {
                 continue;
             };
             self.layer(&name)
@@ -1068,5 +1068,54 @@ mod tests {
     fn garbage_is_an_error() {
         assert!(read_bytes("x.pdf", b"%PDF-1.4 nothing", &ReadOptions::default()).is_err());
         assert!(read_bytes("x.pdf", b"hello", &ReadOptions::default()).is_err());
+    }
+
+    #[test]
+    fn bezier_circles_become_exact_arcs() {
+        // A kappa circle r = 36 pt at (72, 72), filled, and the same circle stroked.
+        let k = 0.552_284_75 * 36.0;
+        let circle = format!(
+            "108 72 m 108 {a} {a2} 108 72 108 c {b} 108 36 {a} 36 72 c 36 {c} {b} 36 72 36 c {a2} 36 108 {c} 108 72 c",
+            a = 72.0 + k,
+            a2 = 72.0 + k,
+            b = 72.0 - k,
+            c = 72.0 - k
+        );
+        let bytes = build(
+            vec![page(
+                [0.0, 0.0, 144.0, 144.0],
+                &format!("{circle} f\n1 0 0 RG {circle} S"),
+            )],
+            vec![],
+        );
+        let d = read(&bytes);
+        let fill = &d
+            .layers
+            .iter()
+            .find(|l| l.name == "#000000")
+            .unwrap()
+            .primitives[0];
+        let Primitive::Hatch { loops, .. } = fill else {
+            panic!()
+        };
+        assert_eq!(loops[0].vertex_count(), 4);
+        assert!(
+            loops[0]
+                .iter_vertexes()
+                .all(|v| (v.bulge - (std::f64::consts::PI / 8.0).tan()).abs() < 1e-9)
+        );
+        let r = 36.0 * MM_PER_PT;
+        assert!((loops[0].area() - std::f64::consts::PI * r * r).abs() < 1e-9);
+        let stroke = &d
+            .layers
+            .iter()
+            .find(|l| l.name == "#ff0000")
+            .unwrap()
+            .primitives[0];
+        let Primitive::Path { pline, .. } = stroke else {
+            panic!()
+        };
+        assert!(pline.is_closed());
+        assert!((pline::length(pline) - 2.0 * std::f64::consts::PI * r).abs() < 1e-9);
     }
 }

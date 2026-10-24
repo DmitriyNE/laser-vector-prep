@@ -6,6 +6,16 @@ subset is reported in the Diagnostics panel; nothing is dropped silently. Requir
 in [`spec.md`](spec.md) §4 and §8; design choices in
 [`engineering/decisions.md`](engineering/decisions.md) (D14, D22, D23).
 
+## Curves
+
+The geometry model holds straight segments and exact circular arcs. Arcs stay exact from
+import to DXF export; the preview draws them as arcs at any zoom. Other curves (ellipses,
+splines, Béziers that are not circular) are flattened at import within the read tolerance
+of 1 µm. A Bézier counts as a circular arc when its end tangents are symmetric about the
+chord and it stays within 1 µm, or within 0.03 % of the radius, of the circle; 0.03 % is the
+error the usual Bézier approximation of an arc itself makes, so a circle drawn as Béziers
+comes back as the circle it approximates.
+
 ## How a file becomes source layers
 
 The format is detected from the file's content first and its extension second (`.xml` may
@@ -63,10 +73,10 @@ missing units or end of file.
 |---|---|
 | Units | Root `width`/`height` in mm, cm or in with the viewBox mapping; unitless or px uses 96 px per inch (reported). |
 | Layers | Each named top-level group is a layer, named by its Inkscape label or id; loose elements go to a layer named after the file. |
-| Shapes and paths | All SVG shapes and path commands; Béziers flattened within the read tolerance. |
+| Shapes and paths | All SVG shapes and path commands. Curves that are circular arcs (circles, rounded rectangle corners, circular arc commands) are read as exact arcs; other curves (ellipses, general Béziers) are flattened within the read tolerance. |
 | `use`, `symbol`, CSS, nested transforms | Resolved by usvg. |
 | Fill | Filled loops with the SVG fill rule. Gradient and pattern paints are read as solid (info). |
-| Stroke | Centrelines with the stroke width scaled by the transform. Caps and joins are always expanded round (non-round ones reported). |
+| Stroke | Centrelines with the stroke width scaled by the transform; a path that ends where it starts is a closed loop. Caps and joins are always expanded round (non-round ones reported). |
 | Unpainted paths | Centrelines without width (info). |
 | `clipPath` | Applied exactly to fills; stroked and unpainted paths inside a clip are read unclipped (warning). |
 
@@ -79,8 +89,8 @@ filters, `foreignObject` (warnings).
 |---|---|
 | Pages | Every page; layer names get a `pN ` prefix when there are several. |
 | Units | Points (1/72 in), times `/UserUnit`; the MediaBox lower-left corner is the origin. |
-| Path construction | `m l c v y h re`, flattened within the read tolerance. |
-| Painting | `S s f F f* B B* b b* n`; fills with their rule, strokes with the scaled line width. |
+| Path construction | `m l c v y h re`. Bézier curves that are circular arcs are read as exact arcs; other curves are flattened within the read tolerance. |
+| Painting | `S s f F f* B B* b b* n`; fills with their rule, strokes with the scaled line width. A stroked path that ends where it starts is a closed loop. |
 | Graphics state | `q Q cm w d`; dash patterns are read solid (info). |
 | Colour | `g G rg RG k K sc SC scn SCN` in gray, RGB and CMYK. |
 | Clipping | `W W*` applied exactly to fills; strokes inside a clip are read unclipped (warning). |

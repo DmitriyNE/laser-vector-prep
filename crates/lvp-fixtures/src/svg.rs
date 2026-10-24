@@ -82,7 +82,7 @@ fn marking() -> SvgFixture {
         }),
         notes: vec![
             "y is flipped on import: SVG y grows downwards, the model's y grows upwards",
-            "the Bézier circle area is exact to the kappa approximation (about 0.03 %), so the test tolerance is 0.05 mm²",
+            "the four-Bézier circle is read back as an exact circle (four arcs), so its area is pi * 25",
             "usvg geometry is f32: positions reproduce to about 1e-6 mm, areas to about 1e-4 mm²",
             "stroke widths follow the group scale: the rotated line keeps 0.1 mm, the pads' fill is scaled 1.5x",
         ],

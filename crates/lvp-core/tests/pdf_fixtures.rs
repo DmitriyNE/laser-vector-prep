@@ -76,10 +76,10 @@ fn features_fixture_matches_the_manifest() {
     let b = pline::bounds(pline).unwrap();
     assert!((b.width() - f(&x["outline_side_mm"])).abs() < 1e-9);
 
-    // Bézier circle: the kappa approximation overshoots the area by about 0.03 %.
+    // The Bézier circle is read back as an exact circle (f32 coordinates in the file).
     let red = f(&x["red_area_mm2"]);
     let red_area = fills(&doc, "#ff0000").area();
-    assert!((red_area - red).abs() < red * 1e-3, "{red_area} vs {red}");
+    assert!((red_area - red).abs() < 1e-3, "{red_area} vs {red}");
     let black = fills(&doc, "#000000");
     assert!((black.area() - f(&x["black_area_mm2"])).abs() < 1e-6);
     assert_eq!(

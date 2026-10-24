@@ -241,6 +241,53 @@ pub fn flatten_cubic(
     rec(p0, p1, p2, p3, tolerance.max(1e-9), emit, 0);
 }
 
+/// Relative radial deviation the usual cubic-Bézier approximation of a circular arc has
+/// (2.7e-4 of the radius for a quarter turn, less for shorter arcs), with some headroom.
+pub const BEZIER_ARC_REL_ERROR: f64 = 3e-4;
+
+/// Recognise a cubic Bézier that represents a circular arc and return the arc's bulge
+/// (`tan(sweep / 4)`, positive counter-clockwise). The curve qualifies when its end
+/// tangents make equal angles with the chord, the sweep is below a half turn, and sampled
+/// points lie within `max(tolerance, BEZIER_ARC_REL_ERROR × radius)` of the circle. That
+/// relative allowance is the error the Bézier itself makes when it approximates an arc,
+/// so an SVG or PDF circle comes back as the circle it was drawn from.
+pub fn cubic_as_arc(p0: Point, p1: Point, p2: Point, p3: Point, tolerance: f64) -> Option<f64> {
+    let (cx, cy) = (p3.x - p0.x, p3.y - p0.y);
+    let chord = cx.hypot(cy);
+    let (t0x, t0y) = (p1.x - p0.x, p1.y - p0.y);
+    let (t1x, t1y) = (p3.x - p2.x, p3.y - p2.y);
+    if chord < 1e-12 || t0x.hypot(t0y) < 1e-12 || t1x.hypot(t1y) < 1e-12 {
+        return None;
+    }
+    let angle = |ax: f64, ay: f64, bx: f64, by: f64| (ax * by - ay * bx).atan2(ax * bx + ay * by);
+    // Signed angle from the start tangent to the chord, and from the chord to the end
+    // tangent: equal for a circular arc, and together the sweep.
+    let a0 = angle(t0x, t0y, cx, cy);
+    let a1 = angle(cx, cy, t1x, t1y);
+    if (a0 - a1).abs() > 1e-3 || a0.abs() < 1e-9 {
+        return None;
+    }
+    let sweep = a0 + a1;
+    if sweep.abs() >= std::f64::consts::PI - 1e-9 {
+        return None;
+    }
+    let bulge = (sweep / 4.0).tan();
+    let arc = crate::arc::Arc::from_bulge(p0, p3, bulge)?;
+    let allowed = tolerance.max(BEZIER_ARC_REL_ERROR * arc.radius);
+    for i in 1..8 {
+        let t = i as f64 / 8.0;
+        let u = 1.0 - t;
+        let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+        let x = b0 * p0.x + b1 * p1.x + b2 * p2.x + b3 * p3.x;
+        let y = b0 * p0.y + b1 * p1.y + b2 * p2.y + b3 * p3.y;
+        let d = (x - arc.center.x).hypot(y - arc.center.y);
+        if (d - arc.radius).abs() > allowed {
+            return None;
+        }
+    }
+    Some(bulge)
+}
+
 #[cfg(test)]
 mod cubic_tests {
     use super::*;
@@ -265,5 +312,73 @@ mod cubic_tests {
             let r = p.x.hypot(p.y);
             assert!((r - 10.0).abs() < 0.01, "{p:?}");
         }
+    }
+
+    #[test]
+    fn bezier_arcs_are_recognised_and_other_cubics_are_not() {
+        let k = 0.552_284_75;
+        // Quarter circle r = 10 counter-clockwise: bulge tan(pi/8).
+        let b = cubic_as_arc(
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0 * k),
+            Point::new(10.0 * k, 10.0),
+            Point::new(0.0, 10.0),
+            0.001,
+        )
+        .unwrap();
+        assert!((b - (std::f64::consts::PI / 8.0).tan()).abs() < 1e-9);
+        // The same arc traversed clockwise has the opposite bulge.
+        let b = cubic_as_arc(
+            Point::new(0.0, 10.0),
+            Point::new(10.0 * k, 10.0),
+            Point::new(10.0, 10.0 * k),
+            Point::new(10.0, 0.0),
+            0.001,
+        )
+        .unwrap();
+        assert!(b < 0.0);
+        // A quarter ellipse (a = 10, b = 5) is not an arc.
+        assert!(
+            cubic_as_arc(
+                Point::new(10.0, 0.0),
+                Point::new(10.0, 5.0 * k),
+                Point::new(10.0 * k, 5.0),
+                Point::new(0.0, 5.0),
+                0.001
+            )
+            .is_none()
+        );
+        // An S-curve and a straight cubic are not arcs.
+        assert!(
+            cubic_as_arc(
+                Point::new(0.0, 0.0),
+                Point::new(1.0, 1.0),
+                Point::new(2.0, -1.0),
+                Point::new(3.0, 0.0),
+                0.001
+            )
+            .is_none()
+        );
+        assert!(
+            cubic_as_arc(
+                Point::new(0.0, 0.0),
+                Point::new(1.0, 0.0),
+                Point::new(2.0, 0.0),
+                Point::new(3.0, 0.0),
+                0.001
+            )
+            .is_none()
+        );
+        // Handles 20 % too long: same tangents, but the curve leaves the circle.
+        assert!(
+            cubic_as_arc(
+                Point::new(10.0, 0.0),
+                Point::new(10.0, 12.0 * k),
+                Point::new(12.0 * k, 10.0),
+                Point::new(0.0, 10.0),
+                0.001
+            )
+            .is_none()
+        );
     }
 }
