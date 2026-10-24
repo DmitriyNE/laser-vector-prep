@@ -9,6 +9,8 @@ pub mod arc;
 pub mod dxf;
 pub mod flatten;
 pub mod geom;
+pub mod pline;
+pub mod region;
 pub mod units;
 
 /// Crate version, surfaced to the UI so exports can record which core produced them.
