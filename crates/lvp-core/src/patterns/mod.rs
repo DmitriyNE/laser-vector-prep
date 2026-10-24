@@ -121,7 +121,16 @@ fn contour_fill(
     }
     out.stats.rings = rings;
     if gap_fill {
-        let gaps = gapfill::uncovered(region, &out.paths, pitch_mm);
+        // Rings sit at depths first, first + pitch, ...; each sweeps ±pitch/2. The cores they
+        // miss are exactly the region deeper than the last ring plus half a pitch, which an
+        // offset gives directly (and exactly, for offset-based rings) without stroking
+        // thousands of ring segments.
+        let covered_depth = if rings == 0 {
+            (first - pitch_mm / 2.0).max(0.0)
+        } else {
+            depth - pitch_mm + pitch_mm / 2.0
+        };
+        let gaps = region.offset(-covered_depth);
         if !gaps.is_empty() {
             let (lines, skipped) = gapfill::centrelines(
                 &gaps,

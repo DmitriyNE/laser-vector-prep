@@ -9,7 +9,11 @@ use serde::{Deserialize, Serialize};
 use crate::region::LoopRule;
 
 /// Current profile schema version. Bump together with a migration in `profile`.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// History: v1 had a single ordered input list where subtraction meant "first minus the
+/// rest"; v2 splits operands into two groups so `union(inputs) op union(operands)` never
+/// depends on click order.
+pub const SCHEMA_VERSION: u32 = 2;
 
 macro_rules! id_type {
     ($name:ident, $doc:literal) => {
@@ -95,12 +99,13 @@ pub enum GeometryKind {
     Linework,
 }
 
+/// How a layer combines its two operand groups: `union(inputs) op union(operands)`.
+/// For `Union` both groups are simply merged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LayerOp {
     Union,
     Intersection,
-    /// First input minus the union of the rest.
     Subtraction,
     Xor,
 }
@@ -217,7 +222,11 @@ pub struct WorkingLayer {
     pub id: LayerId,
     pub name: String,
     pub kind: GeometryKind,
+    /// Group A, combined by union.
     pub inputs: Vec<Operand>,
+    /// Group B, combined by union; the right-hand side of `op`. Unused for `Union`.
+    #[serde(default)]
+    pub operands: Vec<Operand>,
     pub op: LayerOp,
     #[serde(default)]
     pub interpretation: Interpretation,

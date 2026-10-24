@@ -48,10 +48,41 @@ impl std::fmt::Display for ProfileError {
 
 impl std::error::Error for ProfileError {}
 
-/// One step migrations, indexed by the version they start from (`MIGRATIONS[v]` maps
-/// schema `v` to `v + 1`). Empty while the schema is at version 1.
+/// One step migrations: `(from, f)` maps schema `from` to `from + 1`.
 type Migration = fn(Value) -> Result<Value, String>;
-const MIGRATIONS: &[(u32, Migration)] = &[];
+const MIGRATIONS: &[(u32, Migration)] = &[(1, migrate_v1_to_v2)];
+
+/// v1 had one ordered `inputs` list; subtraction meant "first minus the rest". v2 keeps
+/// `inputs` as group A and adds `operands` (group B): for subtraction, intersection and
+/// xor the first input stays in A and the rest move to B; union layers are unchanged.
+fn migrate_v1_to_v2(mut value: Value) -> Result<Value, String> {
+    let Some(layers) = value.get_mut("workingLayers").and_then(Value::as_array_mut) else {
+        return Ok(value);
+    };
+    for layer in layers {
+        let op = layer
+            .get("op")
+            .and_then(Value::as_str)
+            .unwrap_or("union")
+            .to_string();
+        let inputs = layer
+            .get("inputs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let (a, b) = if op == "union" || inputs.len() < 2 {
+            (inputs, Vec::new())
+        } else {
+            (inputs[..1].to_vec(), inputs[1..].to_vec())
+        };
+        let obj = layer
+            .as_object_mut()
+            .ok_or("working layer is not an object")?;
+        obj.insert("inputs".into(), Value::Array(a));
+        obj.insert("operands".into(), Value::Array(b));
+    }
+    Ok(value)
+}
 
 /// Parse (and migrate) a profile JSON document.
 pub fn parse_profile(json: &str) -> Result<Profile, ProfileError> {
@@ -146,7 +177,28 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                 .with_context(l.id.to_string()),
             );
         }
-        for op in &l.inputs {
+        if l.op != LayerOp::Union && l.operands.is_empty() {
+            out.push(
+                Diagnostic::warning(
+                    "profile.no_operands",
+                    format!(
+                        "layer {:?} uses {:?} but has no operands in group B",
+                        l.name, l.op
+                    ),
+                )
+                .with_context(l.id.to_string()),
+            );
+        }
+        if l.op == LayerOp::Union && !l.operands.is_empty() {
+            out.push(
+                Diagnostic::info(
+                    "profile.union_operands",
+                    format!("layer {:?} is a union; group B is merged into it", l.name),
+                )
+                .with_context(l.id.to_string()),
+            );
+        }
+        for op in l.inputs.iter().chain(&l.operands) {
             match op {
                 Operand::Source(s) if !source_ids.contains(s) => out.push(
                     Diagnostic::error(
@@ -171,18 +223,6 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                     "profile.linework_op",
                     format!(
                         "linework layer {:?} can only combine inputs by union",
-                        l.name
-                    ),
-                )
-                .with_context(l.id.to_string()),
-            );
-        }
-        if l.op == LayerOp::Subtraction && l.inputs.len() < 2 {
-            out.push(
-                Diagnostic::warning(
-                    "profile.subtraction_inputs",
-                    format!(
-                        "subtraction layer {:?} needs a subject and at least one operand",
                         l.name
                     ),
                 )
@@ -319,6 +359,7 @@ pub fn pcb_positive_ldi() -> Profile {
             name: "Copper".into(),
             kind: GeometryKind::Region,
             inputs: vec![Operand::Source(SourceId::new("src-copper"))],
+            operands: Vec::new(),
             op: LayerOp::Union,
             interpretation: Interpretation::default(),
             passes: vec![Pass {
@@ -340,6 +381,7 @@ pub fn pcb_positive_ldi() -> Profile {
             name: "Outline".into(),
             kind: GeometryKind::Linework,
             inputs: vec![Operand::Source(SourceId::new("src-outline"))],
+            operands: Vec::new(),
             op: LayerOp::Union,
             interpretation: Interpretation::default(),
             passes: vec![Pass {
@@ -371,7 +413,7 @@ mod tests {
         let json = to_json(&p);
         let back = parse_profile(&json).unwrap();
         assert_eq!(back, p);
-        assert!(json.contains("\"schemaVersion\": 1"));
+        assert!(json.contains("\"schemaVersion\": 2"));
         assert!(json.contains("\"kind\": \"contourFill\""));
     }
 
@@ -400,8 +442,37 @@ mod tests {
     }
 
     #[test]
+    fn v1_subtraction_migrates_to_two_groups() {
+        let v1 = r#"{"schemaVersion": 1, "profileId": "p", "name": "old",
+            "workingLayers": [
+              {"id": "a", "name": "a", "kind": "region", "inputs": [{"source": "s1"}, {"source": "s2"}, {"layer": "x"}], "op": "subtraction"},
+              {"id": "b", "name": "b", "kind": "region", "inputs": [{"source": "s1"}, {"source": "s2"}], "op": "union"},
+              {"id": "c", "name": "c", "kind": "region", "inputs": [{"source": "s1"}], "op": "intersection"}
+            ]}"#;
+        let p = parse_profile(v1).unwrap();
+        assert_eq!(p.schema_version, SCHEMA_VERSION);
+        let a = p.layer(&LayerId::new("a")).unwrap();
+        assert_eq!(a.inputs, vec![Operand::Source(SourceId::new("s1"))]);
+        assert_eq!(
+            a.operands,
+            vec![
+                Operand::Source(SourceId::new("s2")),
+                Operand::Layer(LayerId::new("x"))
+            ]
+        );
+        let b = p.layer(&LayerId::new("b")).unwrap();
+        assert_eq!(b.inputs.len(), 2);
+        assert!(b.operands.is_empty());
+        let c = p.layer(&LayerId::new("c")).unwrap();
+        assert_eq!(c.inputs.len(), 1);
+        assert!(c.operands.is_empty());
+        // Migrated output re-parses as current.
+        assert_eq!(parse_profile(&to_json(&p)).unwrap(), p);
+    }
+
+    #[test]
     fn minimal_profile_gets_defaults() {
-        let json = r#"{"schemaVersion": 1, "profileId": "p", "name": "Empty"}"#;
+        let json = r#"{"schemaVersion": 2, "profileId": "p", "name": "Empty"}"#;
         let p = parse_profile(json).unwrap();
         assert_eq!(p.export.stroke_width_mm, 0.0254);
         assert_eq!(p.optimizer.mode, OptimizerMode::AsGenerated);
@@ -410,7 +481,7 @@ mod tests {
 
     #[test]
     fn shape_errors_are_reported() {
-        let json = r#"{"schemaVersion": 1, "profileId": "p", "name": "x", "workingLayers": [{"id": "a", "name": "a", "kind": "blob", "inputs": [], "op": "union"}]}"#;
+        let json = r#"{"schemaVersion": 2, "profileId": "p", "name": "x", "workingLayers": [{"id": "a", "name": "a", "kind": "blob", "inputs": [], "op": "union"}]}"#;
         assert!(matches!(
             parse_profile(json).unwrap_err(),
             ProfileError::Shape(_)

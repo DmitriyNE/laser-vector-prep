@@ -18,7 +18,8 @@ use std::collections::HashMap;
 
 use cavalier_contours::core::math::Vector2;
 use cavalier_contours::polyline::{
-    PlineCreation, PlineSource, PlineSourceMut, PlineViewData, seg_length, seg_tangent_vector,
+    PlineCreation, PlineSource, PlineSourceMut, PlineViewData, seg_closest_point, seg_length,
+    seg_tangent_vector,
 };
 use cavalier_contours::shape_algorithms::{Shape, ShapeOffsetOptions};
 
@@ -120,12 +121,19 @@ fn winding(loops: &[Tagged], operand: u8, p: Point, pad: f64) -> i32 {
         .sum()
 }
 
-/// Split points on one loop, sorted along the loop and de-duplicated.
+/// Split points on one loop, snapped onto their segments, sorted along the loop and
+/// de-duplicated. Snapping matters: intersection points of near-tangent micro-arcs can sit
+/// off their segment by more than the join tolerance, which would make the slice invalid.
 fn sorted_splits(
     p: &Pline,
     splits: &mut [(usize, Vector2<f64>)],
     join: f64,
 ) -> Vec<(usize, Vector2<f64>)> {
+    for sp in splits.iter_mut() {
+        let i = sp.0;
+        let j = if i + 1 < p.vertex_count() { i + 1 } else { 0 };
+        sp.1 = seg_closest_point(p.at(i), p.at(j), sp.1, join);
+    }
     // Chord distance from the segment start is monotonic along a segment (|bulge| <= 1).
     splits.sort_by(|a, b| {
         a.0.cmp(&b.0).then_with(|| {
@@ -250,7 +258,15 @@ fn stitch(slices: Vec<Pline>, join: f64) -> Vec<Pline> {
             cur = next;
         }
         if !closed_ok {
-            // Dangling chain: cannot be a boundary; dropped. (Diagnostics come with the DAG.)
+            // A boundary slice set must always close; a dangling chain means the
+            // classification or the intersections were inconsistent. Loud in debug builds,
+            // dropped in release (the result is then incomplete rather than corrupt).
+            debug_assert!(
+                false,
+                "boolean stitching left a dangling chain of {} slice(s) starting at {:?}",
+                chain.len(),
+                origin
+            );
             continue;
         }
         let mut lp = Pline::new_closed();
@@ -586,33 +602,110 @@ fn merge_then_nest(ccw: Vec<Pline>) -> Vec<Pline> {
 }
 
 /// Round-capped, round-joined stroke of `width` around an open or closed path, as a region.
-/// Built as the union of one capsule per segment, so arcs stay exact.
 pub fn stroke(path: &Pline, width: f64) -> Region {
     stroke_many(std::slice::from_ref(path), width)
 }
 
-/// Union of the strokes of many paths in one boolean (the swept area of a tool path set).
+/// Union of the strokes of many paths (the swept area of a tool path set).
+///
+/// A closed path's stroke is the ring between the outward and inward offsets of its
+/// filled loop; an open path's stroke is its two side offsets closed with semicircular
+/// caps. Both come from cavalier's offsetting, so the pieces have no coincident or
+/// tangent boundaries (which a union of per-segment capsules is full of). Paths whose
+/// offsets fragment fall back to the capsule union.
 pub fn stroke_many(paths: &[Pline], width: f64) -> Region {
     let r = width / 2.0;
     if r.is_nan() || r <= 0.0 {
         return Region::empty();
     }
+    let clean: Vec<Pline> = paths.iter().filter_map(pline::sanitize).collect();
+    let mut parts: Vec<Region> = Vec::new();
+    for p in &clean {
+        if p.is_closed() && p.area().abs() > 1e-18 {
+            let base = Region::from_loops([p.clone()], LoopRule::NonZero);
+            let outer = base.offset(r);
+            let inner = base.offset(-r);
+            parts.push(if inner.is_empty() {
+                outer
+            } else {
+                outer.difference(&inner)
+            });
+        } else if let Some(region) = open_stroke(p, r) {
+            parts.push(region);
+        } else {
+            parts.push(stroke_capsules(std::slice::from_ref(p), r));
+        }
+    }
+    parts.into_iter().fold(Region::empty(), |acc, part| {
+        if acc.is_empty() {
+            part
+        } else {
+            acc.union(&part)
+        }
+    })
+}
+
+/// Stroke of an open path from its two side offsets plus end caps; `None` when an offset
+/// fragments (self-intersecting or looped paths), where the capsule fallback is used.
+fn open_stroke(p: &Pline, r: f64) -> Option<Region> {
+    if p.vertex_count() < 2 || p.is_closed() {
+        return None;
+    }
+    let left = p.parallel_offset(r);
+    let right = p.parallel_offset(-r);
+    if left.len() != 1 || right.len() != 1 {
+        return None;
+    }
+    let right = pline::sanitize(&right[0])?;
+    let mut left_back = pline::sanitize(&left[0])?;
+    left_back.invert_direction_mut();
+    let (t_start, t_end) = (start_tangent(p), end_tangent(p));
+    let mut lp = Pline::new_closed();
+    let n = right.vertex_count();
+    for (i, v) in right.iter_vertexes().enumerate() {
+        if i + 1 < n {
+            lp.add(v.x, v.y, v.bulge);
+        } else {
+            // End cap around the path end, from the right side to the left side.
+            let to = left_back.at(0).pos();
+            lp.add(v.x, v.y, cap_bulge(Point::new(v.x, v.y), pt(to), t_end));
+        }
+    }
+    let m = left_back.vertex_count();
+    for (i, v) in left_back.iter_vertexes().enumerate() {
+        if i + 1 < m {
+            lp.add(v.x, v.y, v.bulge);
+        } else {
+            // Start cap around the path start, back to the right side's first vertex.
+            let to = right.at(0).pos();
+            lp.add(
+                v.x,
+                v.y,
+                cap_bulge(
+                    Point::new(v.x, v.y),
+                    pt(to),
+                    Point::new(-t_start.x, -t_start.y),
+                ),
+            );
+        }
+    }
+    let region = Region::from_loops([lp], LoopRule::NonZero);
+    (!region.is_empty()).then_some(region)
+}
+
+/// Capsule-per-segment stroke: exact arcs, but adjacent capsules share cap circles, so it
+/// is only the fallback for paths whose offsets fragment.
+fn stroke_capsules(paths: &[Pline], r: f64) -> Region {
     let mut capsules: Vec<Pline> = Vec::new();
-    for (v1, v2) in paths
-        .iter()
-        .filter(|p| p.vertex_count() >= 2)
-        .flat_map(|p| p.iter_segments())
-    {
+    for (v1, v2) in paths.iter().flat_map(|p| p.iter_segments()) {
         let a = pt(v1.pos());
         let b = pt(v2.pos());
-        if a.distance(b) <= 1e-12 {
+        if a.distance(b) <= pline::REPEAT_EPS {
             continue;
         }
         match Arc::from_bulge(a, b, v1.bulge) {
             Some(arc) if arc_capsule_is_well_formed(&arc, r) => capsules.push(arc_capsule(&arc, r)),
             Some(arc) => {
-                // Arc tighter than the stroke radius, or offset arcs collapsing to a point:
-                // fall back to flattened line capsules.
                 if let Ok(pts) = arc.flatten(r * 0.05) {
                     for w in pts.windows(2) {
                         if w[0].distance(w[1]) > pline::REPEAT_EPS {

@@ -208,7 +208,7 @@ fn topo_order(profile: &Profile) -> (Vec<LayerId>, Vec<LayerId>) {
     let mut indegree: HashMap<&LayerId, usize> = ids.iter().map(|id| (*id, 0)).collect();
     let mut dependents: HashMap<&LayerId, Vec<&LayerId>> = HashMap::new();
     for l in &profile.working_layers {
-        for op in &l.inputs {
+        for op in l.inputs.iter().chain(&l.operands) {
             if let Operand::Layer(dep) = op
                 && known.contains(dep)
             {
@@ -391,7 +391,7 @@ impl Evaluator {
             ..layer.clone()
         };
         hash_json(&mut h, &config);
-        for op in &layer.inputs {
+        for op in layer.inputs.iter().chain(&layer.operands) {
             match op {
                 Operand::Source(sid) => match bindings.get(sid) {
                     Some(BindingStatus::Matched(i, name)) => {
@@ -503,8 +503,8 @@ fn compute_layer(
     done: &BTreeMap<LayerId, LayerResult>,
 ) -> (Geometry, Vec<Diagnostic>) {
     let mut diags = Vec::new();
-    let mut inputs: Vec<Geometry> = Vec::new();
-    for op in &layer.inputs {
+    // Resolve one operand; `None` means the layer is blocked.
+    let resolve = |op: &Operand, diags: &mut Vec<Diagnostic>| -> Option<Geometry> {
         match op {
             Operand::Source(sid) => match bindings.get(sid) {
                 Some(BindingStatus::Matched(i, name)) => {
@@ -513,60 +513,76 @@ fn compute_layer(
                         .layer(name)
                         .map(|l| l.primitives.as_slice())
                         .unwrap_or(&[]);
-                    inputs.push(source_geometry(
+                    Some(source_geometry(
                         layer.kind,
                         &layer.interpretation,
                         prims,
-                        &mut diags,
-                    ));
+                        diags,
+                    ))
                 }
                 _ => {
-                    let required = profile.binding(sid).is_some_and(|b| b.required);
-                    if required {
+                    if profile.binding(sid).is_some_and(|b| b.required) {
                         diags.push(Diagnostic::error(
                             "eval.input_unavailable",
                             format!("source {sid} is not bound; layer output is blocked"),
                         ));
-                        return (empty_geometry(layer.kind), diags);
+                        None
+                    } else {
+                        Some(empty_geometry(layer.kind))
                     }
-                    inputs.push(empty_geometry(layer.kind));
                 }
             },
             Operand::Layer(lid) => match done.get(lid) {
-                Some(r) => inputs.push(r.geometry.clone()),
+                Some(r) => Some(r.geometry.clone()),
                 None => {
                     diags.push(Diagnostic::error(
                         "eval.input_unavailable",
                         format!("input layer {lid} did not evaluate (cycle or missing)"),
                     ));
-                    return (empty_geometry(layer.kind), diags);
+                    None
                 }
             },
         }
+    };
+    let mut group_a: Vec<Geometry> = Vec::new();
+    let mut group_b: Vec<Geometry> = Vec::new();
+    for op in &layer.inputs {
+        match resolve(op, &mut diags) {
+            Some(g) => group_a.push(g),
+            None => return (empty_geometry(layer.kind), diags),
+        }
+    }
+    for op in &layer.operands {
+        match resolve(op, &mut diags) {
+            Some(g) => group_b.push(g),
+            None => return (empty_geometry(layer.kind), diags),
+        }
     }
     let geometry = match layer.kind {
-        GeometryKind::Linework => {
-            Geometry::Linework(inputs.iter().flat_map(|g| g.paths()).collect())
-        }
-        GeometryKind::Region => {
-            let regions: Vec<Region> = inputs
+        // Linework only merges; validation rejects other ops.
+        GeometryKind::Linework => Geometry::Linework(
+            group_a
                 .iter()
-                .map(|g| to_region(g, &layer.interpretation, &mut diags))
-                .collect();
-            let mut it = regions.into_iter();
-            let Some(first) = it.next() else {
-                return (Geometry::Region(Region::empty()), diags);
+                .chain(&group_b)
+                .flat_map(|g| g.paths())
+                .collect(),
+        ),
+        GeometryKind::Region => {
+            let union_of = |gs: &[Geometry], diags: &mut Vec<Diagnostic>| {
+                gs.iter()
+                    .map(|g| to_region(g, &layer.interpretation, diags))
+                    .fold(Region::empty(), |acc, r| {
+                        if acc.is_empty() { r } else { acc.union(&r) }
+                    })
             };
-            let result = match layer.op {
-                LayerOp::Union => it.fold(first, |acc, r| acc.union(&r)),
-                LayerOp::Intersection => it.fold(first, |acc, r| acc.intersection(&r)),
-                LayerOp::Xor => it.fold(first, |acc, r| acc.xor(&r)),
-                LayerOp::Subtraction => {
-                    let rest = it.fold(Region::empty(), |acc, r| acc.union(&r));
-                    first.difference(&rest)
-                }
-            };
-            Geometry::Region(result)
+            let a = union_of(&group_a, &mut diags);
+            let b = union_of(&group_b, &mut diags);
+            Geometry::Region(match layer.op {
+                LayerOp::Union => a.union(&b),
+                LayerOp::Intersection => a.intersection(&b),
+                LayerOp::Subtraction => a.difference(&b),
+                LayerOp::Xor => a.xor(&b),
+            })
         }
     };
     if geometry.is_empty() {
@@ -702,6 +718,7 @@ mod tests {
             name: id.to_string(),
             kind: GeometryKind::Region,
             inputs: vec![Operand::Layer(dep.clone())],
+            operands: Vec::new(),
             op: LayerOp::Union,
             interpretation: Interpretation::default(),
             passes: vec![],
@@ -847,38 +864,48 @@ mod tests {
                 }],
             });
         }
-        let region = |id: &str, inputs: Vec<Operand>, op: LayerOp| WorkingLayer {
-            id: LayerId::new(id),
-            name: id.into(),
-            kind: GeometryKind::Region,
-            inputs,
-            op,
-            interpretation: Interpretation::default(),
-            passes: vec![],
-            enabled: true,
-            reference_only: false,
-        };
-        // Dependent layer listed before its input on purpose.
+        let region =
+            |id: &str, inputs: Vec<Operand>, operands: Vec<Operand>, op: LayerOp| WorkingLayer {
+                id: LayerId::new(id),
+                name: id.into(),
+                kind: GeometryKind::Region,
+                inputs,
+                operands,
+                op,
+                interpretation: Interpretation::default(),
+                passes: vec![],
+                enabled: true,
+                reference_only: false,
+            };
+        // Dependent layer listed before its input on purpose; operand groups, not click
+        // order, decide what is subtracted from what.
         profile.working_layers.push(region(
             "wl-diff",
-            vec![
-                Operand::Layer(LayerId::new("wl-a")),
-                Operand::Source(SourceId::new("src-b")),
-            ],
+            vec![Operand::Layer(LayerId::new("wl-a"))],
+            vec![Operand::Source(SourceId::new("src-b"))],
             LayerOp::Subtraction,
         ));
         profile.working_layers.push(region(
             "wl-a",
             vec![Operand::Source(SourceId::new("src-a"))],
+            vec![],
             LayerOp::Union,
         ));
         profile.working_layers.push(region(
             "wl-int",
-            vec![
-                Operand::Source(SourceId::new("src-a")),
-                Operand::Source(SourceId::new("src-b")),
-            ],
+            vec![Operand::Source(SourceId::new("src-a"))],
+            vec![Operand::Source(SourceId::new("src-b"))],
             LayerOp::Intersection,
+        ));
+        // Group A is a union: (a ∪ b) − b = the part of a outside b.
+        profile.working_layers.push(region(
+            "wl-grouped",
+            vec![
+                Operand::Source(SourceId::new("src-b")),
+                Operand::Source(SourceId::new("src-a")),
+            ],
+            vec![Operand::Source(SourceId::new("src-b"))],
+            LayerOp::Subtraction,
         ));
         let e = Evaluator::new().evaluate(&profile, &sources);
         assert_eq!(
@@ -886,7 +913,8 @@ mod tests {
             vec![
                 LayerId::new("wl-a"),
                 LayerId::new("wl-diff"),
-                LayerId::new("wl-int")
+                LayerId::new("wl-int"),
+                LayerId::new("wl-grouped")
             ]
         );
         let Geometry::Region(diff) = &e.layers[&LayerId::new("wl-diff")].geometry else {
@@ -895,7 +923,15 @@ mod tests {
         let Geometry::Region(int) = &e.layers[&LayerId::new("wl-int")].geometry else {
             panic!()
         };
+        let Geometry::Region(grouped) = &e.layers[&LayerId::new("wl-grouped")].geometry else {
+            panic!()
+        };
         assert!((diff.area() - 50.0).abs() < 1e-9);
         assert!((int.area() - 50.0).abs() < 1e-9);
+        assert!(
+            (grouped.area() - 50.0).abs() < 1e-9,
+            "grouped {}",
+            grouped.area()
+        );
     }
 }
