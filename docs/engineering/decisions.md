@@ -269,3 +269,24 @@ protected layers' regions. The objective is jump length plus `bleed_weight × Σ
 over protected cells, scaled to millimetres. Squaring is what turns "avoid hotspots" into a
 number: stacking two footprints on one spot costs four, spreading them costs two. The same
 raster is the preview heatmap. Nothing here is a dose and the labels say so.
+
+## D25 — Corner joins, end spacing and ring simplification (2026-10-25)
+
+The spec asks for a join style on boundary traces and buffers and lists "end spacing" and a
+simplifying tolerance for contour fill without defining them; cavalier_contours only offsets
+with round joins. Choices made without a separate question (owner may redefine):
+
+- **Joins** (`round`, `miter { limit }`, `bevel`) on boundary traces and on the buffer and
+  buffered-hull envelopes. Built from the exact round offset: each join arc (radius equal
+  to the offset distance, centred on a corner of the original boundary) is replaced by the
+  extended edges or by its chord. Arcs of the original geometry are never touched. A mitre
+  whose tip exceeds `limit × distance` or would cross other geometry becomes a bevel; a
+  bevel's chord lies within the offset distance of the corner and cannot cross anything.
+  Editing the outline avoids booleans on coincident arcs, which the n-loop engine handles
+  poorly.
+- **End spacing** is the counterpart of the first offset: the distance beyond the last ring
+  from which the centreline gap fill must still cover the core. Default `pitch / 2`, the
+  previous behaviour. Larger values keep gap-fill centrelines away from the last ring.
+- **Simplify** (contour fill rings): arcs whose sagitta is within half the tolerance become
+  chords, then Douglas-Peucker runs over straight runs with the other half; larger arcs are
+  kept exactly. Clamped to a quarter of the pitch so neighbouring rings cannot touch.

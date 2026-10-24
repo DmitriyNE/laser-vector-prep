@@ -3,6 +3,18 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M3 step 8: gap fill refinements and format reference
+
+Join styles for boundary traces and buffer/hull envelopes, end spacing and ring
+simplification for contour fill (D25), with editors in the Properties panel. The mitre
+crossing check first shortened the new edges by 1e-7 of their length to avoid touching the
+neighbouring edges, but the kernel's fuzzy intersection test still reported a touch and
+every mitre fell back to a bevel; intersections at the shared end points are now filtered
+instead. Simplification first left most vertices because offsetting flattened input
+creates many tiny arcs; arcs flatter than half the tolerance now count as chords.
+`docs/formats.md` documents the supported subset of every reader and exporter, which is the
+"documented vector PDF subset" the spec asks for, extended to all formats.
+
 ## 2026-10-25 — M3 step 7: SVG and DXF export
 
 `export::svg` writes one Inkscape layer per exporting group on the PDF's page (y flipped,

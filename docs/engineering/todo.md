@@ -26,7 +26,8 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 - [x] Offline after load via the vendored coi-serviceworker with precache
 - [ ] JSON Schema document for the profile format (serde types are the source of truth
       today; generate or hand-write `docs/profile-schema.json`)
-- [ ] Contour fill `end_spacing`; configurable join style once the kernel exposes it
+- [x] Contour fill end spacing and ring simplification; join styles for traces and buffers
+      (D25)
 - [x] Benchmark the pairwise-boolean kernel on flash-heavy inputs: a bounding-box grid in
       `resolve` was enough (D21), no kernel change needed
 - [ ] Preview: `f32` coordinates relative to the document origin lose precision far from
@@ -60,7 +61,7 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 - [ ] Preset pitches (20 µm fill, 50 µm marking) are starting points, not measured values;
       revisit once the machine has been characterised
 
-## M3 — breadth and optimization (done 2026-10-25 except the items below; D22–D24)
+## M3 — breadth and optimization (done 2026-10-25; D22–D25; open items are follow-ups)
 
 Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF export.
 
@@ -104,7 +105,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] SVG and DXF export of generated paths per output group
 - [ ] DXF export: true colour (group code 420) alongside the nearest ACI once the writer
       supports it; SVG export could keep arcs as `A` commands instead of flattening
-- [ ] Gap fill refinements (`end_spacing`, join style) from the M1 list
+- [x] Gap fill refinements: end spacing, ring simplification, join styles (D25)
+- [x] User documentation of every format's supported subset (`docs/formats.md`)
 
 ## M4 — robustness/release
 

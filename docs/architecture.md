@@ -1,7 +1,8 @@
 # Architecture
 
 How the pieces fit, and where a given responsibility lives. Requirements are in
-[`spec.md`](spec.md); engineering decisions with their rationale are in
+[`spec.md`](spec.md); what each file format reader and exporter supports is in
+[`formats.md`](formats.md); engineering decisions with their rationale are in
 [`engineering/decisions.md`](engineering/decisions.md).
 
 ## Shape of the system
@@ -31,7 +32,7 @@ Pure Rust, host-testable, no browser dependencies. All lengths in millimetres.
 |---|---|
 | `geom`, `units`, `flatten`, `arc` | Points, boxes, units (DXF `$INSUNITS` mapping), bounded-error arc flattening, DXF bulge/angle semantics. `geom::EPS_MM` is the numerical noise floor. |
 | `pline` | Line-and-arc polylines (`cavalier_contours::Polyline<f64>`), construction helpers, flattening, `sanitize` (every polyline entering the kernel). |
-| `region` | Planar regions (CCW outers, CW holes) and the n-loop boolean engine built on cavalier's pairwise primitives, with a bounding-box grid (`BBoxGrid`) for pair candidates, winding probes and nesting; offsets via `Shape`; strokes from side offsets. See D7, D18, D21. |
+| `region` | Planar regions (CCW outers, CW holes) and the n-loop boolean engine built on cavalier's pairwise primitives, with a bounding-box grid (`BBoxGrid`) for pair candidates, winding probes and nesting; offsets via `Shape` with round, mitre or bevel joins (`offset_join`, D25); strokes from side offsets. See D7, D18, D21. |
 | `source` | The format-independent result of reading a file (`SourceDocument`: layers of `Primitive`s in mm, each layer with an optional declared `function`), format detection from content and extension, the `read_any` dispatcher, and the bounded glob used by slot rules. |
 | `dxf::read` / `dxf::write` | DXF subset reader (LINE, ARC, CIRCLE, LWPOLYLINE/POLYLINE, ELLIPSE, SPLINE, HATCH, INSERT, SOLID) with diagnostics for everything else; R2000 writer used for fixtures and later export. |
 | `ipc` | IPC-2581 reader (our own, D22) on roxmltree: layers and steps, standard and user primitive dictionaries, line descriptors (round ends stay centrelines, square and flat ends become exact polygons), pads with transforms, positive/negative sets composited in source order, the board profile, `layerFunction,side` as the layer function; components and nets are ignored. |
