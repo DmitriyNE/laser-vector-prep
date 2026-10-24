@@ -16,6 +16,7 @@ pub mod model;
 pub mod patterns;
 pub mod pline;
 pub mod profile;
+pub mod project;
 pub mod region;
 pub mod units;
 
