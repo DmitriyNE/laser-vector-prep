@@ -1,0 +1,296 @@
+<script lang="ts">
+  import type { Preview } from "../core/types.js";
+  import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
+
+  let { store }: { store: ProjectStore } = $props();
+
+  let canvas: HTMLCanvasElement;
+  // View: document mm at the canvas centre and pixels per mm.
+  let cx = $state(0);
+  let cy = $state(0);
+  let ppm = $state(10);
+  let fitted = false;
+  let cursorMm: [number, number] | null = $state(null);
+
+  type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; closedHoles?: boolean };
+  let items: Item[] = [];
+  let fetchToken = 0;
+
+  function toScreen(x: number, y: number, w: number, h: number): [number, number] {
+    return [w / 2 + (x - cx) * ppm, h / 2 - (y - cy) * ppm];
+  }
+
+  function toMm(px: number, py: number, w: number, h: number): [number, number] {
+    return [cx + (px - w / 2) / ppm, cy - (py - h / 2) / ppm];
+  }
+
+  function fit() {
+    const ev = store.evaluation;
+    let b: [number, number, number, number] | null = null;
+    const grow = (x: [number, number, number, number] | null) => {
+      if (!x) return;
+      b = b ? [Math.min(b[0], x[0]), Math.min(b[1], x[1]), Math.max(b[2], x[2]), Math.max(b[3], x[3])] : [...x];
+    };
+    for (const s of store.sources) grow(s.boundsMm);
+    if (ev) grow(ev.boundsMm);
+    const bb = b as [number, number, number, number] | null;
+    if (!bb || !canvas) return;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const bw = Math.max(bb[2] - bb[0], 1e-3);
+    const bh = Math.max(bb[3] - bb[1], 1e-3);
+    ppm = Math.min(w / bw, h / bh) * 0.9;
+    cx = (bb[0] + bb[2]) / 2;
+    cy = (bb[1] + bb[3]) / 2;
+    fitted = true;
+    draw();
+  }
+
+  async function refetch() {
+    const token = ++fetchToken;
+    const next: Item[] = [];
+    const ev = store.evaluation;
+    if (store.showSources) {
+      for (const s of store.sources) {
+        for (const l of s.layers) {
+          const key = `${s.index}:${l.name}`;
+          if (store.hiddenSourceLayers.has(key) || l.closedPaths + l.openPaths + l.hatches === 0) continue;
+          const p = await store.previewSource(s.index, l.name);
+          if (p) next.push({ key: `src:${key}`, preview: p, color: "rgba(128,128,128,0.9)", width: 1, dash: [] });
+        }
+      }
+    }
+    if (ev && store.showLayers) {
+      for (const l of ev.layers) {
+        if (store.hiddenLayers.has(l.id)) continue;
+        const p = await store.preview("layer", l.id);
+        if (p) next.push({ key: `layer:${l.id}`, preview: p, color: "rgba(60,60,60,0.9)", width: 1.5, dash: [], closedHoles: true });
+      }
+    }
+    if (ev) {
+      for (const pass of ev.passes) {
+        if (store.hiddenPasses.has(pass.id)) continue;
+        const g = store.group(pass.group);
+        if (g && !g.visible) continue;
+        const p = await store.preview("pass", pass.id);
+        if (p) next.push({ key: `pass:${pass.id}`, preview: p, color: g ? rgbCss(g.color) : "black", width: 1, dash: [] });
+        if (store.showJumps) {
+          const j = await store.previewJumps(pass.id);
+          if (j) next.push({ key: `jumps:${pass.id}`, preview: j, color: "rgba(220,0,200,0.8)", width: 1, dash: [4, 3] });
+        }
+      }
+    }
+    if (token !== fetchToken) return; // a newer fetch is in flight
+    items = next;
+    if (!fitted) fit();
+    draw();
+  }
+
+  function draw() {
+    if (!canvas) return;
+    const dpr = devicePixelRatio;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+    }
+    const ctx = canvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    drawGrid(ctx, w, h);
+    const sel = store.selection;
+    for (const it of items) {
+      const selected =
+        (sel.kind === "pass" && it.key === `pass:${sel.id}`) ||
+        (sel.kind === "layer" && it.key === `layer:${sel.id}`) ||
+        (sel.kind === "source" && it.key === `src:${sel.file}:${sel.layer}`);
+      ctx.strokeStyle = it.color;
+      ctx.lineWidth = selected ? it.width + 1.5 : it.width;
+      ctx.setLineDash(it.dash);
+      const { coords, starts, closed } = it.preview;
+      for (let i = 0; i + 1 < starts.length; i++) {
+        const a = starts[i]!;
+        const b = starts[i + 1]!;
+        if (b - a < 2) continue;
+        ctx.beginPath();
+        for (let k = a; k < b; k++) {
+          const [sx, sy] = toScreen(coords[2 * k]!, coords[2 * k + 1]!, w, h);
+          if (k === a) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        }
+        if (closed[i]) ctx.closePath();
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+    drawRulers(ctx, w, h);
+  }
+
+  function niceStep(pxPerMm: number): number {
+    const target = 80 / pxPerMm; // mm per ~80 px
+    const pow = Math.pow(10, Math.floor(Math.log10(target)));
+    for (const m of [1, 2, 5, 10]) if (m * pow >= target) return m * pow;
+    return 10 * pow;
+  }
+
+  function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    const step = niceStep(ppm);
+    const [x0, y1] = toMm(0, 0, w, h);
+    const [x1, y0] = toMm(w, h, w, h);
+    ctx.strokeStyle = "rgba(128,128,128,0.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = Math.floor(x0 / step) * step; x <= x1; x += step) {
+      const [sx] = toScreen(x, 0, w, h);
+      ctx.moveTo(sx, 0);
+      ctx.lineTo(sx, h);
+    }
+    for (let y = Math.floor(y0 / step) * step; y <= y1; y += step) {
+      const [, sy] = toScreen(0, y, w, h);
+      ctx.moveTo(0, sy);
+      ctx.lineTo(w, sy);
+    }
+    ctx.stroke();
+    // Origin axes.
+    ctx.strokeStyle = "rgba(128,128,128,0.5)";
+    ctx.beginPath();
+    const [ox, oy] = toScreen(0, 0, w, h);
+    ctx.moveTo(ox, 0);
+    ctx.lineTo(ox, h);
+    ctx.moveTo(0, oy);
+    ctx.lineTo(w, oy);
+    ctx.stroke();
+  }
+
+  function drawRulers(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    const step = niceStep(ppm);
+    const [x0, y1] = toMm(0, 0, w, h);
+    const [x1, y0] = toMm(w, h, w, h);
+    ctx.fillStyle = "rgba(128,128,128,0.9)";
+    ctx.font = "10px ui-monospace, monospace";
+    const digits = Math.max(0, -Math.floor(Math.log10(step)));
+    for (let x = Math.floor(x0 / step) * step; x <= x1; x += step) {
+      const [sx] = toScreen(x, 0, w, h);
+      ctx.fillText(x.toFixed(digits), sx + 2, h - 4);
+    }
+    for (let y = Math.floor(y0 / step) * step; y <= y1; y += step) {
+      const [, sy] = toScreen(0, y, w, h);
+      ctx.fillText(y.toFixed(digits), 2, sy - 2);
+    }
+  }
+
+  // Interaction: wheel zoom at the cursor, drag to pan, double-click to fit.
+  let dragging: { x: number; y: number; cx: number; cy: number } | null = null;
+
+  function onWheel(e: WheelEvent) {
+    e.preventDefault();
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const [mx, my] = toMm(e.offsetX, e.offsetY, w, h);
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    ppm = Math.min(Math.max(ppm * factor, 0.01), 1e5);
+    const [nx, ny] = toMm(e.offsetX, e.offsetY, w, h);
+    cx += mx - nx;
+    cy += my - ny;
+    draw();
+  }
+
+  function onPointerDown(e: PointerEvent) {
+    dragging = { x: e.clientX, y: e.clientY, cx, cy };
+    canvas.setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    cursorMm = toMm(e.offsetX, e.offsetY, w, h);
+    if (dragging) {
+      cx = dragging.cx - (e.clientX - dragging.x) / ppm;
+      cy = dragging.cy + (e.clientY - dragging.y) / ppm;
+      draw();
+    }
+  }
+
+  function onPointerUp(e: PointerEvent) {
+    dragging = null;
+    canvas.releasePointerCapture(e.pointerId);
+  }
+
+  $effect(() => {
+    // Re-fetch when geometry or visibility changes.
+    void store.previewRevision;
+    void store.showSources;
+    void store.showLayers;
+    void store.showJumps;
+    void store.hiddenSourceLayers;
+    void store.hiddenLayers;
+    void store.hiddenPasses;
+    void store.sources.length;
+    void refetch();
+  });
+
+  $effect(() => {
+    void store.selection;
+    draw();
+  });
+
+  $effect(() => {
+    const ro = new ResizeObserver(() => draw());
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  });
+</script>
+
+<div class="preview">
+  <canvas
+    bind:this={canvas}
+    onwheel={onWheel}
+    onpointerdown={onPointerDown}
+    onpointermove={onPointerMove}
+    onpointerup={onPointerUp}
+    ondblclick={fit}
+  ></canvas>
+  <div class="hud">
+    <button onclick={fit} title="Fit (double-click)">fit</button>
+    <label><input type="checkbox" bind:checked={store.showSources} /> sources</label>
+    <label><input type="checkbox" bind:checked={store.showLayers} /> regions</label>
+    <label><input type="checkbox" bind:checked={store.showJumps} /> jumps (preview only)</label>
+    <span class="coords">
+      {#if cursorMm}{cursorMm[0].toFixed(3)}, {cursorMm[1].toFixed(3)} mm{/if}
+      · {ppm.toFixed(1)} px/mm
+      {#if store.evaluating}· evaluating…{/if}
+    </span>
+  </div>
+</div>
+
+<style>
+  .preview {
+    position: relative;
+    height: 100%;
+    min-height: 240px;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: grab;
+    background: color-mix(in srgb, Canvas 97%, CanvasText 3%);
+  }
+  .hud {
+    position: absolute;
+    top: 0.4rem;
+    left: 0.4rem;
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    font-size: 12px;
+    background: color-mix(in srgb, Canvas 80%, transparent);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+  }
+  .coords {
+    font-family: ui-monospace, monospace;
+    opacity: 0.8;
+  }
+</style>

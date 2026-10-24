@@ -12,3 +12,24 @@ body {
 #app {
   height: 100%;
 }
+
+.panel {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.panel h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 0.4rem;
+  opacity: 0.8;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+button {
+  font: inherit;
+  font-size: 12px;
+}

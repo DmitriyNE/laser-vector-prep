@@ -1,4 +1,4 @@
-import type { Payload, Request, Response, ResultOf } from "./protocol.js";
+import { transferables, type Payload, type Request, type Response, type ResultOf } from "./protocol.js";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -38,9 +38,8 @@ export class GeometryWorker {
 
   call<P extends Payload>(payload: P): Promise<ResultOf<P["kind"]>> {
     const id = this.#nextId++;
-    const req: Request = { ...payload, id };
-    // Large input buffers are transferred, not copied.
-    const transfer = "points" in req ? [req.points.buffer] : [];
+    const req = { ...payload, id } as Request;
+    const transfer = transferables(payload);
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
       this.#worker.postMessage(req, { transfer });

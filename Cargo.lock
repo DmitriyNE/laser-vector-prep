@@ -364,6 +364,8 @@ version = "0.1.0"
 dependencies = [
  "lvp-core",
  "rayon",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-rayon",
 ]

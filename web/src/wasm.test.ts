@@ -1,45 +1,72 @@
 /// <reference types="node" />
 import { readFile } from "node:fs/promises";
-import { describe, expect, it, beforeAll } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import type { EvaluationSummary, Profile, SourceSummary } from "./core/types.js";
 
 type Wasm = typeof import("./wasm/lvp_wasm.js");
-let { bbox_of, core_version, flatten_arc } = {} as Wasm;
+let wasm: Wasm;
 
 // Requires `just wasm` to have generated src/wasm (the justfile `test` recipe does this).
 beforeAll(async () => {
   // The rayon pool helper registers a message listener on `self` at import time; Node has
   // no `self`, so give it an inert event target. The pool itself is never started here.
   (globalThis as { self?: EventTarget }).self ??= new EventTarget();
-  const wasm: Wasm = await import("./wasm/lvp_wasm.js");
-  ({ bbox_of, core_version, flatten_arc } = wasm);
+  wasm = await import("./wasm/lvp_wasm.js");
   const bytes = await readFile(new URL("./wasm/lvp_wasm_bg.wasm", import.meta.url));
   await wasm.default({ module_or_path: bytes });
 });
 
-describe("lvp-wasm", () => {
-  it("reports the core version", () => {
-    expect(core_version()).toMatch(/^\d+\.\d+\.\d+/);
+const fixture = () => readFile(new URL("../../fixtures/dxf/board-islands.dxf", import.meta.url));
+
+describe("lvp-wasm project API", () => {
+  it("reports the core version and ships presets", () => {
+    expect(wasm.core_version()).toMatch(/^\d+\.\d+\.\d+/);
+    const presets = JSON.parse(wasm.builtin_presets_json()) as Profile[];
+    expect(presets.length).toBeGreaterThan(0);
+    expect(presets[0]!.schemaVersion).toBe(1);
+    expect(presets[0]!.workingLayers[0]!.passes[0]!.pattern.kind).toBe("contourFill");
   });
 
-  it("flattens a quarter arc with exact endpoints", () => {
-    const pts = flatten_arc(0, 0, 10, 0, Math.PI / 2, 0.01);
-    expect(pts).toBeInstanceOf(Float64Array);
-    expect(pts.length % 2).toBe(0);
-    expect(pts.length).toBeGreaterThanOrEqual(4);
-    expect(pts[0]).toBeCloseTo(10, 9);
-    expect(pts[1]).toBeCloseTo(0, 9);
-    expect(pts[pts.length - 2]).toBeCloseTo(0, 9);
-    expect(pts[pts.length - 1]).toBeCloseTo(10, 9);
+  it("imports the board fixture, evaluates and exports a PDF", async () => {
+    const summary = JSON.parse(wasm.add_dxf("board-islands.dxf", new Uint8Array(await fixture()))) as SourceSummary;
+    expect(summary.units).toBe("Millimetre");
+    expect(summary.layers.map((l) => l.name)).toContain("TOP_LAYER");
+
+    // Coarser pitch keeps the test quick.
+    const profile = JSON.parse(wasm.profile_json()) as Profile;
+    const pattern = profile.workingLayers[0]!.passes[0]!.pattern;
+    if (pattern.kind === "contourFill") pattern.pitchMm = 0.2;
+    wasm.set_profile_json(JSON.stringify(profile));
+
+    const ev = JSON.parse(wasm.evaluate()) as EvaluationSummary;
+    expect(ev.hasErrors).toBe(false);
+    expect(ev.bindings.every((b) => b.status === "matched")).toBe(true);
+    expect(ev.layers[0]!.outers).toBe(10);
+    expect(ev.passes.length).toBe(2);
+
+    const pass = ev.passes[0]!;
+    const preview = wasm.preview_pass(pass.id, 0.01)!;
+    expect(preview.starts.length).toBe(pass.paths + 1);
+    expect(preview.coords.length).toBe(preview.starts[pass.paths]! * 2);
+    expect(preview.closed.length).toBe(pass.paths);
+    preview.free();
+    const jumps = wasm.preview_jumps(pass.id)!;
+    expect(jumps.closed.length).toBe(pass.paths - 1);
+    jumps.free();
+
+    const pdf = wasm.export_pdf();
+    expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe("%PDF-1.4");
+    const files = wasm.export_pdf_per_group();
+    expect(files.map((f) => f.name)).toEqual(["Copper", "Outline"]);
+    files.forEach((f) => f.free());
   });
 
-  it("surfaces core errors as JS exceptions", () => {
-    expect(() => flatten_arc(0, 0, -1, 0, 1, 0.01)).toThrow(/radius/);
-  });
-
-  // Inputs stay below the parallel threshold: rayon's pool needs browser Workers, not Node.
-  it("computes bounding boxes and rejects odd buffers", () => {
-    expect(bbox_of(new Float64Array([1, 2, -3, 4, 5, -6]))).toEqual(new Float64Array([-3, -6, 5, 4]));
-    expect(bbox_of(new Float64Array([]))).toBeUndefined();
-    expect(() => bbox_of(new Float64Array([1]))).toThrow(/even/);
+  it("rejects bad input as exceptions and keeps state", () => {
+    expect(() => wasm.add_dxf("x.dxf", new Uint8Array([1, 2, 3]))).toThrow();
+    const before = wasm.profile_json();
+    expect(() => wasm.set_profile_json('{"schemaVersion": 99}')).toThrow(/newer/);
+    expect(wasm.profile_json()).toBe(before);
+    expect(wasm.remove_source(0)).toBeUndefined();
+    expect(JSON.parse(wasm.sources_json())).toEqual([]);
   });
 });
