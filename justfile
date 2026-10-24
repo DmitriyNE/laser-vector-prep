@@ -25,6 +25,11 @@ test: wasm
     cargo test --workspace
     cd web && npm run typecheck && npm run test
 
+# Browser end-to-end tests of the production bundle (needs `just build` first and a local
+# Chrome; Playwright drives the installed browser, nothing is downloaded).
+e2e:
+    cd web && npx playwright test
+
 # Fixture-based regression tests (slow / need fixtures/); these are `#[ignore]`d in `just test`.
 regression:
     cargo test --workspace -- --ignored

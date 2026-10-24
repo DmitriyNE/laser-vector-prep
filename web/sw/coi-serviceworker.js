@@ -3,7 +3,9 @@
  *
  *  Modified for Laser Vector Prep: the worker half also precaches the static bundle so the
  *  app keeps working offline after the first load. The build injects the precache list and
- *  cache name (see web/vite.config.ts). The page half is unchanged. */
+ *  cache name (see web/vite.config.ts). Because precaching delays activation, the page half
+ *  reloads only once the registration is ready (active) and at most once per session,
+ *  instead of on `updatefound`. */
 let coepCredentialless = false;
 if (typeof window === 'undefined') {
     const CACHE_NAME = "__CACHE_NAME__";
@@ -133,20 +135,30 @@ if (typeof window === 'undefined') {
 
         // In some environments (e.g. Chrome incognito mode) this won't be available
         if (n.serviceWorker) {
+            const RELOADED_KEY = "coi-reloaded";
+            let alreadyReloaded = false;
+            try {
+                alreadyReloaded = window.sessionStorage.getItem(RELOADED_KEY) === "1";
+            } catch (e) {
+                // sessionStorage can be unavailable; then we simply allow one reload.
+            }
             n.serviceWorker.register(window.document.currentScript.src).then(
-                (registration) => {
+                async (registration) => {
                     !coi.quiet && console.log("COOP/COEP Service Worker registered", registration.scope);
-
-                    registration.addEventListener("updatefound", () => {
-                        !coi.quiet && console.log("Reloading page to make use of updated COOP/COEP Service Worker.");
-                        coi.doReload();
-                    });
-
-                    // If the registration is active, but it's not controlling the page
-                    if (registration.active && !n.serviceWorker.controller) {
-                        !coi.quiet && console.log("Reloading page to make use of COOP/COEP Service Worker.");
-                        coi.doReload();
+                    // Wait for an *active* worker (install may precache for a while), then reload
+                    // once so the navigation is served with the isolation headers.
+                    await n.serviceWorker.ready;
+                    if (alreadyReloaded) {
+                        !coi.quiet && console.log("COOP/COEP Service Worker active, but the page is still not isolated after a reload; giving up.");
+                        return;
                     }
+                    try {
+                        window.sessionStorage.setItem(RELOADED_KEY, "1");
+                    } catch (e) {
+                        // see above
+                    }
+                    !coi.quiet && console.log("Reloading page to make use of COOP/COEP Service Worker.");
+                    coi.doReload();
                 },
                 (err) => {
                     !coi.quiet && console.error("COOP/COEP Service Worker failed to register:", err);
