@@ -5,14 +5,12 @@ milestones into `log.md`.
 
 ## Open questions for the project owner
 
-- [ ] Fixtures: `display-pogo-board.DXF`, legacy PDFs/scripts, sample profile JSON are
-      referenced by the spec but not in the repo. Where do they come from?
-- [ ] UI framework: Svelte, Preact or stay vanilla? (D4)
-- [ ] License for the repository.
-- [ ] Do we want wasm threads (shared memory, needs nightly `build-std`) or is
-      message-passing between plain workers enough? Affects D1/D5.
+- none right now
 
 ## Staging (done 2026-10-24, see log)
+
+Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm with rayon
+(D8), Apache-2.0 (D11).
 
 ## M1 — vertical slice
 
@@ -26,13 +24,18 @@ milestones into `log.md`.
 - [ ] PDF export: 1:1, mm→pt, nonzero RGB strokes, path-stream order, per-group option
 - [ ] Profile v1 schema (JSON Schema), save/load in IndexedDB, import/export JSON
 - [ ] Layer panel + properties panel (after framework decision)
+- [ ] DXF reader; its tests consume `fixtures/manifest.json` expectations
+- [ ] Replace the `App.svelte` smoke test (arc + parallel bbox) with the real panels
 - [ ] Offline after load: our own caching service worker must *also* inject COOP/COEP,
       because only one service worker can control the scope (coi-serviceworker alone
       does not cache)
 - [ ] Worker: cooperative cancellation / progress for long computations (today:
-      terminate-and-respawn only)
-- [ ] Browser e2e test (Playwright) for the import→export loop; verify
-      `crossOriginIsolated === true` on the built bundle
+      terminate-and-respawn only; with a shared-memory pool, cancellation must also
+      stop rayon work, e.g. via an atomic flag checked between chunks)
+- [ ] Browser e2e test (Playwright) for the import→export loop, thread pool start and
+      `crossOriginIsolated === true`; today this is a manual DevTools-protocol check
+- [ ] Check Firefox: module workers + SharedArrayBuffer + the coi-serviceworker reload
+- [ ] Decide `--max-memory` (1 GiB today) once real fine-pitch workloads exist
 
 ## M2 — geometry and layers
 

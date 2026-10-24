@@ -3,13 +3,11 @@
 Short records of choices that are not obvious from the code. Add a new numbered entry
 rather than rewriting an old one; mark superseded entries as such.
 
-## D1 — Toolchain from nixpkgs only, no Rust overlay (2026-10-24)
+## D1 — Toolchain from nixpkgs only, no Rust overlay (2026-10-24) — superseded by D8
 
-nixpkgs' `rustc` bundles the `wasm32-unknown-unknown` std, so `rustc`, `cargo`,
-`clippy`, `rustfmt`, `rust-analyzer`, `wasm-bindgen-cli`, `binaryen`, `nodejs_24` and
-`just` all come from a single `nixpkgs-unstable` input. One flake input, one lockfile.
-nixpkgs' rustc does not ship `rust-lld`, so `lld` is in the shell for the wasm32 link.
-Revisit only if we need a nightly feature (e.g. wasm threads via `-Z build-std`).
+nixpkgs' `rustc` bundles the `wasm32-unknown-unknown` std, so a single `nixpkgs-unstable`
+input was enough for a single-threaded wasm build. Superseded the same day when the owner
+asked for shared-memory wasm, which needs `-Z build-std` and therefore nightly (D8).
 
 ## D2 — `wasm-bindgen` crate pinned exactly to the nixpkgs CLI (2026-10-24)
 
@@ -23,19 +21,17 @@ build on drift. `wasm-pack` was rejected because it downloads a CLI binary at bu
 would add `npmDepsHash`/cargo-vendoring maintenance for little gain at this stage.
 Can be added later without changing the layout.
 
-## D4 — Vanilla TypeScript for the staging shell; UI framework undecided (2026-10-24)
+## D4 — Vanilla TypeScript for the staging shell; UI framework undecided (2026-10-24) — superseded by D9
 
-The staging slice (status header + canvas smoke test) does not need a framework. The
-choice between Svelte, Preact and vanilla is deferred to the user before the layer /
-properties panels are built (M1). Nothing in `web/src/worker` depends on this choice.
+Deferred the framework choice to the owner; answered the same day: Svelte (D9).
 
 ## D5 — Cross-origin isolation: headers in dev, coi-serviceworker in production (2026-10-24)
 
 Vite dev/preview servers send COOP/COEP headers directly. The static bundle uses
 `coi-serviceworker.js` (npm package, copied to `web/public/` by `just coi`, never
-bundled). Plain Web Workers do not need isolation; it is set up now so that
-`SharedArrayBuffer` / shared wasm memory is available when the geometry pipeline
-needs it.
+bundled). Isolation is required, not optional: the wasm module uses shared memory (D8),
+so the app does not even spawn the geometry worker until `crossOriginIsolated` is true
+(the service worker reloads the page once on first visit to get there).
 
 ## D6 — Numerical policy: explicit tolerances, 1 pm noise floor (2026-10-24)
 
@@ -50,6 +46,49 @@ snapped, not diagnosed (found by proptest: shrinking a degenerate box by exactly
 expansion margin inverts it by one ulp). Anything above it is a real geometric event
 and is reported to the caller. The integer scaling for the boolean kernel (D7) must be
 chosen so its resolution is well above this floor.
+
+## D8 — Date-pinned nightly via rust-overlay; shared-memory wasm with rayon (2026-10-24)
+
+The owner wants shared memory and threads from the start. That needs the wasm32 std
+rebuilt with atomics (`-Z build-std=std,panic_abort`), hence nightly. `rust-toolchain.toml`
+pins `nightly-2026-10-24` and is read by both rustup and the flake
+(`rust-bin.fromRustupToolchainFile`), so there is one source of truth for the toolchain.
+The nightly bundles `rust-lld`; no separate `lld`.
+
+Linker flags live in `.cargo/config.toml` under `[target.wasm32-unknown-unknown]` only, so
+host builds and tests stay ordinary. Current nightlies no longer add the shared-memory
+linker flags when `atomics` is enabled, so we pass them ourselves: `--shared-memory`,
+`--import-memory`, `--max-memory=1 GiB`, and `--export=` for `__wasm_init_tls`,
+`__tls_size`, `__tls_align`, `__tls_base`, which wasm-bindgen's threading transform
+requires. Threads come from `wasm-bindgen-rayon` with its default (bundler) helper:
+Vite emits the self-spawning pool worker as its own chunk and resolves the glue through a
+`package.json` that `just wasm` writes into the generated directory. The `no-bundler`
+feature does not work under Vite: its blob self-fetch re-executes whichever chunk the
+helper was inlined into.
+
+The pool is created inside the geometry worker (`initThreadPool(hardwareConcurrency)`),
+never on the main thread. Node-side tests load the wasm but cannot start the pool, so
+anything that fans out to rayon keeps a sequential path below a size threshold.
+
+## D9 — Svelte 5 for the UI (2026-10-24)
+
+Owner's choice. Runes-mode components, `svelte-check` as the type checker (it covers
+`.ts` too, so `tsc` is not run separately). svelte-check 4 requires TypeScript ≤ 6, which
+pins `typescript` to `^6` for now. The worker protocol and client stay framework-free.
+
+## D10 — Regression fixtures are synthetic and generated (2026-10-24)
+
+The historical pogo-board files are not used (owner decision). Fixtures are produced by
+`crates/lvp-fixtures` from the core's own DXF writer, deterministically, with a
+`manifest.json` stating what a correct pipeline must observe (bounds in mm, entity counts,
+island/hole counts, unit conversions, block transforms). A test fails when the committed
+files differ from the generator's output, so fixtures are never hand-edited. The writer
+targets DXF R2000 with handles and a full table skeleton; ezdxf audits the output clean and
+agrees with the manifest's counts and bounds.
+
+## D11 — License: Apache-2.0 (2026-10-24)
+
+Owner's choice; `LICENSE` at the root, `license` fields in Cargo and npm manifests.
 
 ## D7 — Geometry kernel: to be chosen in M1 (open)
 
