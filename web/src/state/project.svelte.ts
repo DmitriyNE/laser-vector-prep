@@ -417,7 +417,98 @@ export class ProjectStore {
     else next.add(key);
     return next;
   }
+
+  // ---- preview visibility (UI state only, never part of the profile) -------------------
+
+  /** Keys of every source layer with content, as the hidden set stores them. */
+  #sourceLayerKeys(): string[] {
+    return this.sources.flatMap((s) =>
+      s.layers.filter((l) => l.closedPaths + l.openPaths + l.hatches > 0).map((l) => `${s.index}:${l.name}`),
+    );
+  }
+
+  #passIds(): string[] {
+    return this.profile.workingLayers.flatMap((l) => l.passes.map((p) => p.id));
+  }
+
+  get hiddenCount(): number {
+    return this.hiddenSourceLayers.size + this.hiddenLayers.size + this.hiddenPasses.size;
+  }
+
+  showAll() {
+    this.hiddenSourceLayers = new Set();
+    this.hiddenLayers = new Set();
+    this.hiddenPasses = new Set();
+  }
+
+  toggleSourceLayer(key: string) {
+    this.hiddenSourceLayers = this.toggle(this.hiddenSourceLayers, key);
+  }
+
+  /** True when every layer of the file is hidden (or the file has no content). */
+  sourceFileHidden(index: number): boolean {
+    const keys = this.#sourceLayerKeys().filter((k) => k.startsWith(`${index}:`));
+    return keys.every((k) => this.hiddenSourceLayers.has(k));
+  }
+
+  /** Hide every layer of one file, or show them all if all were hidden. */
+  toggleSourceFile(index: number) {
+    const keys = this.#sourceLayerKeys().filter((k) => k.startsWith(`${index}:`));
+    const show = this.sourceFileHidden(index);
+    const next = new Set(this.hiddenSourceLayers);
+    for (const k of keys) if (show) next.delete(k);
+    else next.add(k);
+    this.hiddenSourceLayers = next;
+  }
+
+  /** A layer's eye acts on the layer's region and all of its passes together. */
+  toggleLayer(id: string) {
+    const hide = !this.hiddenLayers.has(id);
+    const passes = this.profile.workingLayers.find((l) => l.id === id)?.passes.map((p) => p.id) ?? [];
+    const layers = new Set(this.hiddenLayers);
+    const ps = new Set(this.hiddenPasses);
+    if (hide) {
+      layers.add(id);
+      for (const p of passes) ps.add(p);
+    } else {
+      layers.delete(id);
+      for (const p of passes) ps.delete(p);
+    }
+    this.hiddenLayers = layers;
+    this.hiddenPasses = ps;
+  }
+
+  togglePass(id: string) {
+    this.hiddenPasses = this.toggle(this.hiddenPasses, id);
+  }
+
+  /**
+   * Show only this item: every other source layer, region and pass is hidden. A layer keeps
+   * its own passes, a file keeps all its layers. Soloing the item that is already the only
+   * visible one shows everything again.
+   */
+  solo(target: VisTarget) {
+    const ownPasses = new Set(
+      target.kind === "layer" ? (this.profile.workingLayers.find((l) => l.id === target.key)?.passes.map((p) => p.id) ?? []) : [],
+    );
+    const keep = (kind: VisTarget["kind"], key: string) =>
+      target.kind === kind ? target.key === key : target.kind === "file" && kind === "source" && key.startsWith(`${target.key}:`);
+    const src = new Set(this.#sourceLayerKeys().filter((k) => !keep("source", k)));
+    const lay = new Set(this.profile.workingLayers.map((l) => l.id).filter((k) => !keep("layer", k)));
+    const pas = new Set(this.#passIds().filter((k) => !keep("pass", k) && !ownPasses.has(k)));
+    const same = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((k) => b.has(k));
+    if (same(src, this.hiddenSourceLayers) && same(lay, this.hiddenLayers) && same(pas, this.hiddenPasses)) {
+      this.showAll();
+      return;
+    }
+    this.hiddenSourceLayers = src;
+    this.hiddenLayers = lay;
+    this.hiddenPasses = pas;
+  }
 }
+
+/** Something the preview can show or hide. `file` keys are the source index as a string. */
+export type VisTarget = { kind: "source" | "file" | "layer" | "pass"; key: string };
 
 export function rgbCss(c: [number, number, number]): string {
   return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;

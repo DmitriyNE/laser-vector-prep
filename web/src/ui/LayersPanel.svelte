@@ -2,6 +2,7 @@
   import type { Pass, WorkingLayer } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
   import { shortId } from "../util/download.js";
+  import Eye from "./Eye.svelte";
 
   let { store }: { store: ProjectStore } = $props();
 
@@ -147,18 +148,12 @@
   }
 </script>
 
-{#snippet eye(hidden: boolean, toggle: () => void, what: string)}
-  <button class="eye" class:off={hidden} aria-pressed={!hidden} title={hidden ? `show ${what} in preview` : `hide ${what} in preview`} onclick={toggle}>
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" fill="none" stroke="currentColor" stroke-width="1.3" />
-      <circle cx="8" cy="8" r="2.2" fill="currentColor" />
-      {#if hidden}<path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.3" />{/if}
-    </svg>
-  </button>
-{/snippet}
-
 <section class="panel">
-  <h2>Layers <button class="add" onclick={() => addLayer("region")}>+ layer</button> <button class="add" onclick={() => addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button></h2>
+  <h2>
+    Layers <button class="add" onclick={() => addLayer("region")}>+ layer</button>
+    <button class="add" onclick={() => addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button>
+    {#if store.hiddenCount}<button class="add quiet" onclick={() => store.showAll()} title="show everything in the preview again">show all</button>{/if}
+  </h2>
   {#if store.profile.workingLayers.length === 0}
     <p class="hint">No working layers. Add one and pick its sources.</p>
   {/if}
@@ -167,7 +162,7 @@
     {@const hidden = store.hiddenLayers.has(layer.id)}
     <div class="layer" class:selected={store.selection.kind === "layer" && store.selection.id === layer.id} class:disabled={!layer.enabled}>
       <div class="row">
-        {@render eye(hidden, () => (store.hiddenLayers = store.toggle(store.hiddenLayers, layer.id)), "region")}
+        <Eye {hidden} what="layer and its passes" onToggle={() => store.toggleLayer(layer.id)} onSolo={() => store.solo({ kind: "layer", key: layer.id })} />
         <button class="name" title={layer.name} onclick={() => (store.selection = { kind: "layer", id: layer.id })}>
           <span class="title">{layer.name}</span>
           <span class="sub" title={layerDetail(layer)}>{layerDetail(layer)}</span>
@@ -177,6 +172,7 @@
           {layerStats(layer)}
         </span>
         <span class="tools">
+          <button class="only" onclick={() => store.solo({ kind: "layer", key: layer.id })} title="show only this in preview">only</button>
           <button onclick={() => move(i, -1)} title="move up">↑</button>
           <button onclick={() => move(i, 1)} title="move down">↓</button>
           <button onclick={() => duplicateLayer(i)} title="duplicate">⧉</button>
@@ -189,7 +185,7 @@
           {@const g = store.group(pass.group)}
           {@const passHidden = store.hiddenPasses.has(pass.id)}
           <li class="row pass" class:selected={store.selection.kind === "pass" && store.selection.id === pass.id} class:disabled={!pass.enabled}>
-            {@render eye(passHidden, () => (store.hiddenPasses = store.toggle(store.hiddenPasses, pass.id)), "paths")}
+            <Eye hidden={passHidden} what="paths" onToggle={() => store.togglePass(pass.id)} onSolo={() => store.solo({ kind: "pass", key: pass.id })} />
             <button class="name" title={pass.name} onclick={() => (store.selection = { kind: "pass", id: pass.id })}>
               <span class="title"><span class="swatch" style:background={g ? rgbCss(g.color) : "transparent"} title={g?.name ?? "no group"}></span>{pass.name}</span>
               <span class="sub">{patternLabel(pass)}{pass.enabled ? "" : " · disabled"}</span>
@@ -199,6 +195,7 @@
               {#if ps}<span>{plural(ps.paths, "path")}</span><span>{ps.lengthMm.toFixed(ps.lengthMm >= 100 ? 0 : 1)} mm</span>{/if}
             </span>
             <span class="tools">
+              <button class="only" onclick={() => store.solo({ kind: "pass", key: pass.id })} title="show only this in preview">only</button>
               <button onclick={() => deletePass(layer, pass)} title="delete pass">×</button>
             </span>
           </li>
@@ -230,19 +227,9 @@
     align-items: start;
     padding: 0.1rem 0.15rem;
   }
-  .eye {
+  .row > :global(.eye) {
     grid-row: 1 / 3;
     align-self: center;
-    background: none;
-    border: none;
-    padding: 2px;
-    color: inherit;
-    cursor: pointer;
-    display: inline-flex;
-    opacity: 0.8;
-  }
-  .eye.off {
-    opacity: 0.35;
   }
   .name {
     grid-column: 2;
@@ -318,6 +305,14 @@
   }
   .tools button:hover {
     opacity: 1;
+  }
+  .tools .only {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .quiet {
+    opacity: 0.6;
   }
   .disabled > .row > .name,
   li.disabled > .name,

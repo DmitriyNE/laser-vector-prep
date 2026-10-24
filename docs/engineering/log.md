@@ -13,6 +13,14 @@ to the Properties panel; disabled rows are dimmed and say so. Same shape for pas
 paths over length and the delete tool in its own column. Height for the negative preset
 went from about 700 px to about 400 px.
 
+Second round, same day: source layers and files got the same eye (a shared `Eye.svelte`);
+toggling a layer's eye takes its passes along; a file's eye takes all its layers. "Show
+only this" via alt-click on any eye or a hover "only" button hides everything else in the
+preview (a layer keeps its passes, a file its layers); alt-clicking the only visible item
+restores everything, as does "show all" in the preview toolbar and panel headers. Preview
+visibility stays UI state and is never written to the profile. Covered by
+`e2e/visibility.spec.ts`.
+
 ## 2026-10-24 — M2: geometry and layers
 
 Commit per sub-step:

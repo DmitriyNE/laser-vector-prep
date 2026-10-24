@@ -256,6 +256,7 @@
     <label><input type="checkbox" bind:checked={store.showSources} /> sources</label>
     <label><input type="checkbox" bind:checked={store.showLayers} /> regions</label>
     <label><input type="checkbox" bind:checked={store.showJumps} /> jumps (preview only)</label>
+    {#if store.hiddenCount}<button onclick={() => store.showAll()} title="show every hidden source layer, region and pass">show all ({store.hiddenCount} hidden)</button>{/if}
     <span class="coords">
       {#if cursorMm}{cursorMm[0].toFixed(3)}, {cursorMm[1].toFixed(3)} mm{/if}
       · {ppm.toFixed(1)} px/mm

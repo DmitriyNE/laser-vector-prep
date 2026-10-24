@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ProjectStore } from "../state/project.svelte.js";
+  import Eye from "./Eye.svelte";
 
   let { store }: { store: ProjectStore } = $props();
   let dragOver = $state(false);
@@ -28,7 +29,10 @@
 </script>
 
 <section class="panel">
-  <h2>Sources</h2>
+  <h2>
+    Sources
+    {#if store.hiddenCount}<button class="quiet" onclick={() => store.showAll()} title="show everything in the preview again">show all</button>{/if}
+  </h2>
   <div
     class="drop"
     class:over={dragOver}
@@ -47,6 +51,7 @@
   {#each store.sources as s (s.index)}
     <div class="source">
       <div class="head">
+        <Eye hidden={store.sourceFileHidden(s.index)} what="all layers of this file" onToggle={() => store.toggleSourceFile(s.index)} onSolo={() => store.solo({ kind: "file", key: String(s.index) })} />
         <strong title={s.name}>{s.name}</strong>
         <span class="units" class:assumed={!s.units} title={s.units ? "declared units" : "no units in file; assumed"}>
           {s.units ?? `${s.assumedUnits}?`}
@@ -61,15 +66,11 @@
           <li
             class:selected={store.selection.kind === "source" && store.selection.file === s.index && store.selection.layer === l.name}
           >
-            <input
-              type="checkbox"
-              checked={!store.hiddenSourceLayers.has(key)}
-              onchange={() => (store.hiddenSourceLayers = store.toggle(store.hiddenSourceLayers, key))}
-              title="show in preview"
-            />
-            <button class="name" onclick={() => (store.selection = { kind: "source", file: s.index, layer: l.name })}>
+            <Eye hidden={store.hiddenSourceLayers.has(key)} what="layer" onToggle={() => store.toggleSourceLayer(key)} onSolo={() => store.solo({ kind: "source", key })} />
+            <button class="name" title={l.name} onclick={() => (store.selection = { kind: "source", file: s.index, layer: l.name })}>
               {l.name}
             </button>
+            <button class="only" onclick={() => store.solo({ kind: "source", key })} title="show only this in preview">only</button>
             <span class="counts">{l.closedPaths}c {l.openPaths}o{#if l.hatches} {l.hatches}h{/if}</span>
             <select class="map" class:unbound={!b} value={b?.id ?? ""} title="profile slot this layer is mapped to" onchange={(e) => onMap(e, s.name, l.name)}>
               <option value="">{b ? "" : "unmapped"}</option>
@@ -111,8 +112,8 @@
   }
   .head {
     display: flex;
-    gap: 0.5rem;
-    align-items: baseline;
+    gap: 0.4rem;
+    align-items: center;
   }
   .head strong {
     flex: 1;
@@ -122,6 +123,7 @@
   }
   .units {
     font-family: ui-monospace, monospace;
+    font-size: 11px;
   }
   .units.assumed {
     color: #c80;
@@ -129,6 +131,8 @@
   .size {
     opacity: 0.7;
     font-family: ui-monospace, monospace;
+    font-size: 11px;
+    white-space: nowrap;
   }
   ul {
     list-style: none;
@@ -146,6 +150,10 @@
   }
   .name {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: left;
     background: none;
     border: none;
@@ -153,6 +161,32 @@
     cursor: pointer;
     color: inherit;
     font: inherit;
+  }
+  .only {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    color: inherit;
+    cursor: pointer;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+    display: none;
+  }
+  li:hover .only {
+    display: inline;
+  }
+  .quiet {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.6;
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
   }
   .counts {
     font-family: ui-monospace, monospace;
