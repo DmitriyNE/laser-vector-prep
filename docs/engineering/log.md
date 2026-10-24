@@ -21,6 +21,9 @@ site in headless Chrome found DEF-3 (worker started before isolation); the offli
 test now fails on any console error. Rebuilding locally then exposed DEF-4: `just test`
 had left the debug wasm in place, and debug wasm traps inside `hypot` during bleed-aware
 planning because build-std applies our overflow checks to the standard library's libm.
+The next CI run failed on a vitest timeout: the board test now plans bleed-aware by
+default and took 5.4 s in single-threaded debug wasm on the runner (well under 5 s
+locally). The wasm suite's timeout is now 60 s; timings measured locally do not carry over.
 
 ## 2026-10-25 — Arcs end to end
 
