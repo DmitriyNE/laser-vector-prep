@@ -14,21 +14,27 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 
 ## M1 — vertical slice
 
-- [ ] Choose geometry kernel (D7) with a spike on the fixture
-- [ ] Canonical geometry model: polylines/arcs/regions with provenance, mm units
-- [ ] DXF reader: units, layers, LINE/ARC/CIRCLE/LWPOLYLINE(bulge, width)/POLYLINE,
-      ELLIPSE/SPLINE flattening, HATCH, INSERT; detect REGION/ACIS
-- [ ] Source → working layer → output group model with stable IDs
-- [ ] Inward contour fill (pitch, first offset, end spacing, gap-fill)
-- [ ] Linework passthrough
-- [ ] PDF export: 1:1, mm→pt, nonzero RGB strokes, path-stream order, per-group option
-- [ ] Profile v1 schema (JSON Schema), save/load in IndexedDB, import/export JSON
-- [ ] Layer panel + properties panel (after framework decision)
-- [ ] DXF reader; its tests consume `fixtures/manifest.json` expectations
-- [ ] Replace the `App.svelte` smoke test (arc + parallel bbox) with the real panels
-- [ ] Offline after load: our own caching service worker must *also* inject COOP/COEP,
-      because only one service worker can control the scope (coi-serviceworker alone
-      does not cache)
+- [x] Choose geometry kernel (D7): cavalier_contours
+- [x] Kernel wrapper over cavalier_contours (n-loop booleans, offsets, strokes)
+- [x] DXF reader for the spec subset with diagnostics; fixture-driven tests
+- [x] Source → working layer → output group model with stable IDs; profile schema v1,
+      migrations scaffold, validation, PCB preset
+- [x] Inward contour fill with medial-axis gap fill; linework passthrough
+- [x] PDF export: 1:1, strokes only, colour-separated and per-group
+- [x] Profiles in IndexedDB, import/export JSON with conflict handling
+- [x] Svelte panels: sources, layers, properties, groups, profiles bar, export, diagnostics
+- [x] Offline after load via the vendored coi-serviceworker with precache
+- [ ] JSON Schema document for the profile format (serde types are the source of truth
+      today; generate or hand-write `docs/profile-schema.json`)
+- [ ] Contour fill `end_spacing`; configurable join style once the kernel exposes it
+- [ ] Benchmark the pairwise-boolean kernel on flash-heavy inputs against the i_overlay
+      spike numbers (D7) and decide whether a spatial index for `resolve` is needed
+- [ ] Preview: `f32` coordinates relative to the document origin lose precision far from
+      it; offset by the bounds minimum if large drawings appear
+- [x] Worker crash recovery: a wasm trap replaces the worker and re-imports sources
+- [ ] Playwright (or the DevTools-protocol scripts under scratch) as a committed e2e test:
+      import → evaluate → export through the real worker protocol, plus the offline path
+- [ ] Release wasm is ~0.9 MB (0.36 MB gzip); try `wasm-opt -Oz` and feature trimming
 - [ ] Worker: cooperative cancellation / progress for long computations (today:
       terminate-and-respawn only; with a shared-memory pool, cancellation must also
       stop rayon work, e.g. via an atomic flag checked between chunks)

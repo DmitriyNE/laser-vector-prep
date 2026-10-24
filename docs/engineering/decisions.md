@@ -33,6 +33,11 @@ bundled). Isolation is required, not optional: the wasm module uses shared memor
 so the app does not even spawn the geometry worker until `crossOriginIsolated` is true
 (the service worker reloads the page once on first visit to get there).
 
+Amended for offline support (M1): only one service worker can control the scope, so the
+coi-serviceworker is vendored (`web/sw/coi-serviceworker.js`, MIT) and its worker half
+extended with a cache-first precache of the bundle; the Vite build injects the asset list.
+No workbox or PWA plugin.
+
 ## D6 — Numerical policy: explicit tolerances, 1 pm noise floor (2026-10-24)
 
 Arcs are flattened to polylines with vertices exactly on the curve, chordal deviation
@@ -90,9 +95,67 @@ agrees with the manifest's counts and bounds.
 
 Owner's choice; `LICENSE` at the root, `license` fields in Cargo and npm manifests.
 
-## D7 — Geometry kernel: to be chosen in M1 (open)
+## D7 — Geometry kernel: cavalier_contours (2026-10-24, owner decision)
 
-Spec prefers Clipper2 WASM. With a Rust core the candidates are: `i_overlay` (pure Rust
-booleans, integer-robust, includes offsetting), `cavalier_contours` (polyline offsetting
-with true arcs), or Clipper2 C++ via `cxx` (painful on wasm32-unknown-unknown). Decide
-with a small benchmark/robustness spike on the pogo-board fixture before M1 contour fill.
+Candidates were spiked against fixture-shaped inputs: `i_overlay` 9.1 (pure Rust, integer
+arithmetic internally, all booleans and fill rules, offsets with bevel/miter/round joins,
+stroke expansion, line clipping; contour-fill loop on the 20×20 mm hole fixture at 0.5 mm
+pitch in 1.6 ms, union of 5000 random rectangles in 90 ms), `cavalier_contours` 0.9
+(line+arc polylines with arcs preserved through offsets, pairwise closed-polyline
+union/intersection/difference, shape offsets with islands, segment intersection
+primitives), and Clipper2 via C++ (rejected: needs a C++ wasm toolchain incompatible with
+our `build-std` flow; the Rust `clipper2` crate wraps the C++ via `cc`).
+
+The owner chose `cavalier_contours` for arc fidelity: contour rings around round pads stay
+true arcs instead of flattened chords. Consequences we accept and own:
+
+- Multi-shape booleans (union of many primitives, XOR, clipping) are built from pairwise
+  `boolean()` calls driven by a spatial index; XOR = (A∪B) − (A∩B).
+- Hatch is our scanline intersection against line and arc segments (exact endpoints on
+  arcs), not a kernel clip.
+- Stroke expansion of linework is a union of per-segment capsules (arcs are native).
+- Gap fill uses a Voronoi medial axis (`boostvoronoi`) of segment-approximated slivers.
+- Each segment's |bulge| must be ≤ 1 (half circle); importers split larger arcs.
+
+`i_overlay` stays the documented fallback if pairwise booleans turn out too slow on
+flash-heavy inputs; the spike numbers above are the yardstick.
+
+## D12 — The Rust core owns the project model (2026-10-24)
+
+Parsed sources, the working-layer DAG with its evaluation cache, pattern passes, the
+route planner, exporters, and the versioned profile schema with migrations all live in
+`lvp-core`. The worker holds one `Project`; TypeScript keeps UI state plus a JSON mirror
+of the configuration, sends whole-config updates, and receives diagnostics and preview
+buffers tagged with a revision. The spec's acceptance tests become cargo tests.
+
+## D13 — Fill strategies are our own code on top of kernel primitives (2026-10-24)
+
+No library implements the spec's fill semantics (pitch, first offset, phase in document
+mm, edge coverage, hole handling). The kernel supplies offsets, booleans and intersection
+primitives; `lvp-core::patterns` implements inward contour fill, gap fill, passthrough,
+boundary trace, parallel/cross hatch and boundary+hatch, each proptested in mm.
+
+## D14 — DXF parsing: own parser (2026-10-24)
+
+Owner initially chose the `dxf` crate (0.6.2). Investigation: its entity set is generated
+from a spec in which HATCH is commented out, so hatches cannot be represented; it also
+pulls `image`, `chrono`, `encoding_rs` and `uuid` (needs the `js` feature) into the wasm.
+Re-asked with that fact; owner chose our own parser for the spec's subset, with explicit
+diagnostics for everything outside it and proptest round-trips against `dxf::write`.
+
+## D15 — Kernel inputs are sanitised at the boundary (2026-10-24)
+
+`cavalier_contours` asserts (debug) and misbehaves (release) on zero-length arc segments.
+Every polyline entering a boolean, offset or stroke passes `pline::sanitize` (coincident
+vertices within `REPEAT_EPS = 1e-6 mm` merged, closing duplicate removed), and arc
+capsules whose inner offset arc would collapse fall back to flattened line capsules.
+Found by the export pipeline test on the board fixture.
+
+## D16 — Gap fill: Voronoi input must be provably valid (2026-10-24)
+
+`boostvoronoi` requires segments that meet only at endpoints and panics (debug) or
+returns garbage (release) otherwise; on wasm a panic aborts the worker. Sliver boundaries
+are therefore snapped to the finest i32 grid (never a coarse one, which folded thin
+slivers onto themselves) and checked with exact integer orientation tests before the
+diagram is built; invalid slivers are skipped and reported (`pattern.gap_fill_skipped`).
+Curved Voronoi edges are chord-approximated, which is exact enough for sub-pitch slivers.
