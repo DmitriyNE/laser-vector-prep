@@ -203,6 +203,7 @@ pub fn read_any(name: &str, bytes: &[u8], opts: &ReadOptions) -> Result<SourceDo
         }),
         SourceFormat::Gerber => crate::gerber::read_bytes(name, bytes, opts),
         SourceFormat::Svg => crate::svg::read_bytes(name, bytes, opts),
+        SourceFormat::Pdf => crate::pdf::read_bytes(name, bytes, opts),
         other => Err(ReadError {
             format: Some(other),
             message: format!("{} reading is not implemented yet", format_name(other)),

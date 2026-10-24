@@ -3,6 +3,15 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — M3 step 4: vector PDF
+
+lopdf for the object model, our interpreter for the content stream (D22). Layers are
+optional-content group names or the paint colour as `#rrggbb`, so a PDF exported by this
+app comes back as one layer per output group; a round-trip test checks that on the board
+fixture (same path count, 0.0254 mm widths, 1:1 extents). A lopdf-built fixture covers
+forms, Béziers, even-odd, clipping, OCGs, text and images. `Unit::Point` was added so the
+UI does not show PDF units as assumed.
+
 ## 2026-10-24 — M3 step 3: SVG
 
 usvg (text feature off) resolves CSS, `use`, the viewBox and shapes; our `svg` module

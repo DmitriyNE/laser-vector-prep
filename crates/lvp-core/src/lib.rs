@@ -16,6 +16,7 @@ pub mod gerber;
 pub mod model;
 pub mod order;
 pub mod patterns;
+pub mod pdf;
 pub mod pline;
 pub mod profile;
 pub mod project;

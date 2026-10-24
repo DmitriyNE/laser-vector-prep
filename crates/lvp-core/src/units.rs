@@ -9,6 +9,8 @@ pub enum Unit {
     Inch,
     /// Thousandth of an inch.
     Mil,
+    /// PostScript/PDF point, 1/72 in.
+    Point,
 }
 
 impl Unit {
@@ -21,6 +23,7 @@ impl Unit {
             Unit::Metre => 1000.0,
             Unit::Inch => 25.4,
             Unit::Mil => 0.0254,
+            Unit::Point => 25.4 / 72.0,
         }
     }
 
@@ -41,6 +44,8 @@ impl Unit {
             Unit::Metre => 6,
             Unit::Mil => 9,
             Unit::Micrometre => 13,
+            // DXF has no point unit; callers convert to millimetres first.
+            Unit::Point => 0,
         }
     }
 

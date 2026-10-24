@@ -196,3 +196,74 @@ mod tests {
         }
     }
 }
+
+/// Flatten a cubic Bézier by adaptive subdivision until both control points lie within
+/// `tolerance` of the chord; emits every point after `p0`, ending exactly at `p3`.
+pub fn flatten_cubic(
+    p0: Point,
+    p1: Point,
+    p2: Point,
+    p3: Point,
+    tolerance: f64,
+    emit: &mut dyn FnMut(Point),
+) {
+    fn chord_dist(a: Point, b: Point, c: Point) -> f64 {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let l = dx.hypot(dy);
+        if l < 1e-12 {
+            return (c.x - a.x).hypot(c.y - a.y);
+        }
+        ((c.x - a.x) * dy - (c.y - a.y) * dx).abs() / l
+    }
+    fn rec(
+        p0: Point,
+        p1: Point,
+        p2: Point,
+        p3: Point,
+        tol: f64,
+        emit: &mut dyn FnMut(Point),
+        depth: u32,
+    ) {
+        if depth >= 16 || chord_dist(p0, p3, p1).max(chord_dist(p0, p3, p2)) <= tol {
+            emit(p3);
+            return;
+        }
+        let mid = |a: Point, b: Point| Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        let p01 = mid(p0, p1);
+        let p12 = mid(p1, p2);
+        let p23 = mid(p2, p3);
+        let p012 = mid(p01, p12);
+        let p123 = mid(p12, p23);
+        let m = mid(p012, p123);
+        rec(p0, p01, p012, m, tol, emit, depth + 1);
+        rec(m, p123, p23, p3, tol, emit, depth + 1);
+    }
+    rec(p0, p1, p2, p3, tolerance.max(1e-9), emit, 0);
+}
+
+#[cfg(test)]
+mod cubic_tests {
+    use super::*;
+
+    #[test]
+    fn cubic_flattening_respects_tolerance_and_endpoints() {
+        // Quarter circle of radius 10 as a Bézier (kappa 0.5523).
+        let k = 0.552_284_75 * 10.0;
+        let (p0, p1, p2, p3) = (
+            Point::new(10.0, 0.0),
+            Point::new(10.0, k),
+            Point::new(k, 10.0),
+            Point::new(0.0, 10.0),
+        );
+        let mut pts = vec![p0];
+        flatten_cubic(p0, p1, p2, p3, 0.001, &mut |p| pts.push(p));
+        assert_eq!(*pts.last().unwrap(), p3);
+        assert!(pts.len() > 8);
+        // Every vertex is within the Bézier's deviation from the true circle (< 0.03 %) plus
+        // the tolerance.
+        for p in &pts {
+            let r = p.x.hypot(p.y);
+            assert!((r - 10.0).abs() < 0.01, "{p:?}");
+        }
+    }
+}

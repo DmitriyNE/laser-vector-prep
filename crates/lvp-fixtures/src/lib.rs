@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 pub mod gerber;
+pub mod pdf;
 pub mod svg;
 
 use lvp_core::dxf::write::{Document, Entity, LwVertex, Placed};
@@ -352,6 +353,7 @@ fn unit_name(u: Unit) -> &'static str {
         Unit::Metre => "m",
         Unit::Inch => "in",
         Unit::Mil => "mil",
+        Unit::Point => "pt",
     }
 }
 
@@ -430,10 +432,25 @@ pub fn manifest(fixtures: &[Fixture]) -> Value {
             })
         })
         .collect();
+    let pdf_entries: Vec<Value> = pdf::all()
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "file": f.file_name(),
+                "format": "pdf",
+                "units": "pt",
+                "description": f.description,
+                "expect": f.expect,
+                "notes": f.notes,
+            })
+        })
+        .collect();
     let entries: Vec<Value> = entries
         .into_iter()
         .chain(gerber_entries)
         .chain(svg_entries)
+        .chain(pdf_entries)
         .collect();
     json!({
         "generator": format!("lvp-fixtures {} (`just fixtures`)", env!("CARGO_PKG_VERSION")),
@@ -448,18 +465,27 @@ pub fn manifest(fixtures: &[Fixture]) -> Value {
 }
 
 /// Every file the generator produces, as `(relative path, contents)`.
-pub fn render() -> Vec<(String, String)> {
+pub fn render() -> Vec<(String, Vec<u8>)> {
     let fixtures = all();
-    let mut files: Vec<(String, String)> = fixtures
+    let mut files: Vec<(String, Vec<u8>)> = fixtures
         .iter()
-        .map(|f| (f.file_name(), f.document.to_dxf()))
+        .map(|f| (f.file_name(), f.document.to_dxf().into_bytes()))
         .collect();
-    files.extend(gerber::all().into_iter().map(|g| (g.file_name(), g.text)));
-    files.extend(svg::all().into_iter().map(|f| (f.file_name(), f.text)));
+    files.extend(
+        gerber::all()
+            .into_iter()
+            .map(|g| (g.file_name(), g.text.into_bytes())),
+    );
+    files.extend(
+        svg::all()
+            .into_iter()
+            .map(|f| (f.file_name(), f.text.into_bytes())),
+    );
+    files.extend(pdf::all().into_iter().map(|f| (f.file_name(), f.bytes)));
     let mut manifest =
         serde_json::to_string_pretty(&manifest(&fixtures)).expect("manifest serialises");
     manifest.push('\n');
-    files.push((MANIFEST_FILE.to_string(), manifest));
+    files.push((MANIFEST_FILE.to_string(), manifest.into_bytes()));
     files
 }
 

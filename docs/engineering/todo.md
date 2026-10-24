@@ -34,7 +34,7 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 - [x] Worker crash recovery: a wasm trap replaces the worker and re-imports sources
 - [x] Playwright e2e on the installed Chrome (D20): import → evaluate → export through the
       real worker protocol, slot mapping, two-group hatch, service worker + offline
-- [ ] Release wasm is 1.74 MB after usvg (was 1.05 MB; lopdf will add more); try
+- [ ] Release wasm is 2.49 MB after usvg and lopdf (was 1.05 MB); try
       `wasm-opt -Oz`, feature trimming and lazy-loading the readers as separate modules
 - [ ] Worker: cooperative cancellation / progress for long computations (today:
       terminate-and-respawn only; with a shared-memory pool, cancellation must also
@@ -88,8 +88,10 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       are read unclipped with a warning (needs polyline-by-region clipping)
 - [ ] SVG: stroke caps and joins are always round in stroke expansion (butt/square/miter
       diagnosed as info)
-- [ ] Vector PDF reader: lopdf object model + own content-stream interpreter (paths,
+- [x] Vector PDF reader: lopdf object model + own content-stream interpreter (paths,
       transforms, colours, page scale); region vs trajectory interpretation per layer
+- [ ] PDF: clipping applies to fills only (strokes diagnosed); dash patterns and non-round
+      caps are read solid/round; encrypted files are refused
 - [ ] GDSII reader: BOUNDARY, PATH (pathtype ends), BOX, SREF/AREF flattening,
       layer/datatype as layer names, UNITS; TEXT/NODE diagnosed
 - [ ] IPC-2581 reader: Layer + LayerFeature sets, standard/user primitive dictionaries,

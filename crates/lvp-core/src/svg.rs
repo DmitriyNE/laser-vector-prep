@@ -139,7 +139,7 @@ fn flatten_path(path: &tiny_skia_path::Path, height_px: f64, tol_px: f64) -> Vec
     out
 }
 
-/// Adaptive subdivision of a cubic Bézier; emits every point after the start.
+/// Cubic Bézier in px, flattened through the shared subdivision routine.
 fn cubic(
     p0: tiny_skia_path::Point,
     p1: tiny_skia_path::Point,
@@ -147,36 +147,12 @@ fn cubic(
     p3: tiny_skia_path::Point,
     tol: f64,
     emit: &mut dyn FnMut(tiny_skia_path::Point),
-    depth: u32,
+    _depth: u32,
 ) {
-    let d = |a: tiny_skia_path::Point, b: tiny_skia_path::Point, c: tiny_skia_path::Point| -> f64 {
-        // Distance of c from the chord a-b.
-        let (ax, ay, bx, by, cx, cy) = (
-            a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64,
-        );
-        let (dx, dy) = (bx - ax, by - ay);
-        let l = dx.hypot(dy);
-        if l < 1e-12 {
-            return (cx - ax).hypot(cy - ay);
-        }
-        ((cx - ax) * dy - (cy - ay) * dx).abs() / l
-    };
-    let flat = d(p0, p3, p1).max(d(p0, p3, p2)) <= tol;
-    if flat || depth >= 16 {
-        emit(p3);
-        return;
-    }
-    let mid = |a: tiny_skia_path::Point, b: tiny_skia_path::Point| {
-        tiny_skia_path::Point::from_xy((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
-    };
-    let p01 = mid(p0, p1);
-    let p12 = mid(p1, p2);
-    let p23 = mid(p2, p3);
-    let p012 = mid(p01, p12);
-    let p123 = mid(p12, p23);
-    let m = mid(p012, p123);
-    cubic(p0, p01, p012, m, tol, emit, depth + 1);
-    cubic(m, p123, p23, p3, tol, emit, depth + 1);
+    let c = |p: tiny_skia_path::Point| Point::new(p.x as f64, p.y as f64);
+    crate::flatten::flatten_cubic(c(p0), c(p1), c(p2), c(p3), tol, &mut |q| {
+        emit(tiny_skia_path::Point::from_xy(q.x as f32, q.y as f32))
+    });
 }
 
 /// Uniform scale factor of a transform (geometric mean of the axis scales), for widths.

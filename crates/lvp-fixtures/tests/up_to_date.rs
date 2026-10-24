@@ -7,7 +7,7 @@ fn committed_fixtures_match_generator() {
     let root = lvp_fixtures::fixtures_dir();
     let mut stale = Vec::new();
     for (rel, expected) in lvp_fixtures::render() {
-        match fs::read_to_string(root.join(&rel)) {
+        match fs::read(root.join(&rel)) {
             Ok(actual) if actual == expected => {}
             Ok(_) => stale.push(format!("{rel}: differs")),
             Err(e) => stale.push(format!("{rel}: {e}")),
