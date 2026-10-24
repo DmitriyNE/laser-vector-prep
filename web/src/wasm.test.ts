@@ -71,6 +71,24 @@ describe("lvp-wasm project API", () => {
     files.forEach((f) => f.free());
   });
 
+  it("plans bleed-aware order over protected copper without trapping", () => {
+    // Regression: the footprint model's distance computations reach the hard path of the
+    // standard library's hypot, which relies on integer wraparound and trapped in debug
+    // builds of the wasm (the standard library is compiled with this workspace's profile).
+    const profile = JSON.parse(wasm.profile_json()) as Profile;
+    const pattern = profile.workingLayers[0]!.passes[0]!.pattern;
+    if (pattern.kind === "contourFill") pattern.pitchMm = 0.02;
+    profile.optimizer.mode = "bleedAware";
+    profile.optimizer.protected = ["wl-copper"];
+    wasm.set_profile_json(JSON.stringify(profile));
+    const ev = JSON.parse(wasm.evaluate()) as EvaluationSummary;
+    expect(ev.hasErrors).toBe(false);
+    const copper = ev.groups.find((g) => g.id === "grp-copper")!;
+    expect(copper.mode).toBe("bleedAware");
+    expect(copper.after.jumpLengthMm).toBeLessThan(copper.before.jumpLengthMm);
+    expect(copper.heatmap).toBe(true);
+  }, 60_000); // debug wasm, single thread: the 20 um fill is the case that reproduced the trap
+
   it("rejects bad input as exceptions and keeps state", () => {
     expect(() => wasm.add_source("x.dxf", new Uint8Array([1, 2, 3]))).toThrow();
     const before = wasm.profile_json();

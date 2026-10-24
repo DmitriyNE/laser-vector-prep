@@ -17,24 +17,25 @@ export class WorkerCrashed extends Error {
  * `WorkerCrashed`, replaces the worker, and notifies `onCrash` so the owner can re-import.
  */
 export class GeometryWorker {
-  #worker!: Worker;
+  /**
+   * Spawned on the first call, not at construction: on a static host the first page load
+   * is not yet cross-origin isolated (the service worker reloads it), and a worker started
+   * then would fetch the wasm only to fail starting its shared-memory thread pool.
+   */
+  #worker: Worker | null = null;
   #pending = new Map<number, Pending>();
   #nextId = 1;
   onCrash: ((message: string) => void) | null = null;
 
-  constructor() {
-    this.#spawn();
-  }
-
-  #spawn() {
-    this.#worker = new Worker(new URL("./geometry.worker.ts", import.meta.url), { type: "module" });
-    this.#worker.onmessage = (ev: MessageEvent<Response>) => {
+  #spawn(): Worker {
+    const worker = new Worker(new URL("./geometry.worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (ev: MessageEvent<Response>) => {
       const res = ev.data;
       if (!res.ok && res.fatal) {
         const msg = res.error;
-        this.#worker.terminate();
+        worker.terminate();
+        this.#worker = null;
         this.#failAll(new WorkerCrashed(msg));
-        this.#spawn();
         this.onCrash?.(msg);
         return;
       }
@@ -44,9 +45,11 @@ export class GeometryWorker {
       if (res.ok) p.resolve(res.result);
       else p.reject(new Error(res.error));
     };
-    this.#worker.onerror = (ev) => {
+    worker.onerror = (ev) => {
       this.#failAll(new Error(ev.message || "geometry worker crashed"));
     };
+    this.#worker = worker;
+    return worker;
   }
 
   #failAll(err: Error) {
@@ -60,19 +63,20 @@ export class GeometryWorker {
     const transfer = transferables(payload);
     return new Promise((resolve, reject) => {
       this.#pending.set(rid, { resolve: resolve as (v: unknown) => void, reject });
-      this.#worker.postMessage(req, { transfer });
+      (this.#worker ?? this.#spawn()).postMessage(req, { transfer });
     });
   }
 
-  /** Abort everything in flight and start a fresh worker. */
+  /** Abort everything in flight; the next call starts a fresh worker. */
   restart() {
-    this.#worker.terminate();
+    this.#worker?.terminate();
+    this.#worker = null;
     this.#failAll(new Error("cancelled"));
-    this.#spawn();
   }
 
   dispose() {
-    this.#worker.terminate();
+    this.#worker?.terminate();
+    this.#worker = null;
     this.#failAll(new Error("disposed"));
   }
 }

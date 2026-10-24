@@ -8,6 +8,10 @@ wasm_out := "web/src/wasm"
 wasm_target := "--target wasm32-unknown-unknown"
 # Shared-memory wasm needs a std built with atomics (see .cargo/config.toml).
 build_std := "-Z build-std=std,panic_abort"
+# build-std compiles the standard library with this workspace's profile. Its math routines
+# (libm in compiler_builtins) rely on integer wraparound, so they must never get overflow
+# checks or debug assertions, as in the prebuilt std; otherwise debug wasm traps in `hypot`.
+std_profile := "--config profile.dev.package.compiler_builtins.overflow-checks=false --config profile.dev.package.compiler_builtins.debug-assertions=false"
 
 default:
     @just --list --unsorted
@@ -49,7 +53,7 @@ fmt:
 
 # Compile the wasm crate and generate JS/TS glue into web/src/wasm. profile: dev | release
 wasm profile="dev": check-wasm-bindgen
-    cargo build -p {{wasm_crate}} {{wasm_target}} {{build_std}} {{ if profile == "release" { "--release" } else { "" } }}
+    cargo build -p {{wasm_crate}} {{wasm_target}} {{build_std}} {{std_profile}} {{ if profile == "release" { "--release" } else { "" } }}
     mkdir -p {{wasm_out}}
     wasm-bindgen target/wasm32-unknown-unknown/{{ if profile == "release" { "release" } else { "debug" } }}/lvp_wasm.wasm \
         --out-dir {{wasm_out}} --target web --typescript

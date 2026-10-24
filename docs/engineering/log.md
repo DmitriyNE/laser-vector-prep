@@ -10,6 +10,12 @@ ubuntu-24.04, then deployment of `web/dist` to GitHub Pages from `main` (D27). W
 showed that `just test` never installed npm dependencies; it only worked locally because
 `node_modules` existed. The recipe now depends on `deps`.
 
+The first CI run passed in under five minutes and published the site. Checking the live
+site in headless Chrome found DEF-3 (worker started before isolation); the offline browser
+test now fails on any console error. Rebuilding locally then exposed DEF-4: `just test`
+had left the debug wasm in place, and debug wasm traps inside `hypot` during bleed-aware
+planning because build-std applies our overflow checks to the standard library's libm.
+
 ## 2026-10-25 — Arcs end to end
 
 Preview, PDF/SVG export and SVG/PDF import no longer tessellate circular arcs (D26). The
