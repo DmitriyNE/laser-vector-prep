@@ -94,6 +94,31 @@ pub enum GeometryKind {
     Region,
     /// Centrelines, open or closed; never implicitly an area.
     Linework,
+    /// A bounded domain derived from a reference set by an [`EnvelopeProvider`]; a region
+    /// meant to be subtracted from (negative artwork) or clipped against. Reference-only
+    /// by default: it never marks unless a pass is added deliberately.
+    Envelope,
+}
+
+/// How an envelope layer turns its reference set (group A) into a bounded region.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "provider", rename_all = "camelCase")]
+pub enum EnvelopeProvider {
+    /// The filled interior of the reference region itself (holes included): a named
+    /// boundary such as a mechanical outline.
+    NamedBoundary,
+    /// Axis-aligned bounding box of the reference set, grown by a signed margin.
+    #[serde(rename_all = "camelCase")]
+    BoundingBox { margin_mm: f64 },
+    /// Smallest enclosing circle of the reference set, grown by a radial margin.
+    #[serde(rename_all = "camelCase")]
+    BoundingCircle { margin_mm: f64 },
+    /// `buffer(reference_region, distance)` with round joins.
+    #[serde(rename_all = "camelCase")]
+    Buffer { distance_mm: f64 },
+    /// `buffer(convexHull(reference), distance)` with round joins.
+    #[serde(rename_all = "camelCase")]
+    ConvexHull { distance_mm: f64 },
 }
 
 /// How a layer combines its two operand groups: `union(inputs) op union(operands)`.
@@ -225,6 +250,9 @@ pub struct WorkingLayer {
     #[serde(default)]
     pub operands: Vec<Operand>,
     pub op: LayerOp,
+    /// Required when `kind` is `Envelope`; ignored otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<EnvelopeProvider>,
     #[serde(default)]
     pub interpretation: Interpretation,
     #[serde(default)]

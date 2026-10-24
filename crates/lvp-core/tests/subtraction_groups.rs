@@ -27,6 +27,7 @@ fn copper_minus_outline_band_keeps_copper() {
         inputs: vec![Operand::Source(SourceId::new("src-outline"))],
         operands: vec![],
         op: LayerOp::Union,
+        envelope: None,
         interpretation: Interpretation {
             loop_rule: LoopRuleCfg::MergeThenNest,
             stroke_width: StrokeWidth::Fixed { mm: 1.0 },
@@ -42,6 +43,7 @@ fn copper_minus_outline_band_keeps_copper() {
         inputs: vec![Operand::Layer(LayerId::new("wl-copper"))],
         operands: vec![Operand::Layer(LayerId::new("wl-band"))],
         op: LayerOp::Subtraction,
+        envelope: None,
         interpretation: Interpretation::default(),
         passes: vec![],
         enabled: true,

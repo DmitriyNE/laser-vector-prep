@@ -146,7 +146,7 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                 .with_context(l.id.to_string()),
             );
         }
-        if l.op != LayerOp::Union && l.operands.is_empty() {
+        if l.kind != GeometryKind::Envelope && l.op != LayerOp::Union && l.operands.is_empty() {
             out.push(
                 Diagnostic::warning(
                     "profile.no_operands",
@@ -185,6 +185,23 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                 ),
                 _ => {}
             }
+        }
+        match (l.kind, &l.envelope) {
+            (GeometryKind::Envelope, None) => out.push(
+                Diagnostic::error("profile.envelope_provider", format!("envelope layer {:?} has no provider", l.name)).with_context(l.id.to_string()),
+            ),
+            (GeometryKind::Envelope, Some(EnvelopeProvider::Buffer { distance_mm })) if *distance_mm <= 0.0 => out.push(
+                Diagnostic::warning("profile.envelope_distance", format!("envelope {:?} buffers by {distance_mm} mm; a positive distance is needed for an exterior band", l.name))
+                    .with_context(l.id.to_string()),
+            ),
+            (GeometryKind::Envelope, Some(_)) if !l.operands.is_empty() || l.op != LayerOp::Union => out.push(
+                Diagnostic::info("profile.envelope_ignores_op", format!("envelope {:?} uses only its reference set (group A); the operation and group B are ignored", l.name))
+                    .with_context(l.id.to_string()),
+            ),
+            (k, Some(_)) if k != GeometryKind::Envelope => out.push(
+                Diagnostic::warning("profile.envelope_unused", format!("layer {:?} has an envelope provider but is not an envelope layer", l.name)).with_context(l.id.to_string()),
+            ),
+            _ => {}
         }
         if l.kind == GeometryKind::Linework && l.op != LayerOp::Union {
             out.push(
@@ -330,6 +347,7 @@ pub fn pcb_positive_ldi() -> Profile {
             inputs: vec![Operand::Source(SourceId::new("src-copper"))],
             operands: Vec::new(),
             op: LayerOp::Union,
+            envelope: None,
             interpretation: Interpretation::default(),
             passes: vec![Pass {
                 id: PassId::new("pass-copper-fill"),
@@ -352,6 +370,7 @@ pub fn pcb_positive_ldi() -> Profile {
             inputs: vec![Operand::Source(SourceId::new("src-outline"))],
             operands: Vec::new(),
             op: LayerOp::Union,
+            envelope: None,
             interpretation: Interpretation::default(),
             passes: vec![Pass {
                 id: PassId::new("pass-outline"),

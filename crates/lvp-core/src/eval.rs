@@ -9,11 +9,12 @@ use cavalier_contours::polyline::PlineSource;
 
 use crate::diag::{Diagnostic, Severity};
 use crate::dxf::read::{DxfDocument, Primitive};
+use crate::geom::{self, BBox, Point};
 use crate::model::*;
 use crate::patterns::{self, Geometry};
-use crate::pline::Pline;
+use crate::pline::{self, Pline};
 use crate::profile;
-use crate::region::{self, Region};
+use crate::region::{self, LoopRule, Region};
 
 /// One imported file.
 #[derive(Clone, Debug)]
@@ -418,6 +419,19 @@ fn source_geometry(
     diags: &mut Vec<Diagnostic>,
 ) -> Geometry {
     match kind {
+        // An envelope's reference set is read like a region layer's inputs, except that open
+        // widthless linework is fine for the point-based providers: keep it as linework.
+        GeometryKind::Envelope => {
+            let has_open_widthless = prims
+                .iter()
+                .any(|p| matches!(p, Primitive::Path { pline, width: None } if !pline.is_closed()))
+                && !matches!(interp.stroke_width, StrokeWidth::Fixed { .. });
+            if has_open_widthless {
+                source_geometry(GeometryKind::Linework, interp, prims, diags)
+            } else {
+                source_geometry(GeometryKind::Region, interp, prims, diags)
+            }
+        }
         GeometryKind::Linework => {
             let mut paths = Vec::new();
             for p in prims {
@@ -559,6 +573,21 @@ fn compute_layer(
         }
     }
     let geometry = match layer.kind {
+        GeometryKind::Envelope => {
+            let Some(provider) = &layer.envelope else {
+                diags.push(Diagnostic::error(
+                    "eval.envelope_provider",
+                    "envelope layer has no provider",
+                ));
+                return (Geometry::Region(Region::empty()), diags);
+            };
+            Geometry::Region(envelope(
+                provider,
+                &group_a,
+                &layer.interpretation,
+                &mut diags,
+            ))
+        }
         // Linework only merges; validation rejects other ops.
         GeometryKind::Linework => Geometry::Linework(
             group_a
@@ -577,6 +606,16 @@ fn compute_layer(
             };
             let a = union_of(&group_a, &mut diags);
             let b = union_of(&group_b, &mut diags);
+            if layer.op == LayerOp::Subtraction && !b.is_empty() {
+                // Spec: subject geometry outside the domain must be diagnosed, not guessed away.
+                let outside = b.difference(&a);
+                if !outside.is_empty() {
+                    diags.push(Diagnostic::warning(
+                        "eval.subject_outside_domain",
+                        format!("{:.4} mm² of group B lies outside group A and is not part of the result", outside.area()),
+                    ));
+                }
+            }
             Geometry::Region(match layer.op {
                 LayerOp::Union => a.union(&b),
                 LayerOp::Intersection => a.intersection(&b),
@@ -594,9 +633,107 @@ fn compute_layer(
     (geometry, diags)
 }
 
+/// Flattening tolerance for point-based envelope providers (box, circle, hull).
+const ENVELOPE_POINT_TOLERANCE_MM: f64 = 0.001;
+
+/// Every vertex of the reference geometry, curves flattened.
+fn reference_points(refs: &[Geometry]) -> Vec<Point> {
+    let mut pts = Vec::new();
+    for g in refs {
+        for p in g.paths() {
+            if let Ok(flat) = pline::flatten(&p, ENVELOPE_POINT_TOLERANCE_MM) {
+                pts.extend(flat);
+            }
+        }
+    }
+    pts
+}
+
+/// Bounded domain from a reference set. Empty references yield an empty region and an
+/// error: an unbounded domain is never guessed.
+fn envelope(
+    provider: &EnvelopeProvider,
+    refs: &[Geometry],
+    interp: &Interpretation,
+    diags: &mut Vec<Diagnostic>,
+) -> Region {
+    if refs.iter().all(Geometry::is_empty) {
+        diags.push(Diagnostic::error(
+            "eval.envelope_unbounded",
+            "envelope has no reference geometry; a negative region without a bounded domain is invalid",
+        ));
+        return Region::empty();
+    }
+    let union_ref = |diags: &mut Vec<Diagnostic>| {
+        refs.iter()
+            .map(|g| to_region(g, interp, diags))
+            .fold(Region::empty(), |acc, r| {
+                if acc.is_empty() { r } else { acc.union(&r) }
+            })
+    };
+    match provider {
+        EnvelopeProvider::NamedBoundary => union_ref(diags),
+        EnvelopeProvider::BoundingBox { margin_mm } => {
+            let Some(b) = BBox::of_points(reference_points(refs)) else {
+                return Region::empty();
+            };
+            match b.expanded(*margin_mm) {
+                Some(bb) => Region::from_loops([pline::rect(bb.min, bb.max)], LoopRule::NonZero),
+                None => {
+                    diags.push(Diagnostic::error(
+                        "eval.envelope_collapsed",
+                        format!("a margin of {margin_mm} mm collapses the bounding box"),
+                    ));
+                    Region::empty()
+                }
+            }
+        }
+        EnvelopeProvider::BoundingCircle { margin_mm } => {
+            let Some((c, r)) = geom::min_enclosing_circle(&reference_points(refs)) else {
+                return Region::empty();
+            };
+            let radius = r + margin_mm;
+            if radius <= 0.0 {
+                diags.push(Diagnostic::error(
+                    "eval.envelope_collapsed",
+                    format!("a margin of {margin_mm} mm collapses the bounding circle"),
+                ));
+                return Region::empty();
+            }
+            Region::from_loops([pline::circle(c, radius)], LoopRule::NonZero)
+        }
+        EnvelopeProvider::Buffer { distance_mm } => {
+            let base = union_ref(diags);
+            if *distance_mm <= 0.0 {
+                diags.push(Diagnostic::warning(
+                    "eval.envelope_distance",
+                    "buffer distance is not positive; the envelope adds no exterior band",
+                ));
+            }
+            base.offset(*distance_mm)
+        }
+        EnvelopeProvider::ConvexHull { distance_mm } => {
+            let hull = geom::convex_hull(&reference_points(refs));
+            if hull.len() < 3 {
+                diags.push(Diagnostic::error(
+                    "eval.envelope_collapsed",
+                    "reference geometry is collinear; its convex hull has no area",
+                ));
+                return Region::empty();
+            }
+            let base = Region::from_loops([pline::from_points(hull, true)], LoopRule::NonZero);
+            if *distance_mm == 0.0 {
+                base
+            } else {
+                base.offset(*distance_mm)
+            }
+        }
+    }
+}
+
 fn empty_geometry(kind: GeometryKind) -> Geometry {
     match kind {
-        GeometryKind::Region => Geometry::Region(Region::empty()),
+        GeometryKind::Region | GeometryKind::Envelope => Geometry::Region(Region::empty()),
         GeometryKind::Linework => Geometry::Linework(Vec::new()),
     }
 }
@@ -720,6 +857,7 @@ mod tests {
             inputs: vec![Operand::Layer(dep.clone())],
             operands: Vec::new(),
             op: LayerOp::Union,
+            envelope: None,
             interpretation: Interpretation::default(),
             passes: vec![],
             enabled: true,
@@ -872,6 +1010,7 @@ mod tests {
                 inputs,
                 operands,
                 op,
+                envelope: None,
                 interpretation: Interpretation::default(),
                 passes: vec![],
                 enabled: true,
@@ -932,6 +1071,233 @@ mod tests {
             (grouped.area() - 50.0).abs() < 1e-9,
             "grouped {}",
             grouped.area()
+        );
+    }
+
+    fn envelope_layer(id: &str, provider: EnvelopeProvider, refs: Vec<Operand>) -> WorkingLayer {
+        WorkingLayer {
+            id: LayerId::new(id),
+            name: id.into(),
+            kind: GeometryKind::Envelope,
+            inputs: refs,
+            operands: vec![],
+            op: LayerOp::Union,
+            envelope: Some(provider),
+            interpretation: Interpretation::default(),
+            passes: vec![],
+            enabled: true,
+            reference_only: true,
+        }
+    }
+
+    fn negative(id: &str, domain: &str, subject: &str) -> WorkingLayer {
+        WorkingLayer {
+            id: LayerId::new(id),
+            name: id.into(),
+            kind: GeometryKind::Region,
+            inputs: vec![Operand::Layer(LayerId::new(domain))],
+            operands: vec![Operand::Layer(LayerId::new(subject))],
+            op: LayerOp::Subtraction,
+            envelope: None,
+            interpretation: Interpretation::default(),
+            passes: vec![],
+            enabled: true,
+            reference_only: false,
+        }
+    }
+
+    #[test]
+    fn same_subject_inverts_against_all_five_domain_providers() {
+        let mut sources = Sources::default();
+        sources.add_dxf("board.dxf", board());
+        let mut profile = pcb_positive_ldi();
+        let copper = Operand::Layer(LayerId::new("wl-copper"));
+        let providers = [
+            ("box", EnvelopeProvider::BoundingBox { margin_mm: 0.5 }),
+            (
+                "circle",
+                EnvelopeProvider::BoundingCircle { margin_mm: 0.5 },
+            ),
+            ("buffer", EnvelopeProvider::Buffer { distance_mm: 0.5 }),
+            ("hull", EnvelopeProvider::ConvexHull { distance_mm: 0.5 }),
+        ];
+        for (name, provider) in providers {
+            profile.working_layers.push(envelope_layer(
+                &format!("env-{name}"),
+                provider,
+                vec![copper.clone()],
+            ));
+            profile.working_layers.push(negative(
+                &format!("neg-{name}"),
+                &format!("env-{name}"),
+                "wl-copper",
+            ));
+        }
+        profile.working_layers.push(envelope_layer(
+            "env-named",
+            EnvelopeProvider::NamedBoundary,
+            vec![Operand::Source(SourceId::new("src-outline"))],
+        ));
+        profile
+            .working_layers
+            .push(negative("neg-named", "env-named", "wl-copper"));
+
+        let e = Evaluator::new().evaluate(&profile, &sources);
+        assert!(!e.has_errors(), "{:?}", e.all_diagnostics());
+        let Geometry::Region(copper_region) = &e.layers[&LayerId::new("wl-copper")].geometry else {
+            panic!()
+        };
+        let copper_area = copper_region.area();
+        let copper_islands = copper_region.outers().count();
+        let copper_bounds = copper_region.bounds().unwrap();
+        for name in ["box", "circle", "buffer", "hull", "named"] {
+            let Geometry::Region(env) = &e.layers[&LayerId::new(format!("env-{name}"))].geometry
+            else {
+                panic!()
+            };
+            let Geometry::Region(neg) = &e.layers[&LayerId::new(format!("neg-{name}"))].geometry
+            else {
+                panic!()
+            };
+            assert!(!env.is_empty(), "{name}: envelope empty");
+            let eb = env.bounds().unwrap();
+            assert!(
+                eb.min.x <= copper_bounds.min.x + 1e-9 && eb.max.x >= copper_bounds.max.x - 1e-9,
+                "{name}: x extent"
+            );
+            assert!(
+                (neg.area() - (env.area() - copper_area)).abs() < 1e-6,
+                "{name}: area {} vs {}",
+                neg.area(),
+                env.area() - copper_area
+            );
+            // One outer frame plus one island per copper hole (the disc inside the annulus),
+            // and at least one hole per copper island.
+            if name != "buffer" {
+                assert_eq!(
+                    neg.outers().count(),
+                    1 + copper_region.holes().count(),
+                    "{name}: outers"
+                );
+                assert!(
+                    neg.holes().count() >= copper_islands,
+                    "{name}: holes {} < islands {}",
+                    neg.holes().count(),
+                    copper_islands
+                );
+            }
+        }
+        let Geometry::Region(bx) = &e.layers[&LayerId::new("env-box")].geometry else {
+            panic!()
+        };
+        let bb = bx.bounds().unwrap();
+        assert!(
+            (bb.min.x - (copper_bounds.min.x - 0.5)).abs() < 1e-9
+                && (bb.max.y - (copper_bounds.max.y + 0.5)).abs() < 1e-9
+        );
+        let Geometry::Region(circ) = &e.layers[&LayerId::new("env-circle")].geometry else {
+            panic!()
+        };
+        assert!(
+            circ.contains(Point::new(copper_bounds.min.x, copper_bounds.min.y))
+                || circ.contains(Point::new(copper_bounds.max.x, copper_bounds.max.y))
+        );
+        assert!(
+            e.passes
+                .iter()
+                .all(|(_, p)| !p.layer.as_str().starts_with("env-")),
+            "envelopes never mark by themselves"
+        );
+    }
+
+    #[test]
+    fn envelope_parameters_recompute_dependents_only() {
+        let mut sources = Sources::default();
+        sources.add_dxf("board.dxf", board());
+        let mut profile = pcb_positive_ldi();
+        profile.working_layers.push(envelope_layer(
+            "env",
+            EnvelopeProvider::BoundingBox { margin_mm: 0.5 },
+            vec![Operand::Layer(LayerId::new("wl-copper"))],
+        ));
+        profile
+            .working_layers
+            .push(negative("neg", "env", "wl-copper"));
+        let mut ev = Evaluator::new();
+        let first = ev.evaluate(&profile, &sources);
+        let Geometry::Region(a) = &first.layers[&LayerId::new("neg")].geometry else {
+            panic!()
+        };
+        let area_a = a.area();
+        profile
+            .working_layers
+            .iter_mut()
+            .find(|l| l.id.as_str() == "env")
+            .unwrap()
+            .envelope = Some(EnvelopeProvider::BoundingBox { margin_mm: 2.0 });
+        let second = ev.evaluate(&profile, &sources);
+        assert!(
+            !second.layers[&LayerId::new("env")].cached
+                && !second.layers[&LayerId::new("neg")].cached
+        );
+        assert!(
+            second.layers[&LayerId::new("wl-copper")].cached,
+            "the subject did not change"
+        );
+        let Geometry::Region(b) = &second.layers[&LayerId::new("neg")].geometry else {
+            panic!()
+        };
+        assert!(b.area() > area_a + 1.0, "bigger margin, bigger negative");
+    }
+
+    #[test]
+    fn unbounded_or_missing_domains_are_errors_not_guesses() {
+        let mut sources = Sources::default();
+        sources.add_dxf("board.dxf", board());
+        let mut profile = pcb_positive_ldi();
+        profile.source_bindings.push(SourceBinding {
+            id: SourceId::new("src-none"),
+            name: "missing".into(),
+            required: false,
+            rules: vec![MatchRule::LayerName {
+                format: None,
+                name: "NOPE".into(),
+            }],
+        });
+        profile.working_layers.push(envelope_layer(
+            "env-empty",
+            EnvelopeProvider::BoundingBox { margin_mm: 1.0 },
+            vec![Operand::Source(SourceId::new("src-none"))],
+        ));
+        profile
+            .working_layers
+            .push(negative("neg-empty", "env-empty", "wl-copper"));
+        profile.working_layers.push(envelope_layer(
+            "env-small",
+            EnvelopeProvider::BoundingBox { margin_mm: -5.0 },
+            vec![Operand::Layer(LayerId::new("wl-copper"))],
+        ));
+        profile
+            .working_layers
+            .push(negative("neg-small", "env-small", "wl-copper"));
+        let e = Evaluator::new().evaluate(&profile, &sources);
+        let env_empty = &e.layers[&LayerId::new("env-empty")];
+        assert!(
+            env_empty
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "eval.envelope_unbounded" && d.severity == Severity::Error)
+        );
+        assert!(env_empty.geometry.is_empty());
+        assert!(
+            e.layers[&LayerId::new("neg-empty")].geometry.is_empty(),
+            "no silent page-sized inverse"
+        );
+        assert!(
+            e.layers[&LayerId::new("neg-small")]
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "eval.subject_outside_domain")
         );
     }
 }
