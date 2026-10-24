@@ -23,7 +23,7 @@ describe("lvp-wasm project API", () => {
     expect(wasm.core_version()).toMatch(/^\d+\.\d+\.\d+/);
     const presets = JSON.parse(wasm.builtin_presets_json()) as Profile[];
     expect(presets.length).toBeGreaterThan(0);
-    expect(presets[0]!.schemaVersion).toBe(2);
+    expect(presets[0]!.schemaVersion).toBe(1);
     expect(presets[0]!.workingLayers[0]!.passes[0]!.pattern.kind).toBe("contourFill");
   });
 

@@ -160,14 +160,17 @@ slivers onto themselves) and checked with exact integer orientation tests before
 diagram is built; invalid slivers are skipped and reported (`pattern.gap_fill_skipped`).
 Curved Voronoi edges are chord-approximated, which is exact enough for sub-pitch slivers.
 
-## D17 — Layer operations take two operand groups; schema v2 (2026-10-24)
+## D17 — Layer operations take two operand groups (2026-10-24)
 
 Owner feedback: subtraction as "first checked input minus the rest" depended on click
 order. Every binary operation is now `union(A) op union(B)` with `inputs` (A) and
-`operands` (B) as two independent checkbox groups; union simply merges both. This is the
-first real schema migration (v1 → v2): the first v1 input stays in A, the rest move to B.
-Clipping (M2) will be intersection with B. Saved v1 profiles are migrated on load by the
-worker, and the UI reads the migrated form back rather than trusting stored JSON.
+`operands` (B) as two independent checkbox groups; union simply merges both. Clipping (M2)
+will be intersection with B.
+
+Schema policy, also from the owner: no migrations before anything is deployed. The schema
+stays at version 1 and is redefined in place; the migration table exists but is empty, and
+a profile claiming an older version fails with a precise "no migration path" error. The
+first real migration is written when a deployed version exists to migrate from.
 
 ## D18 — Strokes are built from side offsets, not capsule unions (2026-10-24)
 

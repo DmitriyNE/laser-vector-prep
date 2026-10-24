@@ -38,7 +38,7 @@ export class ProjectStore {
   presets: Profile[] = $state([]);
   saved: SavedProfile[] = $state([]);
   profile: Profile = $state({
-    schemaVersion: 2,
+    schemaVersion: 1,
     profileId: "empty",
     name: "Empty",
     sourceBindings: [],
@@ -213,7 +213,7 @@ export class ProjectStore {
     void this.evaluate();
   }
 
-  /** Push stored JSON through the worker so old schemas come back migrated. */
+  /** Push stored JSON through the worker so it is validated (and, later, migrated). */
   async #loadJson(json: string): Promise<Profile> {
     await this.worker.call({ kind: "setProfile", profile: JSON.parse(json) as Profile });
     return this.worker.call({ kind: "getProfile" });

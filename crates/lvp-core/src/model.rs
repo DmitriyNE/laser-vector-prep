@@ -8,12 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::region::LoopRule;
 
-/// Current profile schema version. Bump together with a migration in `profile`.
-///
-/// History: v1 had a single ordered input list where subtraction meant "first minus the
-/// rest"; v2 splits operands into two groups so `union(inputs) op union(operands)` never
-/// depends on click order.
-pub const SCHEMA_VERSION: u32 = 2;
+/// Current profile schema version. Bump together with a migration in `profile` once a
+/// version has been deployed; until then the schema is redefined in place.
+pub const SCHEMA_VERSION: u32 = 1;
 
 macro_rules! id_type {
     ($name:ident, $doc:literal) => {

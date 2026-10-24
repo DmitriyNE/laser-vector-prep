@@ -48,41 +48,10 @@ impl std::fmt::Display for ProfileError {
 
 impl std::error::Error for ProfileError {}
 
-/// One step migrations: `(from, f)` maps schema `from` to `from + 1`.
+/// One step migrations: `(from, f)` maps schema `from` to `from + 1`. Empty until a schema
+/// version has shipped; pre-deployment changes redefine the current version instead.
 type Migration = fn(Value) -> Result<Value, String>;
-const MIGRATIONS: &[(u32, Migration)] = &[(1, migrate_v1_to_v2)];
-
-/// v1 had one ordered `inputs` list; subtraction meant "first minus the rest". v2 keeps
-/// `inputs` as group A and adds `operands` (group B): for subtraction, intersection and
-/// xor the first input stays in A and the rest move to B; union layers are unchanged.
-fn migrate_v1_to_v2(mut value: Value) -> Result<Value, String> {
-    let Some(layers) = value.get_mut("workingLayers").and_then(Value::as_array_mut) else {
-        return Ok(value);
-    };
-    for layer in layers {
-        let op = layer
-            .get("op")
-            .and_then(Value::as_str)
-            .unwrap_or("union")
-            .to_string();
-        let inputs = layer
-            .get("inputs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let (a, b) = if op == "union" || inputs.len() < 2 {
-            (inputs, Vec::new())
-        } else {
-            (inputs[..1].to_vec(), inputs[1..].to_vec())
-        };
-        let obj = layer
-            .as_object_mut()
-            .ok_or("working layer is not an object")?;
-        obj.insert("inputs".into(), Value::Array(a));
-        obj.insert("operands".into(), Value::Array(b));
-    }
-    Ok(value)
-}
+const MIGRATIONS: &[(u32, Migration)] = &[];
 
 /// Parse (and migrate) a profile JSON document.
 pub fn parse_profile(json: &str) -> Result<Profile, ProfileError> {
@@ -413,7 +382,7 @@ mod tests {
         let json = to_json(&p);
         let back = parse_profile(&json).unwrap();
         assert_eq!(back, p);
-        assert!(json.contains("\"schemaVersion\": 2"));
+        assert!(json.contains("\"schemaVersion\": 1"));
         assert!(json.contains("\"kind\": \"contourFill\""));
     }
 
@@ -442,37 +411,20 @@ mod tests {
     }
 
     #[test]
-    fn v1_subtraction_migrates_to_two_groups() {
-        let v1 = r#"{"schemaVersion": 1, "profileId": "p", "name": "old",
-            "workingLayers": [
-              {"id": "a", "name": "a", "kind": "region", "inputs": [{"source": "s1"}, {"source": "s2"}, {"layer": "x"}], "op": "subtraction"},
-              {"id": "b", "name": "b", "kind": "region", "inputs": [{"source": "s1"}, {"source": "s2"}], "op": "union"},
-              {"id": "c", "name": "c", "kind": "region", "inputs": [{"source": "s1"}], "op": "intersection"}
-            ]}"#;
-        let p = parse_profile(v1).unwrap();
-        assert_eq!(p.schema_version, SCHEMA_VERSION);
-        let a = p.layer(&LayerId::new("a")).unwrap();
-        assert_eq!(a.inputs, vec![Operand::Source(SourceId::new("s1"))]);
+    fn older_schema_without_a_migration_is_rejected_precisely() {
+        let json = r#"{"schemaVersion": 0, "profileId": "x", "name": "x"}"#;
         assert_eq!(
-            a.operands,
-            vec![
-                Operand::Source(SourceId::new("s2")),
-                Operand::Layer(LayerId::new("x"))
-            ]
+            parse_profile(json).unwrap_err(),
+            ProfileError::Migration {
+                from: 0,
+                message: "no migration path".into()
+            }
         );
-        let b = p.layer(&LayerId::new("b")).unwrap();
-        assert_eq!(b.inputs.len(), 2);
-        assert!(b.operands.is_empty());
-        let c = p.layer(&LayerId::new("c")).unwrap();
-        assert_eq!(c.inputs.len(), 1);
-        assert!(c.operands.is_empty());
-        // Migrated output re-parses as current.
-        assert_eq!(parse_profile(&to_json(&p)).unwrap(), p);
     }
 
     #[test]
     fn minimal_profile_gets_defaults() {
-        let json = r#"{"schemaVersion": 2, "profileId": "p", "name": "Empty"}"#;
+        let json = r#"{"schemaVersion": 1, "profileId": "p", "name": "Empty"}"#;
         let p = parse_profile(json).unwrap();
         assert_eq!(p.export.stroke_width_mm, 0.0254);
         assert_eq!(p.optimizer.mode, OptimizerMode::AsGenerated);
@@ -481,7 +433,7 @@ mod tests {
 
     #[test]
     fn shape_errors_are_reported() {
-        let json = r#"{"schemaVersion": 2, "profileId": "p", "name": "x", "workingLayers": [{"id": "a", "name": "a", "kind": "blob", "inputs": [], "op": "union"}]}"#;
+        let json = r#"{"schemaVersion": 1, "profileId": "p", "name": "x", "workingLayers": [{"id": "a", "name": "a", "kind": "blob", "inputs": [], "op": "union"}]}"#;
         assert!(matches!(
             parse_profile(json).unwrap_err(),
             ProfileError::Shape(_)
