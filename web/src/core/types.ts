@@ -67,7 +67,10 @@ export interface WorkingLayer {
   id: string;
   name: string;
   kind: GeometryKind;
+  /** Group A, combined by union. */
   inputs: Operand[];
+  /** Group B, combined by union; right-hand side of `op`. Unused for union. */
+  operands: Operand[];
   op: LayerOp;
   interpretation: { loopRule: LoopRule; strokeWidth: StrokeWidth };
   passes: Pass[];

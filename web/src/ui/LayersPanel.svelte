@@ -17,6 +17,7 @@
         name: `Layer ${p.workingLayers.length + 1}`,
         kind: "region",
         inputs: [],
+        operands: [],
         op: "union",
         interpretation: { loopRule: "mergeThenNest", strokeWidth: "original" },
         passes: [],
@@ -81,7 +82,13 @@
   }
 
   function usedBy(id: string) {
-    return store.profile.workingLayers.filter((l) => l.inputs.some((o) => "layer" in o && o.layer === id)).map((l) => l.name);
+    return store.profile.workingLayers
+      .filter((l) => [...l.inputs, ...l.operands].some((o) => "layer" in o && o.layer === id))
+      .map((l) => l.name);
+  }
+
+  function opLabel(l: WorkingLayer) {
+    return l.op === "union" ? "union" : l.op === "intersection" ? "A ∩ B" : l.op === "subtraction" ? "A − B" : "A xor B";
   }
 </script>
 
@@ -100,7 +107,7 @@
         <input type="checkbox" bind:checked={layer.enabled} title="enabled (outputs marks)" onchange={() => store.update(() => {})} />
         <button class="name" onclick={() => (store.selection = { kind: "layer", id: layer.id })}>
           {layer.name}
-          <span class="meta">{layer.kind} · {layer.op}{layer.referenceOnly ? " · reference" : ""}</span>
+          <span class="meta">{layer.kind} · {opLabel(layer)}{layer.referenceOnly ? " · reference" : ""}</span>
         </button>
         {#if sum}
           <span class="meta">

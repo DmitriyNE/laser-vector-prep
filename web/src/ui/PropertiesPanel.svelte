@@ -74,6 +74,21 @@
   }
 </script>
 
+{#snippet operandBoxes(ops: Operand[])}
+  {#each store.profile.sourceBindings as b (b.id)}
+    <label class="check">
+      <input type="checkbox" checked={hasInput(ops, { source: b.id })} onchange={() => toggleInput(ops, { source: b.id })} />
+      source: {b.name}
+    </label>
+  {/each}
+  {#each store.profile.workingLayers.filter((l) => !layer || l.id !== layer.id) as l (l.id)}
+    <label class="check">
+      <input type="checkbox" checked={hasInput(ops, { layer: l.id })} onchange={() => toggleInput(ops, { layer: l.id })} />
+      layer: {l.name}
+    </label>
+  {/each}
+{/snippet}
+
 <section class="panel">
   <h2>Properties</h2>
   {#if layer}
@@ -86,28 +101,23 @@
     </label>
     <label>Combine
       <select bind:value={layer.op} onchange={touch} disabled={layer.kind === "linework"}>
-        <option value="union">union</option>
-        <option value="intersection">intersection</option>
-        <option value="subtraction">subtraction (first − rest)</option>
-        <option value="xor">xor</option>
+        <option value="union">A ∪ B (union of everything checked)</option>
+        <option value="intersection">A ∩ B</option>
+        <option value="subtraction">A − B</option>
+        <option value="xor">A xor B</option>
       </select>
     </label>
     <fieldset>
-      <legend>Inputs</legend>
-      {#each store.profile.sourceBindings as b (b.id)}
-        <label class="check">
-          <input type="checkbox" checked={hasInput(layer.inputs, { source: b.id })} onchange={() => toggleInput(layer.inputs, { source: b.id })} />
-          source: {b.name}
-        </label>
-      {/each}
-      {#each store.profile.workingLayers.filter((l) => l.id !== layer.id) as l (l.id)}
-        <label class="check">
-          <input type="checkbox" checked={hasInput(layer.inputs, { layer: l.id })} onchange={() => toggleInput(layer.inputs, { layer: l.id })} />
-          layer: {l.name}
-        </label>
-      {/each}
-      {#if layer.op === "subtraction"}<p class="hint">Subtraction order follows the input order above: the first checked input is the subject.</p>{/if}
+      <legend>{layer.op === "union" ? "Inputs" : "A (combined by union)"}</legend>
+      {@render operandBoxes(layer.inputs)}
     </fieldset>
+    {#if layer.op !== "union"}
+      <fieldset>
+        <legend>B (combined by union){layer.op === "subtraction" ? ", subtracted from A" : ""}</legend>
+        {@render operandBoxes(layer.operands)}
+        {#if layer.operands.length === 0}<p class="hint">Nothing in B yet: the result is {layer.op === "intersection" ? "empty" : "A unchanged"}.</p>{/if}
+      </fieldset>
+    {/if}
     {#if layer.kind === "region"}
       <label>Closed loops
         <select bind:value={layer.interpretation.loopRule} onchange={touch}>
@@ -126,6 +136,11 @@
       {#if typeof layer.interpretation.strokeWidth === "object"}
         <label>Width (mm) <input type="number" step="0.01" min="0.001" bind:value={layer.interpretation.strokeWidth.fixed.mm} oninput={touch} /></label>
       {/if}
+      <p class="hint">
+        The loop rule and stroke width apply to every source input of this layer (not to layer inputs,
+        which are already regions). To combine a filled layer with a stroked one, give the stroked
+        geometry its own layer and use it as an input here.
+      </p>
     {/if}
     <label class="check"><input type="checkbox" bind:checked={layer.referenceOnly} onchange={touch} /> reference only (never marks)</label>
   {:else if passInfo}

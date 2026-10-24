@@ -38,7 +38,7 @@ export class ProjectStore {
   presets: Profile[] = $state([]);
   saved: SavedProfile[] = $state([]);
   profile: Profile = $state({
-    schemaVersion: 1,
+    schemaVersion: 2,
     profileId: "empty",
     name: "Empty",
     sourceBindings: [],
@@ -81,7 +81,7 @@ export class ProjectStore {
       const lastId = await db.getSetting<string>(LAST_PROFILE_KEY);
       const last = this.saved.find((s) => s.id === lastId);
       if (last) {
-        this.profile = JSON.parse(last.json) as Profile;
+        this.profile = await this.#loadJson(last.json);
         this.activeSavedId = last.id;
       } else {
         this.profile = await this.worker.call({ kind: "getProfile" });
@@ -197,15 +197,26 @@ export class ProjectStore {
     void this.evaluate();
   }
 
-  applySaved(id: string) {
+  async applySaved(id: string) {
     const s = this.saved.find((x) => x.id === id);
     if (!s) return;
-    this.profile = JSON.parse(s.json) as Profile;
+    try {
+      this.profile = await this.#loadJson(s.json);
+    } catch (e) {
+      this.error = `${s.name}: ${e instanceof Error ? e.message : String(e)}`;
+      return;
+    }
     this.activeSavedId = id;
     this.basePresetId = null;
     this.dirty = false;
     void db.setSetting(LAST_PROFILE_KEY, id);
     void this.evaluate();
+  }
+
+  /** Push stored JSON through the worker so old schemas come back migrated. */
+  async #loadJson(json: string): Promise<Profile> {
+    await this.worker.call({ kind: "setProfile", profile: JSON.parse(json) as Profile });
+    return this.worker.call({ kind: "getProfile" });
   }
 
   /** Discard edits: back to the saved record or preset the profile came from. */
@@ -347,7 +358,9 @@ export class ProjectStore {
 
   /** Layers (by name) that use a slot as an input. */
   bindingUsers(id: string): string[] {
-    return this.profile.workingLayers.filter((l) => l.inputs.some((o) => "source" in o && o.source === id)).map((l) => l.name);
+    return this.profile.workingLayers
+      .filter((l) => [...l.inputs, ...l.operands].some((o) => "source" in o && o.source === id))
+      .map((l) => l.name);
   }
 
   /** Remove a slot; refused while a working layer still uses it. */
