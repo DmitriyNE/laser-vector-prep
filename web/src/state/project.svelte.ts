@@ -324,6 +324,24 @@ export class ProjectStore {
     }
   }
 
+  async exportSvg() {
+    try {
+      const bytes = await this.worker.call({ kind: "exportSvg" });
+      download(`${this.profile.name}.svg`, bytes, "image/svg+xml");
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async exportDxf() {
+    try {
+      const bytes = await this.worker.call({ kind: "exportDxf" });
+      download(`${this.profile.name}.dxf`, bytes, "application/dxf");
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   async exportPdfPerGroup() {
     try {
       const files = await this.worker.call({ kind: "exportPdfPerGroup" });

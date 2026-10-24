@@ -556,6 +556,16 @@ impl Project {
         export::export_pdf(&self.profile, ev).map(|(bytes, _)| bytes)
     }
 
+    pub fn export_svg(&self) -> Result<Vec<u8>, ExportError> {
+        let ev = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
+        export::export_svg(&self.profile, ev).map(|(bytes, _)| bytes)
+    }
+
+    pub fn export_dxf(&self) -> Result<Vec<u8>, ExportError> {
+        let ev = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
+        export::export_dxf(&self.profile, ev).map(|(bytes, _)| bytes)
+    }
+
     pub fn export_pdf_per_group(&self) -> Result<Vec<GroupFile>, ExportError> {
         let ev = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
         export::export_pdf_per_group(&self.profile, ev).map(|(files, _)| files)

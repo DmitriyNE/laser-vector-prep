@@ -62,6 +62,14 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       const bytes = wasm.export_pdf();
       return { result: bytes, transfer: [bytes.buffer] };
     }
+    case "exportSvg": {
+      const bytes = wasm.export_svg();
+      return { result: bytes, transfer: [bytes.buffer] };
+    }
+    case "exportDxf": {
+      const bytes = wasm.export_dxf();
+      return { result: bytes, transfer: [bytes.buffer] };
+    }
     case "exportPdfPerGroup": {
       const files = wasm.export_pdf_per_group().map((f) => {
         const out = { group: f.group, name: f.name, bytes: f.bytes };

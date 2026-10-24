@@ -60,7 +60,7 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 - [ ] Preset pitches (20 µm fill, 50 µm marking) are starting points, not measured values;
       revisit once the machine has been characterised
 
-## M3 — breadth and optimization (started 2026-10-24; D22, D23)
+## M3 — breadth and optimization (done 2026-10-25 except the items below; D22–D24)
 
 Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF export.
 
@@ -101,7 +101,9 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       line descriptors, polarity, Profile; layerFunction as layer function
 - [ ] IPC-2581: Butterfly, Moire and Marking primitives are skipped with a warning; drill
       holes are read as circles on their layer
-- [ ] SVG and DXF export of generated paths per output group
+- [x] SVG and DXF export of generated paths per output group
+- [ ] DXF export: true colour (group code 420) alongside the nearest ACI once the writer
+      supports it; SVG export could keep arcs as `A` commands instead of flattening
 - [ ] Gap fill refinements (`end_spacing`, join style) from the M1 list
 
 ## M4 — robustness/release

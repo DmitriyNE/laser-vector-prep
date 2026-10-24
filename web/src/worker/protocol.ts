@@ -22,6 +22,8 @@ export type Payload =
   | { kind: "previewJumps"; id: string }
   | { kind: "heatmap"; id: string }
   | { kind: "exportPdf" }
+  | { kind: "exportSvg" }
+  | { kind: "exportDxf" }
   | { kind: "exportPdfPerGroup" };
 
 export type Kind = Payload["kind"];
@@ -52,7 +54,7 @@ export type ResultOf<K extends Kind> = K extends "version"
                       ? Preview | null
                       : K extends "heatmap"
                         ? Heatmap | null
-                      : K extends "exportPdf"
+                      : K extends "exportPdf" | "exportSvg" | "exportDxf"
                         ? Uint8Array
                         : K extends "exportPdfPerGroup"
                           ? GroupPdf[]

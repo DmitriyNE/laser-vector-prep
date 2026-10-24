@@ -274,6 +274,18 @@ impl GroupPdf {
     }
 }
 
+/// SVG with one Inkscape layer per exporting group (same page as the PDF).
+#[wasm_bindgen]
+pub fn export_svg() -> Result<Vec<u8>, JsError> {
+    with(|p| p.export_svg().map_err(js))
+}
+
+/// DXF with one layer per exporting group, arcs preserved, model coordinates.
+#[wasm_bindgen]
+pub fn export_dxf() -> Result<Vec<u8>, JsError> {
+    with(|p| p.export_dxf().map_err(js))
+}
+
 /// One PDF per exporting group on a shared page layout.
 #[wasm_bindgen]
 pub fn export_pdf_per_group() -> Result<Vec<GroupPdf>, JsError> {

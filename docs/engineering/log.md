@@ -3,6 +3,15 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M3 step 7: SVG and DXF export
+
+`export::svg` writes one Inkscape layer per exporting group on the PDF's page (y flipped,
+round caps and joins, 1:1 mm viewBox); `export::dxf` writes one layer per group as
+LWPOLYLINEs with bulges in model coordinates, colours as the nearest ACI, names made
+DXF-safe. Both round-trip through the app's own readers in tests and in a browser spec
+(export, re-import, one layer per group). This closes the M3 list from the spec plus the
+owner's GDSII and IPC-2581 additions.
+
 ## 2026-10-25 — M3 step 6: IPC-2581
 
 Own reader on roxmltree (D22): dictionaries (standard primitives Circle, RectCenter,

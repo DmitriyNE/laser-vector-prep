@@ -1,9 +1,11 @@
-//! Exporters. PDF is the mandatory format; SVG and DXF arrive with M3.
+//! Exporters. PDF is the mandatory format; SVG and DXF are the secondary outputs (spec §8).
 //!
 //! Export carries exactly what enabled passes produced for exporting output groups:
 //! no reference layers, no domain outlines, no preview-only jump paths.
 
+pub mod dxf;
 pub mod pdf;
+pub mod svg;
 
 use cavalier_contours::polyline::PlineSource;
 
@@ -182,6 +184,87 @@ pub fn export_pdf_per_group(
         });
     }
     Ok((files, diags))
+}
+
+/// SVG with one Inkscape layer per exporting group; same page as the PDF.
+pub fn export_svg(
+    profile: &Profile,
+    ev: &Evaluation,
+) -> Result<(Vec<u8>, Vec<Diagnostic>), ExportError> {
+    let (paths, diags) = collect_paths(profile, ev);
+    if paths.is_empty() {
+        return Err(ExportError::NothingToExport);
+    }
+    let groups: Vec<(GroupId, String)> = profile
+        .output_groups
+        .iter()
+        .filter(|g| g.export)
+        .map(|g| (g.id.clone(), g.name.clone()))
+        .collect();
+    let text = svg::write(
+        &paths,
+        &svg::SvgOptions {
+            margin_mm: profile.export.margin_mm,
+            title: &profile.name,
+            groups: &groups,
+        },
+    )
+    .ok_or(ExportError::NothingToExport)?;
+    Ok((text.into_bytes(), diags))
+}
+
+/// DXF with one layer per exporting group, arcs preserved, model coordinates (no page).
+pub fn export_dxf(
+    profile: &Profile,
+    ev: &Evaluation,
+) -> Result<(Vec<u8>, Vec<Diagnostic>), ExportError> {
+    let mut diags = Vec::new();
+    let paths_by_pass = ev.pass_paths();
+    let mut groups = Vec::new();
+    for group in profile.output_groups.iter().filter(|g| g.export) {
+        let paths: Vec<Pline> = match ev.group_plan(&group.id) {
+            Some(plan) => plan
+                .order
+                .iter()
+                .filter_map(|r| {
+                    paths_by_pass
+                        .get(&r.pass)
+                        .and_then(|v| v.get(r.index))
+                        .map(|p| order::oriented(p, r))
+                })
+                .collect(),
+            None => ev
+                .passes
+                .iter()
+                .filter(|(_, r)| r.group == group.id)
+                .flat_map(|(_, r)| r.paths.iter().cloned())
+                .collect(),
+        };
+        if paths.is_empty() {
+            continue;
+        }
+        groups.push(dxf::DxfGroup {
+            name: group.name.clone(),
+            color: group.color,
+            paths,
+        });
+    }
+    if groups.is_empty() {
+        return Err(ExportError::NothingToExport);
+    }
+    for g in &groups {
+        if dxf::layer_name(&g.name) != g.name {
+            diags.push(Diagnostic::info(
+                "export.dxf_layer_name",
+                format!(
+                    "group {:?} is written as DXF layer {:?}",
+                    g.name,
+                    dxf::layer_name(&g.name)
+                ),
+            ));
+        }
+    }
+    Ok((dxf::write(&groups).into_bytes(), diags))
 }
 
 /// Human-readable group list for PDF metadata. Names colours, never laser settings.

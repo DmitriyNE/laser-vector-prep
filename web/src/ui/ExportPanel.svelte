@@ -27,6 +27,10 @@
     <button disabled={blocked} onclick={() => store.exportPdf()}>Export PDF</button>
     <button disabled={blocked} onclick={() => store.exportPdfPerGroup()}>Export one PDF per group</button>
   </div>
+  <div class="buttons">
+    <button disabled={blocked} onclick={() => store.exportSvg()} title="one Inkscape layer per group, same page as the PDF">Export SVG</button>
+    <button disabled={blocked} onclick={() => store.exportDxf()} title="one layer per group, arcs kept, model coordinates">Export DXF</button>
+  </div>
   <p class="hint">Path order in the PDF follows the planned order (see Path order); the laser software may still reorder it.</p>
 </section>
 
@@ -54,5 +58,6 @@
   .buttons {
     display: flex;
     gap: 0.4rem;
+    margin-bottom: 0.3rem;
   }
 </style>
