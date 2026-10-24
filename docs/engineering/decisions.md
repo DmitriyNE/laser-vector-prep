@@ -324,13 +324,15 @@ official `upload-pages-artifact` / `deploy-pages` actions after a green run on `
 static bundle already works from a sub-path and the service worker supplies the isolation
 headers Pages cannot send (D5).
 
-## D28 — Default path order: bleed-aware for LDI, minimum jump otherwise (2026-10-25)
+## D28 — Default path order: bleed-aware for the PCB presets, minimum jump otherwise (2026-10-25)
 
-Owner request. Both PCB presets expose photoresist by laser direct imaging, where jump
-footprints over areas that must stay unexposed matter, so they plan bleed-aware with a
-protected region: the negative preset protects the copper; the positive preset gets two
-reference layers, an artwork box (copper bounding box + 1 mm) and "Keep clear
-(background)" = box − copper, and protects the latter. General marking, boundary cutting
-and new profiles default to minimum jump (the model default changed from as-generated).
-Cost on the 20 µm board: about 0.5 s per full evaluation in bleed-aware mode against
-60–90 ms otherwise; the plan is cached while the paths do not change.
+Owner request. The positive PCB preset exposes photoresist by laser direct imaging, where
+jump footprints over areas that must stay unexposed matter, so it plans bleed-aware and
+gets two reference layers: an artwork box (copper bounding box + 1 mm) and "Keep clear
+(background)" = box − copper, which it protects. The negative preset ablates the
+background; jumps run with the beam not Q-switched, far too weak to ablate, so ordering is
+not physically critical there. It also plans bleed-aware, protecting the copper, and the
+owner accepts either that or minimum jump. General marking, boundary cutting and new
+profiles default to minimum jump (the model default changed from as-generated). Cost on
+the 20 µm board: about 0.5 s per full evaluation in bleed-aware mode against 60–90 ms
+otherwise; the plan is cached while the paths do not change.

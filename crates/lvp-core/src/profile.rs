@@ -590,7 +590,8 @@ fn outline_passthrough() -> Pass {
     )
 }
 
-/// The background around the copper exposed instead of the copper (negative process):
+/// The background around the copper ablated instead of the copper being exposed (negative
+/// process):
 /// board interior (named boundary from the mechanical outline) minus the copper grown by a
 /// clearance, hatched at 45 degrees; outline passed through in red.
 pub fn pcb_negative_hatch() -> Profile {
@@ -663,7 +664,9 @@ pub fn pcb_negative_hatch() -> Profile {
             vec![outline_passthrough()],
         ),
     ];
-    // Exposure lands on the background; the copper must stay unexposed, so jumps avoid it.
+    // Ablation of the background. Jumps run with the beam not Q-switched, far too weak to
+    // ablate, so jump placement does not matter physically; bleed-aware keeps jumps off the
+    // copper anyway, and the owner accepts either mode here (D28).
     p.optimizer = OptimizerSettings {
         mode: OptimizerMode::BleedAware,
         protected: vec![LayerId::new("wl-copper")],
