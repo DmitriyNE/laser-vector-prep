@@ -55,6 +55,9 @@ pub fn centrelines(slivers: &Region, opts: &GapFillOptions) -> (Vec<Pline>, usiz
 /// `None` on the host. On wasm (panic = abort) the input sanitising above has to suffice.
 #[cfg(not(target_arch = "wasm32"))]
 fn build_diagram(segments: &[[i32; 4]]) -> Option<Diagram> {
+    if !segments_valid(segments) {
+        return None;
+    }
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let result = std::panic::catch_unwind(|| {
@@ -70,6 +73,9 @@ fn build_diagram(segments: &[[i32; 4]]) -> Option<Diagram> {
 
 #[cfg(target_arch = "wasm32")]
 fn build_diagram(segments: &[[i32; 4]]) -> Option<Diagram> {
+    if !segments_valid(segments) {
+        return None;
+    }
     Builder::<i32>::default()
         .with_segments(segments.iter())
         .ok()?
@@ -77,15 +83,76 @@ fn build_diagram(segments: &[[i32; 4]]) -> Option<Diagram> {
         .ok()
 }
 
+/// The Voronoi builder requires segments that meet only at shared endpoints. Checked with
+/// exact integer arithmetic; slivers are small, so the quadratic scan is cheap.
+fn segments_valid(segs: &[[i32; 4]]) -> bool {
+    fn orient(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> i64 {
+        ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).signum()
+    }
+    fn on_segment(a: [i64; 2], b: [i64; 2], p: [i64; 2]) -> bool {
+        orient(a, b, p) == 0
+            && p[0] >= a[0].min(b[0])
+            && p[0] <= a[0].max(b[0])
+            && p[1] >= a[1].min(b[1])
+            && p[1] <= a[1].max(b[1])
+    }
+    let pt = |s: &[i32; 4], i: usize| -> [i64; 2] { [s[2 * i] as i64, s[2 * i + 1] as i64] };
+    for i in 0..segs.len() {
+        let (a, b) = (pt(&segs[i], 0), pt(&segs[i], 1));
+        if a == b {
+            return false;
+        }
+        for other in &segs[i + 1..] {
+            let (c, d) = (pt(other, 0), pt(other, 1));
+            let shared: Vec<[i64; 2]> = [a, b]
+                .iter()
+                .filter(|p| **p == c || **p == d)
+                .copied()
+                .collect();
+            match shared.len() {
+                2 => return false, // duplicate segment
+                1 => {
+                    // Adjacent: must not overlap beyond the shared endpoint.
+                    let s0 = shared[0];
+                    let (oa, oc) = (if a == s0 { b } else { a }, if c == s0 { d } else { c });
+                    if orient(s0, oa, oc) == 0
+                        && (oa[0] - s0[0]) * (oc[0] - s0[0]) + (oa[1] - s0[1]) * (oc[1] - s0[1]) > 0
+                    {
+                        return false;
+                    }
+                }
+                _ => {
+                    let (o1, o2, o3, o4) = (
+                        orient(a, b, c),
+                        orient(a, b, d),
+                        orient(c, d, a),
+                        orient(c, d, b),
+                    );
+                    if o1 != o2 && o3 != o4 {
+                        return false; // proper crossing
+                    }
+                    if on_segment(a, b, c)
+                        || on_segment(a, b, d)
+                        || on_segment(c, d, a)
+                        || on_segment(c, d, b)
+                    {
+                        return false; // touching or collinear overlap
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Voronoi-based medial axis of one island. `None` when the island is thinner than the
 /// snapping grid or its diagram cannot be built.
 fn medial_axis(island: &Region, opts: &GapFillOptions) -> Option<Vec<Pline>> {
     let bounds = island.bounds()?;
     let extent = bounds.width().max(bounds.height()).max(1e-9);
-    // Snap to a grid four times finer than the flattening tolerance: near-coincident points
-    // merge instead of producing crossing micro-segments. Stay well inside i32.
-    let grid = (opts.flatten_tolerance_mm / 4.0).max(1e-7);
-    let scale = (1.0 / grid).min(1.0e9 / extent);
+    // Finest integer grid that keeps every coordinate well inside i32 (at most 1 nm): a
+    // coarse grid would fold a thin sliver's two sides onto each other.
+    let scale = (1.0e6_f64).min(1.0e8 / extent);
     let origin = bounds.min;
     let to_int = |p: Point| {
         [
@@ -95,9 +162,9 @@ fn medial_axis(island: &Region, opts: &GapFillOptions) -> Option<Vec<Pline>> {
     };
     let to_mm = |x: f64, y: f64| Point::new(x / scale + origin.x, y / scale + origin.y);
 
-    // Islands thinner than two grid cells on average are below any meaningful resolution.
+    // Islands thinner than a few grid cells on average are below any meaningful resolution.
     let perimeter: f64 = island.loops.iter().map(pline::length).sum();
-    if perimeter <= 0.0 || island.area() / (perimeter / 2.0) < 2.0 / scale {
+    if perimeter <= 0.0 || island.area() / (perimeter / 2.0) < 4.0 / scale {
         return None;
     }
 
