@@ -13,11 +13,11 @@ default:
     @just --list --unsorted
 
 # Full one-shot build of the static site into web/dist (release wasm, optimized).
-build: deps (wasm "release") coi
+build: deps (wasm "release")
     cd web && npm run typecheck && npm run build
 
 # Dev server with hot reload (debug wasm; rebuild wasm with `just wasm` after Rust changes).
-dev: deps wasm coi
+dev: deps wasm
     cd web && npm run dev
 
 # All automated tests: Rust unit + property tests, then TypeScript tests against the built wasm.
@@ -64,14 +64,9 @@ check-wasm-bindgen:
 deps:
     cd web && if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then npm ci; fi
 
-# coi-serviceworker must be a separate, same-origin, unbundled file next to index.html.
-coi: deps
-    mkdir -p web/public
-    cp web/node_modules/coi-serviceworker/coi-serviceworker.js web/public/coi-serviceworker.js
-
 # Serve the production build locally (checks the service-worker path, not just the dev server headers).
 preview: build
     cd web && npm run preview
 
 clean:
-    rm -rf target web/dist {{wasm_out}} web/public/coi-serviceworker.js
+    rm -rf target web/dist {{wasm_out}}
