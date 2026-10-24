@@ -97,8 +97,10 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] GDSII: a layer map (number → name) could name layers like the EDA tool does; today
       they are `layer/datatype`
 - [ ] GDSII: angles with absolute-magnification/angle STRANS bits are treated as relative
-- [ ] IPC-2581 reader: Layer + LayerFeature sets, standard/user primitive dictionaries,
+- [x] IPC-2581 reader: Layer + LayerFeature sets, standard/user primitive dictionaries,
       line descriptors, polarity, Profile; layerFunction as layer function
+- [ ] IPC-2581: Butterfly, Moire and Marking primitives are skipped with a warning; drill
+      holes are read as circles on their layer
 - [ ] SVG and DXF export of generated paths per output group
 - [ ] Gap fill refinements (`end_spacing`, join style) from the M1 list
 

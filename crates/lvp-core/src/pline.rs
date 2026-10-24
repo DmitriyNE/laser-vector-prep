@@ -198,6 +198,136 @@ pub fn sanitize(p: &Pline) -> Option<Pline> {
     (q.vertex_count() >= 2).then_some(q)
 }
 
+/// Outline of a stroked polyline with flat ends and mitred joins (bevelled where the mitre
+/// would exceed twice the width): the exact area a square-ended path covers. `ext_begin`
+/// and `ext_end` extend the ends along the path (half the width for square ends). Returns
+/// `None` for zero width or a single point without extension.
+pub fn stroke_polygon(
+    pts: &[Point],
+    width: f64,
+    ext_begin: f64,
+    ext_end: f64,
+) -> Option<Vec<Point>> {
+    let mut p: Vec<Point> = Vec::new();
+    for &q in pts {
+        if p.last()
+            .is_none_or(|l: &Point| (l.x - q.x).abs() > 1e-9 || (l.y - q.y).abs() > 1e-9)
+        {
+            p.push(q);
+        }
+    }
+    let hw = width / 2.0;
+    if hw <= 0.0 || p.is_empty() {
+        return None;
+    }
+    if p.len() == 1 {
+        let c = p[0];
+        if ext_begin <= 0.0 && ext_end <= 0.0 {
+            return None;
+        }
+        return Some(vec![
+            Point::new(c.x - ext_begin, c.y - hw),
+            Point::new(c.x + ext_end, c.y - hw),
+            Point::new(c.x + ext_end, c.y + hw),
+            Point::new(c.x - ext_begin, c.y + hw),
+        ]);
+    }
+    let n = p.len();
+    let dir = |a: Point, b: Point| {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let l = dx.hypot(dy);
+        (dx / l, dy / l)
+    };
+    let d0 = dir(p[0], p[1]);
+    p[0] = Point::new(p[0].x - d0.0 * ext_begin, p[0].y - d0.1 * ext_begin);
+    let dn = dir(p[n - 2], p[n - 1]);
+    p[n - 1] = Point::new(p[n - 1].x + dn.0 * ext_end, p[n - 1].y + dn.1 * ext_end);
+    let segs: Vec<(Point, (f64, f64))> = p.windows(2).map(|w| (w[0], dir(w[0], w[1]))).collect();
+    let side = |sign: f64| -> Vec<Point> {
+        let normal = |d: (f64, f64)| (-d.1 * hw * sign, d.0 * hw * sign);
+        let mut out = Vec::new();
+        let (s0, d0) = segs[0];
+        let n0 = normal(d0);
+        out.push(Point::new(s0.x + n0.0, s0.y + n0.1));
+        for k in 1..segs.len() {
+            let (_, dprev) = segs[k - 1];
+            let (pk, dk) = segs[k];
+            let np = normal(dprev);
+            let nk = normal(dk);
+            let a = Point::new(pk.x + np.0, pk.y + np.1);
+            let b = Point::new(pk.x + nk.0, pk.y + nk.1);
+            let cross = dprev.0 * dk.1 - dprev.1 * dk.0;
+            if cross.abs() < 1e-9 {
+                out.push(a);
+                continue;
+            }
+            let t = ((b.x - a.x) * dk.1 - (b.y - a.y) * dk.0) / cross;
+            let m = Point::new(a.x + dprev.0 * t, a.y + dprev.1 * t);
+            if (m.x - pk.x).hypot(m.y - pk.y) <= hw * 4.0 {
+                out.push(m);
+            } else {
+                out.push(a);
+                out.push(b);
+            }
+        }
+        let (_, dl) = segs[segs.len() - 1];
+        let nl = normal(dl);
+        let end = p[n - 1];
+        out.push(Point::new(end.x + nl.0, end.y + nl.1));
+        out
+    };
+    let mut left = side(1.0);
+    let mut right = side(-1.0);
+    right.reverse();
+    left.append(&mut right);
+    Some(left)
+}
+
+/// Append the arc `from -> to` around `center` to an open polyline whose last vertex is
+/// `from`, splitting arcs over a half turn and expressing a full circle (`from == to`) as
+/// two half circles. The end point is trusted for direction only: the radius comes from
+/// `from`, and `to` is pushed as given.
+pub fn add_center_arc(p: &mut Pline, from: Point, to: Point, center: Point, ccw: bool) {
+    use std::f64::consts::{PI, TAU};
+    let r = (from.x - center.x).hypot(from.y - center.y);
+    if r <= 0.0 {
+        p.add(to.x, to.y, 0.0);
+        return;
+    }
+    let a0 = (from.y - center.y).atan2(from.x - center.x);
+    let a1 = (to.y - center.y).atan2(to.x - center.x);
+    let same = (from.x - to.x).abs() < 1e-9 && (from.y - to.y).abs() < 1e-9;
+    let mut sweep = if ccw { a1 - a0 } else { a0 - a1 }.rem_euclid(TAU);
+    if same {
+        sweep = TAU;
+    }
+    let sign = if ccw { 1.0 } else { -1.0 };
+    let last = p.vertex_count() - 1;
+    let set_last_bulge = |p: &mut Pline, b: f64| {
+        let mut v = p.at(last);
+        v.bulge = b;
+        p.set_vertex(last, v);
+    };
+    if (sweep - TAU).abs() < 1e-9 {
+        let opposite = Point::new(2.0 * center.x - from.x, 2.0 * center.y - from.y);
+        set_last_bulge(p, sign);
+        p.add(opposite.x, opposite.y, sign);
+        p.add(to.x, to.y, 0.0);
+        return;
+    }
+    if sweep > PI + 1e-12 {
+        let amid = a0 + sign * sweep / 2.0;
+        let mid = Point::new(center.x + r * amid.cos(), center.y + r * amid.sin());
+        let b = sign * (sweep / 8.0).tan();
+        set_last_bulge(p, b);
+        p.add(mid.x, mid.y, b);
+        p.add(to.x, to.y, 0.0);
+        return;
+    }
+    set_last_bulge(p, sign * (sweep / 4.0).tan());
+    p.add(to.x, to.y, 0.0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -440,86 +440,9 @@ fn path_polygon(
     ext_begin: f64,
     ext_end: f64,
 ) -> Option<Vec<(f64, f64)>> {
-    let mut p: Vec<(f64, f64)> = Vec::new();
-    for &q in pts {
-        if p.last()
-            .is_none_or(|l: &(f64, f64)| (l.0 - q.0).abs() > 1e-9 || (l.1 - q.1).abs() > 1e-9)
-        {
-            p.push(q);
-        }
-    }
-    let hw = width / 2.0;
-    if hw <= 0.0 {
-        return None;
-    }
-    if p.len() == 1 {
-        // A dot: only square-ended paths have an extent.
-        let (x, y) = p[0];
-        if ext_begin <= 0.0 && ext_end <= 0.0 {
-            return None;
-        }
-        return Some(vec![
-            (x - ext_begin, y - hw),
-            (x + ext_end, y - hw),
-            (x + ext_end, y + hw),
-            (x - ext_begin, y + hw),
-        ]);
-    }
-    // Extend the ends.
-    let n = p.len();
-    let dir = |a: (f64, f64), b: (f64, f64)| {
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let l = dx.hypot(dy);
-        (dx / l, dy / l)
-    };
-    let d0 = dir(p[0], p[1]);
-    p[0] = (p[0].0 - d0.0 * ext_begin, p[0].1 - d0.1 * ext_begin);
-    let dn = dir(p[n - 2], p[n - 1]);
-    p[n - 1] = (p[n - 1].0 + dn.0 * ext_end, p[n - 1].1 + dn.1 * ext_end);
-    // Offset lines per segment: (point on line, direction).
-    let segs: Vec<((f64, f64), (f64, f64))> =
-        p.windows(2).map(|w| (w[0], dir(w[0], w[1]))).collect();
-    let side = |sign: f64| -> Vec<(f64, f64)> {
-        let mut out = Vec::new();
-        let normal = |d: (f64, f64)| (-d.1 * hw * sign, d.0 * hw * sign);
-        let (s0, d0) = segs[0];
-        let n0 = normal(d0);
-        out.push((s0.0 + n0.0, s0.1 + n0.1));
-        for k in 1..segs.len() {
-            let (_, dprev) = segs[k - 1];
-            let (pk, dk) = segs[k];
-            let np = normal(dprev);
-            let nk = normal(dk);
-            let a = (pk.0 + np.0, pk.1 + np.1); // end of previous offset line at the vertex
-            let b = (pk.0 + nk.0, pk.1 + nk.1); // start of next offset line at the vertex
-            let cross = dprev.0 * dk.1 - dprev.1 * dk.0;
-            if cross.abs() < 1e-9 {
-                out.push(a);
-                continue;
-            }
-            // Intersection of line (a, dprev) with line (b, dk).
-            let t = ((b.0 - a.0) * dk.1 - (b.1 - a.1) * dk.0) / cross;
-            let m = (a.0 + dprev.0 * t, a.1 + dprev.1 * t);
-            let miter_len = ((m.0 - pk.0).powi(2) + (m.1 - pk.1).powi(2)).sqrt();
-            if miter_len <= hw * 4.0 {
-                out.push(m);
-            } else {
-                out.push(a);
-                out.push(b);
-            }
-        }
-        let (sl, dl) = segs[segs.len() - 1];
-        let end = p[n - 1];
-        let nl = normal(dl);
-        out.push((end.0 + nl.0, end.1 + nl.1));
-        let _ = sl;
-        out
-    };
-    let mut left = side(1.0);
-    let mut right = side(-1.0);
-    right.reverse();
-    left.append(&mut right);
-    Some(left)
+    let points: Vec<Point> = pts.iter().map(|&(x, y)| Point::new(x, y)).collect();
+    pline::stroke_polygon(&points, width, ext_begin, ext_end)
+        .map(|v| v.into_iter().map(|p| (p.x, p.y)).collect())
 }
 
 struct Flattener<'a> {

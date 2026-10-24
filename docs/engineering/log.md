@@ -3,6 +3,16 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M3 step 6: IPC-2581
+
+Own reader on roxmltree (D22): dictionaries (standard primitives Circle, RectCenter,
+RectCorner, RectRound, RectCham, Oval, Donut, Octagon, Hexagon, Diamond, Triangle, Ellipse,
+Thermal, Contour; user primitives; line descriptors), steps with profile and layer features,
+pads with Xform/Location, positive and negative sets composited in source order, and
+`layerFunction,side` as the layer function so the PCB presets bind `CONDUCTOR,TOP` and
+`PROFILE` without naming conventions. The stroke-polygon helper moved from the GDSII reader
+into `pline` and a centre-defined arc helper joined it; both readers share them.
+
 ## 2026-10-24 — M3 step 5: GDSII
 
 Own stream reader (D22): records → structures → flattened top cells with the GDS reference

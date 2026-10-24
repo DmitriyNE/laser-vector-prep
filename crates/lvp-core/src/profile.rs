@@ -455,6 +455,7 @@ fn copper_rules() -> Vec<MatchRule> {
     vec![
         dxf_layer("TOP_LAYER"),
         function("Copper,L1,Top"),
+        function("CONDUCTOR,TOP"),
         gerber_file("*.gtl"),
         gerber_file("*-F_Cu.gbr"),
         gerber_file("*.cmp"),

@@ -14,6 +14,7 @@ pub mod flatten;
 pub mod gds;
 pub mod geom;
 pub mod gerber;
+pub mod ipc;
 pub mod model;
 pub mod order;
 pub mod patterns;
