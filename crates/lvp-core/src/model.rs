@@ -225,6 +225,97 @@ pub enum Pattern {
         #[serde(default = "default_true")]
         gap_fill: bool,
     },
+    /// Trace the region boundary (outers and holes) at a geometric offset, optionally as
+    /// several rings. Kerf compensation is a user-entered distance, applied outward from the
+    /// filled area (outers grow, holes shrink), never assumed.
+    #[serde(rename_all = "camelCase")]
+    BoundaryTrace {
+        #[serde(default)]
+        side: OffsetSide,
+        /// Distance from the boundary in the direction of `side` (mm).
+        #[serde(default)]
+        offset_mm: f64,
+        /// Beam/kerf width to compensate (mm); half of it is applied outward.
+        #[serde(default)]
+        kerf_mm: f64,
+        /// Number of rings; rings after the first step further in the direction of `side`
+        /// (inward for `on`).
+        #[serde(default = "default_one")]
+        rings: u32,
+        #[serde(default)]
+        ring_spacing_mm: f64,
+        /// Reverse every path's direction.
+        #[serde(default)]
+        reverse: bool,
+        /// Emit holes before the outer contour that contains them (cutting order).
+        #[serde(default = "default_true")]
+        inner_first: bool,
+    },
+    /// Equally spaced parallel scanlines clipped to the region and its holes.
+    #[serde(rename_all = "camelCase")]
+    Hatch {
+        pitch_mm: f64,
+        /// Measured in document coordinates (degrees, counter-clockwise from +x).
+        #[serde(default)]
+        angle_deg: f64,
+        /// Lines lie at `phase + k * pitch` across the rotated frame: a global lattice, so
+        /// adjacent layers with the same parameters stay aligned.
+        #[serde(default)]
+        phase_mm: f64,
+        /// Alternate row direction (bidirectional) instead of unidirectional.
+        #[serde(default = "default_true")]
+        serpentine: bool,
+        /// Shrink the region by this much before hatching (edge coverage control).
+        #[serde(default)]
+        inset_mm: f64,
+    },
+    /// Independent hatches at several angles.
+    #[serde(rename_all = "camelCase")]
+    CrossHatch {
+        pitch_mm: f64,
+        angles_deg: Vec<f64>,
+        #[serde(default)]
+        phase_mm: f64,
+        #[serde(default = "default_true")]
+        serpentine: bool,
+        #[serde(default)]
+        inset_mm: f64,
+    },
+    /// Perimeter shells followed by a hatch of the remaining interior.
+    #[serde(rename_all = "camelCase")]
+    BoundaryHatch {
+        #[serde(default = "default_one")]
+        shells: u32,
+        shell_pitch_mm: f64,
+        /// Gap between the innermost shell and the hatch area (mm).
+        #[serde(default)]
+        inset_mm: f64,
+        pitch_mm: f64,
+        #[serde(default = "default_angles")]
+        angles_deg: Vec<f64>,
+        #[serde(default)]
+        phase_mm: f64,
+        #[serde(default = "default_true")]
+        serpentine: bool,
+    },
+}
+
+fn default_one() -> u32 {
+    1
+}
+
+fn default_angles() -> Vec<f64> {
+    vec![0.0]
+}
+
+/// Which side of the boundary a trace runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum OffsetSide {
+    Inside,
+    #[default]
+    On,
+    Outside,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

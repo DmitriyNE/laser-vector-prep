@@ -250,6 +250,108 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                         );
                     }
                 }
+                Pattern::BoundaryTrace {
+                    rings,
+                    ring_spacing_mm,
+                    kerf_mm,
+                    ..
+                } => {
+                    if *rings == 0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.rings",
+                                format!("pass {:?} has zero rings", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                    if *rings > 1 && *ring_spacing_mm <= 0.0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.ring_spacing",
+                                format!(
+                                    "pass {:?} has several rings but no positive ring spacing",
+                                    p.name
+                                ),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                    if *kerf_mm < 0.0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.kerf",
+                                format!("pass {:?} has a negative kerf", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                }
+                Pattern::Hatch {
+                    pitch_mm, inset_mm, ..
+                }
+                | Pattern::CrossHatch {
+                    pitch_mm, inset_mm, ..
+                } => {
+                    if pitch_mm.is_nan() || *pitch_mm <= 0.0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.pitch",
+                                format!("pass {:?} has a non-positive pitch", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                    if *inset_mm < 0.0 {
+                        out.push(Diagnostic::warning("profile.inset", format!("pass {:?} has a negative inset: the hatch extends outside the region", p.name)).with_context(p.id.to_string()));
+                    }
+                    if let Pattern::CrossHatch { angles_deg, .. } = &p.pattern
+                        && angles_deg.is_empty()
+                    {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.angles",
+                                format!("pass {:?} has no hatch angles", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                }
+                Pattern::BoundaryHatch {
+                    shells,
+                    shell_pitch_mm,
+                    pitch_mm,
+                    angles_deg,
+                    ..
+                } => {
+                    if *shells > 0 && *shell_pitch_mm <= 0.0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.shell_pitch",
+                                format!("pass {:?} has shells but no positive shell pitch", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                    if pitch_mm.is_nan() || *pitch_mm <= 0.0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.pitch",
+                                format!("pass {:?} has a non-positive hatch pitch", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                    if angles_deg.is_empty() {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.angles",
+                                format!("pass {:?} has no hatch angles", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                }
                 Pattern::Passthrough { simplify_mm, .. } => {
                     if simplify_mm.is_some_and(|s| s < 0.0) {
                         out.push(

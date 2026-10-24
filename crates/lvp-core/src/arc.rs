@@ -71,6 +71,18 @@ impl Arc {
         })
     }
 
+    /// Whether the direction `angle` (radians, any range) lies on the arc's sweep.
+    pub fn contains_angle(&self, angle: f64) -> bool {
+        let tau = std::f64::consts::TAU;
+        let (start, sweep) = if self.sweep >= 0.0 {
+            (self.start_angle, self.sweep)
+        } else {
+            (self.start_angle + self.sweep, -self.sweep)
+        };
+        let rel = (angle - start).rem_euclid(tau);
+        rel <= sweep + 1e-12 || (tau - rel) <= 1e-12
+    }
+
     /// Polyline approximation within `tolerance` (see [`flatten::flatten_arc`]).
     pub fn flatten(&self, tolerance: f64) -> Result<Vec<Point>, FlattenError> {
         flatten::flatten_arc(
@@ -106,6 +118,23 @@ mod tests {
         assert!((a.sweep - PI).abs() < 1e-12);
         // Counter-clockwise from (0,0) to (2,0) passes below the chord.
         assert!(a.point_at(0.5).y < 0.0);
+    }
+
+    #[test]
+    fn contains_angle_respects_direction() {
+        let ccw = Arc::from_dxf_angles(Point::new(0.0, 0.0), 1.0, 0.0, 90.0);
+        assert!(
+            ccw.contains_angle(0.5)
+                && !ccw.contains_angle(-0.5)
+                && ccw.contains_angle(std::f64::consts::FRAC_PI_2)
+        );
+        let cw = Arc {
+            center: Point::new(0.0, 0.0),
+            radius: 1.0,
+            start_angle: std::f64::consts::FRAC_PI_2,
+            sweep: -std::f64::consts::FRAC_PI_2,
+        };
+        assert!(cw.contains_angle(0.5) && !cw.contains_angle(2.0));
     }
 
     #[test]

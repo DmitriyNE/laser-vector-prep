@@ -5,6 +5,8 @@
 //! inputs here (except where a coverage audit asks for them explicitly).
 
 pub mod gapfill;
+pub mod hatch;
+pub mod trace;
 
 use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 
@@ -64,6 +66,137 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             first_offset_mm,
             gap_fill,
         } => contour_fill(geometry, *pitch_mm, *first_offset_mm, *gap_fill),
+        Pattern::BoundaryTrace {
+            side,
+            offset_mm,
+            kerf_mm,
+            rings,
+            ring_spacing_mm,
+            reverse,
+            inner_first,
+        } => with_region(geometry, "boundary trace", |region| {
+            let paths = trace::boundary_trace(
+                region,
+                &trace::TraceParams {
+                    side: *side,
+                    offset_mm: *offset_mm,
+                    kerf_mm: *kerf_mm,
+                    rings: *rings,
+                    ring_spacing_mm: *ring_spacing_mm,
+                    reverse: *reverse,
+                    inner_first: *inner_first,
+                },
+            );
+            PatternOutput {
+                stats: PatternStats {
+                    rings: paths.len(),
+                    gap_fills: 0,
+                },
+                paths,
+                diagnostics: Vec::new(),
+            }
+        }),
+        Pattern::Hatch {
+            pitch_mm,
+            angle_deg,
+            phase_mm,
+            serpentine,
+            inset_mm,
+        } => with_region(geometry, "hatch", |region| {
+            let area = if *inset_mm != 0.0 {
+                region.offset(-inset_mm)
+            } else {
+                region.clone()
+            };
+            PatternOutput {
+                paths: hatch::hatch(
+                    &area,
+                    &hatch::HatchParams {
+                        pitch_mm: *pitch_mm,
+                        angle_deg: *angle_deg,
+                        phase_mm: *phase_mm,
+                        serpentine: *serpentine,
+                    },
+                ),
+                ..Default::default()
+            }
+        }),
+        Pattern::CrossHatch {
+            pitch_mm,
+            angles_deg,
+            phase_mm,
+            serpentine,
+            inset_mm,
+        } => with_region(geometry, "crosshatch", |region| {
+            let area = if *inset_mm != 0.0 {
+                region.offset(-inset_mm)
+            } else {
+                region.clone()
+            };
+            let mut out = PatternOutput::default();
+            for angle in angles_deg {
+                out.paths.extend(hatch::hatch(
+                    &area,
+                    &hatch::HatchParams {
+                        pitch_mm: *pitch_mm,
+                        angle_deg: *angle,
+                        phase_mm: *phase_mm,
+                        serpentine: *serpentine,
+                    },
+                ));
+            }
+            out
+        }),
+        Pattern::BoundaryHatch {
+            shells,
+            shell_pitch_mm,
+            inset_mm,
+            pitch_mm,
+            angles_deg,
+            phase_mm,
+            serpentine,
+        } => with_region(geometry, "boundary + hatch", |region| {
+            let mut out = PatternOutput::default();
+            // Shells at pitch/2, 3 pitch/2, ... inward (centreline semantics, like contour fill).
+            for k in 0..*shells {
+                let ring = region.offset(-(shell_pitch_mm / 2.0 + k as f64 * shell_pitch_mm));
+                out.stats.rings += ring.loops.len();
+                out.paths.extend(ring.loops);
+            }
+            let interior = region.offset(-(*shells as f64 * shell_pitch_mm + inset_mm));
+            for angle in angles_deg {
+                out.paths.extend(hatch::hatch(
+                    &interior,
+                    &hatch::HatchParams {
+                        pitch_mm: *pitch_mm,
+                        angle_deg: *angle,
+                        phase_mm: *phase_mm,
+                        serpentine: *serpentine,
+                    },
+                ));
+            }
+            out
+        }),
+    }
+}
+
+/// Run a region-only pattern, or explain why linework will not do.
+fn with_region(
+    geometry: &Geometry,
+    what: &str,
+    f: impl FnOnce(&Region) -> PatternOutput,
+) -> PatternOutput {
+    match geometry {
+        Geometry::Region(region) => f(region),
+        Geometry::Linework(_) => PatternOutput {
+            diagnostics: vec![Diagnostic::error(
+                "pattern.needs_region",
+                format!(
+                    "{what} needs a region layer; this layer is linework (expand strokes or choose passthrough)"
+                ),
+            )],
+            ..Default::default()
+        },
     }
 }
 
@@ -258,6 +391,69 @@ mod tests {
             missed_filled < 0.1 * missed_plain,
             "filled misses {missed_filled} vs {missed_plain}"
         );
+    }
+
+    #[test]
+    fn crosshatch_is_independent_passes_and_boundary_hatch_stays_inside() {
+        let region = Region::from_loops(
+            [rect(Point::new(0.0, 0.0), Point::new(10.0, 10.0))],
+            LoopRule::NonZero,
+        )
+        .difference(&Region::from_loops(
+            [circle(Point::new(5.0, 5.0), 2.0)],
+            LoopRule::NonZero,
+        ));
+        let one = |angle: f64| {
+            generate(
+                &Pattern::Hatch {
+                    pitch_mm: 0.5,
+                    angle_deg: angle,
+                    phase_mm: 0.0,
+                    serpentine: true,
+                    inset_mm: 0.0,
+                },
+                &Geometry::Region(region.clone()),
+            )
+            .paths
+            .len()
+        };
+        let cross = generate(
+            &Pattern::CrossHatch {
+                pitch_mm: 0.5,
+                angles_deg: vec![0.0, 90.0],
+                phase_mm: 0.0,
+                serpentine: true,
+                inset_mm: 0.0,
+            },
+            &Geometry::Region(region.clone()),
+        );
+        assert_eq!(cross.paths.len(), one(0.0) + one(90.0));
+
+        let bh = generate(
+            &Pattern::BoundaryHatch {
+                shells: 2,
+                shell_pitch_mm: 0.3,
+                inset_mm: 0.1,
+                pitch_mm: 0.5,
+                angles_deg: vec![45.0],
+                phase_mm: 0.0,
+                serpentine: true,
+            },
+            &Geometry::Region(region.clone()),
+        );
+        assert_eq!(
+            bh.stats.rings, 4,
+            "two shells, each an outer and a hole loop"
+        );
+        let grown = region.offset(1e-6);
+        for p in &bh.paths {
+            for v in p.iter_vertexes() {
+                assert!(
+                    grown.contains(Point::new(v.x, v.y)),
+                    "vertex outside the target region"
+                );
+            }
+        }
     }
 
     #[test]

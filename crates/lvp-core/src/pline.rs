@@ -159,6 +159,20 @@ pub fn seg_midpoint_and_left_normal(v1: PlineVertex<f64>, v2: PlineVertex<f64>) 
     (point(mid), n)
 }
 
+/// Rotate about the origin by `angle` (radians, counter-clockwise). Arcs are preserved.
+pub fn rotated(p: &Pline, angle: f64) -> Pline {
+    let (s, c) = angle.sin_cos();
+    let mut out = if p.is_closed() {
+        Pline::new_closed()
+    } else {
+        Pline::new()
+    };
+    for v in p.iter_vertexes() {
+        out.add(c * v.x - s * v.y, s * v.x + c * v.y, v.bulge);
+    }
+    out
+}
+
 /// Total path length.
 pub fn length(p: &Pline) -> f64 {
     p.path_length()
