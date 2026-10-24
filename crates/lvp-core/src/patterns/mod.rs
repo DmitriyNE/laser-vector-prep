@@ -68,7 +68,18 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             pitch_mm,
             first_offset_mm,
             gap_fill,
-        } => contour_fill(geometry, *pitch_mm, *first_offset_mm, *gap_fill),
+            end_spacing_mm,
+            simplify_mm,
+        } => contour_fill(
+            geometry,
+            &ContourParams {
+                pitch_mm: *pitch_mm,
+                first_offset_mm: *first_offset_mm,
+                gap_fill: *gap_fill,
+                end_spacing_mm: *end_spacing_mm,
+                simplify_mm: *simplify_mm,
+            },
+        ),
         Pattern::BoundaryTrace {
             side,
             offset_mm,
@@ -77,6 +88,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             ring_spacing_mm,
             reverse,
             inner_first,
+            join,
         } => with_region(geometry, "boundary trace", |region| {
             let (paths, precedence) = trace::boundary_trace_ordered(
                 region,
@@ -88,6 +100,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
                     ring_spacing_mm: *ring_spacing_mm,
                     reverse: *reverse,
                     inner_first: *inner_first,
+                    join: *join,
                 },
             );
             PatternOutput {
@@ -223,12 +236,24 @@ fn passthrough(geometry: &Geometry, simplify_mm: Option<f64>, reverse: bool) -> 
     out
 }
 
-fn contour_fill(
-    geometry: &Geometry,
-    pitch_mm: f64,
-    first_offset_mm: Option<f64>,
-    gap_fill: bool,
-) -> PatternOutput {
+/// Contour fill parameters (see [`Pattern::ContourFill`]).
+#[derive(Clone, Copy, Debug)]
+pub struct ContourParams {
+    pub pitch_mm: f64,
+    pub first_offset_mm: Option<f64>,
+    pub gap_fill: bool,
+    pub end_spacing_mm: Option<f64>,
+    pub simplify_mm: Option<f64>,
+}
+
+fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
+    let ContourParams {
+        pitch_mm,
+        first_offset_mm,
+        gap_fill,
+        end_spacing_mm,
+        simplify_mm,
+    } = *params;
     let mut out = PatternOutput::default();
     let Geometry::Region(region) = geometry else {
         out.diagnostics.push(Diagnostic::error(
@@ -244,6 +269,28 @@ fn contour_fill(
         ));
         return out;
     }
+    let end_spacing = end_spacing_mm.unwrap_or(pitch_mm / 2.0);
+    if end_spacing.is_nan() || end_spacing < 0.0 {
+        out.diagnostics.push(Diagnostic::error(
+            "pattern.end_spacing",
+            "contour fill end spacing must not be negative",
+        ));
+        return out;
+    }
+    // Simplification may move a ring by at most the tolerance; a quarter pitch keeps
+    // neighbouring rings from touching.
+    let simplify = simplify_mm.filter(|t| *t > 0.0).map(|t| {
+        if t > pitch_mm / 4.0 {
+            out.diagnostics.push(Diagnostic::warning(
+                "pattern.simplify_clamped",
+                format!(
+                    "simplify tolerance {t} mm was clamped to a quarter of the pitch ({} mm)",
+                    pitch_mm / 4.0
+                ),
+            ));
+        }
+        t.min(pitch_mm / 4.0)
+    });
     let first = first_offset_mm.unwrap_or(pitch_mm / 2.0);
     let mut depth = first;
     let mut rings = 0usize;
@@ -253,19 +300,24 @@ fn contour_fill(
             break;
         }
         rings += ring.loops.len();
-        out.paths.extend(ring.loops);
+        match simplify {
+            Some(t) => out
+                .paths
+                .extend(ring.loops.iter().map(|l| crate::pline::simplify(l, t))),
+            None => out.paths.extend(ring.loops),
+        }
         depth += pitch_mm;
     }
     out.stats.rings = rings;
     if gap_fill {
         // Rings sit at depths first, first + pitch, ...; each sweeps ±pitch/2. The cores they
-        // miss are exactly the region deeper than the last ring plus half a pitch, which an
-        // offset gives directly (and exactly, for offset-based rings) without stroking
-        // thousands of ring segments.
+        // miss are the region deeper than the last ring plus the end spacing (pitch/2 by
+        // default), which an offset gives directly (and exactly, for offset-based rings)
+        // without stroking thousands of ring segments.
         let covered_depth = if rings == 0 {
-            (first - pitch_mm / 2.0).max(0.0)
+            (first - end_spacing).max(0.0)
         } else {
-            depth - pitch_mm + pitch_mm / 2.0
+            depth - pitch_mm + end_spacing
         };
         let gaps = region.offset(-covered_depth);
         if !gaps.is_empty() {
@@ -341,6 +393,8 @@ mod tests {
                 pitch_mm: 1.0,
                 first_offset_mm: None,
                 gap_fill: false,
+                end_spacing_mm: None,
+                simplify_mm: None,
             },
             &Geometry::Region(region.clone()),
         );
@@ -377,6 +431,8 @@ mod tests {
             pitch_mm: 0.1,
             first_offset_mm: None,
             gap_fill: gap,
+            end_spacing_mm: None,
+            simplify_mm: None,
         };
         let plain = generate(&pattern(false), &Geometry::Region(bar.clone()));
         let filled = generate(&pattern(true), &Geometry::Region(bar.clone()));
@@ -467,9 +523,91 @@ mod tests {
                 pitch_mm: 1.0,
                 first_offset_mm: None,
                 gap_fill: false,
+                end_spacing_mm: None,
+                simplify_mm: None,
             },
             &Geometry::Linework(vec![]),
         );
         assert_eq!(out.diagnostics[0].code, "pattern.needs_region");
+    }
+
+    #[test]
+    fn end_spacing_controls_where_gap_fill_starts_and_simplify_thins_rings() {
+        // A 10 x 3.3 mm strip at pitch 1: rings at depths 0.5 and 1.5; the core deeper than
+        // 1.5 + end spacing is 0.3 mm wide with the default 0.5 end spacing (gap fill), and
+        // empty with an end spacing of 0.7 (no gap fill).
+        let strip = Region::from_loops(
+            [rect(Point::new(0.0, 0.0), Point::new(10.0, 4.3))],
+            LoopRule::NonZero,
+        );
+        let fill = |end: Option<f64>| {
+            generate(
+                &Pattern::ContourFill {
+                    pitch_mm: 1.0,
+                    first_offset_mm: None,
+                    gap_fill: true,
+                    end_spacing_mm: end,
+                    simplify_mm: None,
+                },
+                &Geometry::Region(strip.clone()),
+            )
+        };
+        let default = fill(None);
+        assert_eq!(default.stats.rings, 2);
+        assert_eq!(default.stats.gap_fills, 1, "{:?}", default.diagnostics);
+        let wide = fill(Some(0.7));
+        assert_eq!(wide.stats.rings, 2);
+        assert_eq!(wide.stats.gap_fills, 0);
+        let neg = fill(Some(-1.0));
+        assert!(
+            neg.diagnostics
+                .iter()
+                .any(|d| d.code == "pattern.end_spacing")
+        );
+
+        // Simplify: a polygon with a 2 um wiggle on one edge keeps far fewer ring vertices;
+        // the tolerance is clamped to a quarter pitch with a warning.
+        let mut pts = vec![Point::new(0.0, 0.0)];
+        for k in 1..200 {
+            pts.push(Point::new(
+                k as f64 * 0.05,
+                if k % 2 == 0 { 0.002 } else { -0.002 },
+            ));
+        }
+        pts.extend([
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+        ]);
+        let wiggly = Region::from_loops([crate::pline::from_points(pts, true)], LoopRule::NonZero);
+        let rings = |simplify: Option<f64>| {
+            generate(
+                &Pattern::ContourFill {
+                    pitch_mm: 1.0,
+                    first_offset_mm: None,
+                    gap_fill: false,
+                    end_spacing_mm: None,
+                    simplify_mm: simplify,
+                },
+                &Geometry::Region(wiggly.clone()),
+            )
+        };
+        let plain = rings(None);
+        let simple = rings(Some(0.01));
+        let count = |o: &PatternOutput| o.paths.iter().map(|p| p.vertex_count()).sum::<usize>();
+        assert!(
+            count(&simple) * 3 < count(&plain),
+            "{} vs {}",
+            count(&simple),
+            count(&plain)
+        );
+        assert_eq!(simple.paths.len(), plain.paths.len());
+        let clamped = rings(Some(1.0));
+        assert!(
+            clamped
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "pattern.simplify_clamped")
+        );
     }
 }

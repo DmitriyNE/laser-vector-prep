@@ -87,7 +87,7 @@
       case "contourFill":
         return `contour ${pt.pitchMm} mm${pt.gapFill ? " +gap" : ""}`;
       case "boundaryTrace":
-        return `trace ${pt.side}${pt.offsetMm ? ` ${pt.offsetMm} mm` : ""}${pt.kerfMm ? ` kerf ${pt.kerfMm}` : ""}${pt.rings > 1 ? ` ×${pt.rings}` : ""}`;
+        return `trace ${pt.side}${pt.offsetMm ? ` ${pt.offsetMm} mm` : ""}${pt.kerfMm ? ` kerf ${pt.kerfMm}` : ""}${pt.rings > 1 ? ` ×${pt.rings}` : ""}${pt.join && pt.join.kind !== "round" ? ` ${pt.join.kind}` : ""}`;
       case "hatch":
         return `hatch ${pt.pitchMm} mm @ ${pt.angleDeg}°`;
       case "crossHatch":
@@ -110,9 +110,9 @@
       case "boundingCircle":
         return `circle +${e.marginMm} mm`;
       case "buffer":
-        return `buffer ${e.distanceMm} mm`;
+        return `buffer ${e.distanceMm} mm${e.join && e.join.kind !== "round" ? ` ${e.join.kind}` : ""}`;
       case "convexHull":
-        return `hull +${e.distanceMm} mm`;
+        return `hull +${e.distanceMm} mm${e.join && e.join.kind !== "round" ? ` ${e.join.kind}` : ""}`;
     }
   }
 

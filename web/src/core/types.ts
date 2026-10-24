@@ -37,12 +37,15 @@ export interface SourceSummary {
 
 export type GeometryKind = "region" | "linework" | "envelope";
 
+/** Corner joins of an offset; omitted means round. */
+export type JoinStyle = { kind: "round" } | { kind: "miter"; limit: number } | { kind: "bevel" };
+
 export type EnvelopeProvider =
   | { provider: "namedBoundary" }
   | { provider: "boundingBox"; marginMm: number }
   | { provider: "boundingCircle"; marginMm: number }
-  | { provider: "buffer"; distanceMm: number }
-  | { provider: "convexHull"; distanceMm: number };
+  | { provider: "buffer"; distanceMm: number; join?: JoinStyle }
+  | { provider: "convexHull"; distanceMm: number; join?: JoinStyle };
 
 export type OffsetSide = "inside" | "on" | "outside";
 export type LayerOp = "union" | "intersection" | "subtraction" | "xor";
@@ -66,7 +69,16 @@ export interface SourceBinding {
 
 export type Pattern =
   | { kind: "passthrough"; simplifyMm?: number | null; reverse: boolean }
-  | { kind: "contourFill"; pitchMm: number; firstOffsetMm?: number | null; gapFill: boolean }
+  | {
+      kind: "contourFill";
+      pitchMm: number;
+      firstOffsetMm?: number | null;
+      gapFill: boolean;
+      /** Where gap fill starts beyond the last ring; null = pitch/2. */
+      endSpacingMm?: number | null;
+      /** Ring simplifying tolerance; null = off. */
+      simplifyMm?: number | null;
+    }
   | {
       kind: "boundaryTrace";
       side: OffsetSide;
@@ -76,6 +88,7 @@ export type Pattern =
       ringSpacingMm: number;
       reverse: boolean;
       innerFirst: boolean;
+      join?: JoinStyle;
     }
   | { kind: "hatch"; pitchMm: number; angleDeg: number; phaseMm: number; serpentine: boolean; insetMm: number }
   | { kind: "crossHatch"; pitchMm: number; anglesDeg: number[]; phaseMm: number; serpentine: boolean; insetMm: number }

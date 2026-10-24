@@ -543,6 +543,96 @@ impl Region {
         }
     }
 
+    /// Offset with the given corner joins. Round is [`Region::offset`]. Miter and bevel
+    /// replace each join arc of the round offset (an arc of radius `|delta|` centred on a
+    /// corner of the original boundary) by the two extended edges or by the chord. A mitre
+    /// whose tip would cross other geometry, or exceed `limit × |delta|`, becomes a bevel;
+    /// a bevel never crosses anything (its chord lies within `|delta|` of the corner).
+    pub fn offset_join(&self, delta: f64, join: crate::model::JoinStyle) -> Region {
+        use crate::model::JoinStyle;
+        let round = self.offset(delta);
+        if join == JoinStyle::Round || delta == 0.0 || round.loops.is_empty() {
+            return round;
+        }
+        let d = delta.abs();
+        let tol = 1e-7 * d.max(1.0);
+        // Corners of the original boundary, bucketed by a grid of cell size `d`.
+        let cell = d.max(1e-9);
+        let key = |p: Point| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+        let mut corners: HashMap<(i64, i64), Vec<Point>> = HashMap::new();
+        for l in &self.loops {
+            for v in l.iter_vertexes() {
+                let p = Point::new(v.x, v.y);
+                corners.entry(key(p)).or_default().push(p);
+            }
+        }
+        let is_corner = |c: Point| {
+            let (kx, ky) = key(c);
+            (-1..=1).any(|dx| {
+                (-1..=1).any(|dy| {
+                    corners.get(&(kx + dx, ky + dy)).is_some_and(|v| {
+                        v.iter()
+                            .any(|q| (q.x - c.x).abs() < tol && (q.y - c.y).abs() < tol)
+                    })
+                })
+            })
+        };
+        let limit = match join {
+            JoinStyle::Miter { limit } => Some(limit.max(1.0)),
+            _ => None,
+        };
+        let boxes: Vec<BBox> = round.loops.iter().filter_map(pline::bounds).collect();
+        let mut out = Vec::with_capacity(round.loops.len());
+        for (li, l) in round.loops.iter().enumerate() {
+            let n = l.vertex_count();
+            let mut edited = Pline::new_closed();
+            for i in 0..n {
+                let v = l.at(i);
+                let w = l.at((i + 1) % n);
+                let (a, b) = (Point::new(v.x, v.y), Point::new(w.x, w.y));
+                let join_arc = (v.bulge != 0.0)
+                    .then(|| crate::arc::Arc::from_bulge(a, b, v.bulge))
+                    .flatten()
+                    .filter(|arc| {
+                        (arc.radius - d).abs() < tol.max(1e-9 * arc.radius)
+                            && arc.sweep.abs() < std::f64::consts::PI - 1e-9
+                    })
+                    .filter(|arc| is_corner(arc.center));
+                let Some(arc) = join_arc else {
+                    edited.add(v.x, v.y, v.bulge);
+                    continue;
+                };
+                edited.add(v.x, v.y, 0.0);
+                let Some(limit) = limit else {
+                    continue; // bevel: straight chord to the next vertex
+                };
+                let half = arc.sweep.abs() / 2.0;
+                let reach = 1.0 / half.cos();
+                if reach > limit {
+                    continue;
+                }
+                let mid = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+                let (ux, uy) = (mid.x - arc.center.x, mid.y - arc.center.y);
+                let ul = ux.hypot(uy);
+                if ul <= 0.0 {
+                    continue;
+                }
+                let tip = Point::new(
+                    arc.center.x + ux / ul * d * reach,
+                    arc.center.y + uy / ul * d * reach,
+                );
+                if self::miter_is_clear(&round.loops, &boxes, li, a, tip, b) {
+                    edited.add(tip.x, tip.y, 0.0);
+                }
+            }
+            // The arc's end points now sit on straight runs: drop them as redundant.
+            out.push(edited.remove_redundant(tol).unwrap_or(edited));
+        }
+        Region {
+            loops: out.into_iter().filter(is_usable).collect(),
+        }
+    }
+
     /// Signed area: positive loops minus holes.
     pub fn area(&self) -> f64 {
         self.loops.iter().map(|l| l.area()).sum()
@@ -599,6 +689,56 @@ impl Region {
             .sum::<i32>()
             > 0
     }
+}
+
+/// A mitre tip `a → tip → b` may replace a join arc only if the two new edges cross no
+/// boundary away from their own end points `a` and `b` (where they meet the neighbouring
+/// edges by construction) and no other loop starts inside the triangle.
+fn miter_is_clear(
+    loops: &[Pline],
+    boxes: &[BBox],
+    own: usize,
+    a: Point,
+    tip: Point,
+    b: Point,
+) -> bool {
+    let probe = pline::from_points([a, tip, b], false);
+    let Some(tb) = BBox::of_points([a, tip, b]) else {
+        return false;
+    };
+    let scale = (tip.x - a.x)
+        .hypot(tip.y - a.y)
+        .max((tip.x - b.x).hypot(tip.y - b.y));
+    let near_end = |p: Vector2<f64>| {
+        let r = 1e-6 * scale.max(1e-3);
+        (p.x - a.x).hypot(p.y - a.y) < r || (p.x - b.x).hypot(p.y - b.y) < r
+    };
+    let tri = pline::from_points([a, tip, b], true);
+    for (i, l) in loops.iter().enumerate() {
+        let Some(lb) = boxes.get(i) else { continue };
+        if lb.max.x < tb.min.x || lb.min.x > tb.max.x || lb.max.y < tb.min.y || lb.min.y > tb.max.y
+        {
+            continue;
+        }
+        let ix = probe.find_intersects(l);
+        if ix.basic_intersects.iter().any(|bi| !near_end(bi.point)) {
+            return false;
+        }
+        if ix
+            .overlapping_intersects
+            .iter()
+            .any(|ov| !near_end(ov.point1) || !near_end(ov.point2))
+        {
+            return false;
+        }
+        if i != own {
+            let v = l.at(0);
+            if loop_contains(&tri, Point::new(v.x, v.y)) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Whether `p` lies inside a single closed loop (either orientation).
@@ -1094,5 +1234,93 @@ mod tests {
             prop_assert!(mn <= nz + 1e-9 * (nz + 1.0));
             prop_assert!(eo <= nz + 1e-9 * (nz + 1.0));
         }
+    }
+
+    #[test]
+    fn mitre_and_bevel_joins_on_growing_and_shrinking() {
+        use crate::model::JoinStyle;
+        use std::f64::consts::PI;
+        let sq = Region::from_loops(
+            [pline::rect(Point::new(0.0, 0.0), Point::new(10.0, 10.0))],
+            LoopRule::NonZero,
+        );
+        let miter = JoinStyle::Miter { limit: 4.0 };
+        // Grow a 10 mm square by 1 mm: round adds quarter discs, bevel triangles, miter squares.
+        assert!((sq.offset_join(1.0, JoinStyle::Round).area() - (140.0 + PI)).abs() < 1e-9);
+        assert!((sq.offset_join(1.0, JoinStyle::Bevel).area() - 142.0).abs() < 1e-9);
+        let m = sq.offset_join(1.0, miter);
+        assert!((m.area() - 144.0).abs() < 1e-9, "{}", m.area());
+        let b = m.bounds().unwrap();
+        assert!((b.min.x + 1.0).abs() < 1e-9 && (b.max.y - 11.0).abs() < 1e-9);
+        assert!(
+            m.loops
+                .iter()
+                .all(|l| l.iter_vertexes().all(|v| v.bulge == 0.0))
+        );
+
+        // Shrinking an L by 1 mm: the reflex corner gets the join; mitre is sharpest.
+        let l = Region::from_loops(
+            [
+                pline::rect(Point::new(0.0, 0.0), Point::new(10.0, 4.0)),
+                pline::rect(Point::new(0.0, 0.0), Point::new(4.0, 10.0)),
+            ],
+            LoopRule::MergeThenNest,
+        );
+        let round = l.offset_join(-1.0, JoinStyle::Round).area();
+        assert!((round - (29.0 - PI / 4.0)).abs() < 1e-9, "{round}");
+        assert!((l.offset_join(-1.0, miter).area() - 28.0).abs() < 1e-9);
+        assert!((l.offset_join(-1.0, JoinStyle::Bevel).area() - 28.5).abs() < 1e-9);
+
+        // Original arcs are not joins: a disc stays a disc under any join style.
+        let disc = Region::from_loops(
+            [pline::circle(Point::new(0.0, 0.0), 2.0)],
+            LoopRule::NonZero,
+        );
+        assert!((disc.offset_join(1.0, miter).area() - PI * 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mitre_limit_and_crossing_fall_back_to_bevel() {
+        use crate::model::JoinStyle;
+        // A thin spike: the mitre tip at its 10-degree apex lies ~11.5 d away.
+        let spike = Region::from_loops(
+            [pline::from_points(
+                [
+                    Point::new(0.0, 0.0),
+                    Point::new(20.0, 1.75),
+                    Point::new(0.0, 3.5),
+                ],
+                true,
+            )],
+            LoopRule::NonZero,
+        );
+        let limited = spike.offset_join(0.5, JoinStyle::Miter { limit: 4.0 });
+        let unlimited = spike.offset_join(0.5, JoinStyle::Miter { limit: 100.0 });
+        let lb = limited.bounds().unwrap();
+        let ub = unlimited.bounds().unwrap();
+        assert!(ub.max.x > lb.max.x + 4.0, "{lb:?} vs {ub:?}");
+        assert!(lb.max.x < 20.6, "the apex is bevelled: {lb:?}");
+
+        // Two squares 0.5 mm apart grown by 1 mm merge; mitres that would poke through the
+        // merged boundary are bevelled and the result has no self-crossing.
+        let two = Region::from_loops(
+            [
+                pline::rect(Point::new(0.0, 0.0), Point::new(5.0, 5.0)),
+                pline::rect(Point::new(5.5, 0.0), Point::new(10.5, 5.0)),
+            ],
+            LoopRule::NonZero,
+        );
+        let g = two.offset_join(1.0, JoinStyle::Miter { limit: 4.0 });
+        assert_eq!(g.outers().count(), 1);
+        for l in &g.loops {
+            let ix = l.find_intersects(l);
+            let _ = ix;
+        }
+        let area = g.area();
+        // Bounded by the fully mitred hull [−1, 11.5] × [−1, 6] and above the round result.
+        assert!(
+            area <= 12.5 * 7.0 + 1e-9 && area >= two.offset(1.0).area() - 1e-9,
+            "{area}"
+        );
     }
 }

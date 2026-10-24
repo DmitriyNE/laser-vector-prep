@@ -328,6 +328,126 @@ pub fn add_center_arc(p: &mut Pline, from: Point, to: Point, center: Point, ccw:
     p.add(to.x, to.y, 0.0);
 }
 
+/// Simplify a polyline to within `tolerance`: arcs whose sagitta is at most half the
+/// tolerance count as their chord, then Douglas-Peucker with the other half runs over the
+/// straight runs. Larger arcs and the vertices that bound them are kept exactly. Closed
+/// polylines without kept arcs use vertex 0 and the vertex farthest from it as anchors.
+pub fn simplify(p: &Pline, tolerance: f64) -> Pline {
+    let n = p.vertex_count();
+    if tolerance <= 0.0 || n < 3 {
+        return p.clone();
+    }
+    let half = tolerance / 2.0;
+    let mut flat = if p.is_closed() {
+        Pline::new_closed()
+    } else {
+        Pline::new()
+    };
+    for i in 0..n {
+        let v = p.at(i);
+        let w = p.at((i + 1) % n);
+        let chord = (w.x - v.x).hypot(w.y - v.y);
+        let sagitta = v.bulge.abs() * chord / 2.0;
+        let bulge = if v.bulge != 0.0 && sagitta <= half {
+            0.0
+        } else {
+            v.bulge
+        };
+        flat.add(v.x, v.y, bulge);
+    }
+    let p = &flat;
+    let tolerance = half;
+    let pt = |i: usize| {
+        let v = p.at(i % n);
+        Point::new(v.x, v.y)
+    };
+    let closed = p.is_closed();
+    let seg_count = if closed { n } else { n - 1 };
+    // Anchors: vertices that start or end an arc segment, the ends of an open polyline.
+    let mut keep = vec![false; n];
+    for i in 0..seg_count {
+        if p.at(i).bulge != 0.0 {
+            keep[i] = true;
+            keep[(i + 1) % n] = true;
+        }
+    }
+    if !closed {
+        keep[0] = true;
+        keep[n - 1] = true;
+    }
+    if !keep.iter().any(|k| *k) {
+        keep[0] = true;
+        let far = (1..n)
+            .max_by(|&a, &b| {
+                let (pa, pb, o) = (pt(a), pt(b), pt(0));
+                (pa.x - o.x)
+                    .hypot(pa.y - o.y)
+                    .partial_cmp(&(pb.x - o.x).hypot(pb.y - o.y))
+                    .unwrap()
+            })
+            .unwrap_or(n / 2);
+        keep[far] = true;
+    }
+    fn seg_dist(p: Point, a: Point, b: Point) -> f64 {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let l2 = dx * dx + dy * dy;
+        if l2 <= 0.0 {
+            return (p.x - a.x).hypot(p.y - a.y);
+        }
+        let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / l2).clamp(0.0, 1.0);
+        (p.x - (a.x + t * dx)).hypot(p.y - (a.y + t * dy))
+    }
+    // Douglas-Peucker on each straight run between consecutive anchors (indices may wrap).
+    let anchors: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();
+    let runs: Vec<(usize, usize)> = if closed {
+        (0..anchors.len())
+            .map(|k| (anchors[k], anchors[(k + 1) % anchors.len()]))
+            .collect()
+    } else {
+        anchors.windows(2).map(|w| (w[0], w[1])).collect()
+    };
+    for (start, end) in runs {
+        let len = if end > start {
+            end - start
+        } else {
+            end + n - start
+        };
+        if len < 2 || p.at(start).bulge != 0.0 {
+            continue;
+        }
+        let mut stack = vec![(0usize, len)];
+        while let Some((lo, hi)) = stack.pop() {
+            if hi <= lo + 1 {
+                continue;
+            }
+            let (a, b) = (pt(start + lo), pt(start + hi));
+            let (mut best, mut at) = (0.0, lo);
+            for k in lo + 1..hi {
+                let dk = seg_dist(pt(start + k), a, b);
+                if dk > best {
+                    best = dk;
+                    at = k;
+                }
+            }
+            if best > tolerance {
+                keep[(start + at) % n] = true;
+                stack.push((lo, at));
+                stack.push((at, hi));
+            }
+        }
+    }
+    let mut out = if closed {
+        Pline::new_closed()
+    } else {
+        Pline::new()
+    };
+    for (i, _) in keep.iter().enumerate().filter(|(_, k)| **k) {
+        let v = p.at(i);
+        out.add(v.x, v.y, v.bulge);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +552,34 @@ mod tests {
             }
             prop_assert!((length(&p) - expected).abs() <= 1e-7 * (1.0 + expected));
         }
+    }
+
+    #[test]
+    fn simplify_drops_near_collinear_vertices_and_keeps_arcs() {
+        // A 10 x 10 square whose bottom edge wiggles by 1 um; simplified at 10 um it is
+        // the plain square again.
+        let mut pts = vec![Point::new(0.0, 0.0)];
+        for k in 1..100 {
+            pts.push(Point::new(
+                k as f64 * 0.1,
+                if k % 2 == 0 { 0.001 } else { -0.001 },
+            ));
+        }
+        pts.extend([
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+        ]);
+        let p = from_points(pts, true);
+        let s = simplify(&p, 0.01);
+        assert_eq!(s.vertex_count(), 4, "{}", s.vertex_count());
+        assert!((s.area() - 100.0).abs() < 1e-9);
+        // Within tolerance of the original everywhere: the wiggle is smaller than it.
+        assert_eq!(simplify(&p, 0.0001).vertex_count(), p.vertex_count());
+        // Arcs survive untouched.
+        let c = circle(Point::new(0.0, 0.0), 1.0);
+        let sc = simplify(&c, 0.5);
+        assert_eq!(sc.vertex_count(), 2);
+        assert!((sc.area() - std::f64::consts::PI).abs() < 1e-12);
     }
 }

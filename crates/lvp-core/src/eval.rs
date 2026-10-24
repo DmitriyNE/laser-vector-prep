@@ -799,7 +799,7 @@ fn envelope(
             }
             Region::from_loops([pline::circle(c, radius)], LoopRule::NonZero)
         }
-        EnvelopeProvider::Buffer { distance_mm } => {
+        EnvelopeProvider::Buffer { distance_mm, join } => {
             let base = union_ref(diags);
             if *distance_mm <= 0.0 {
                 diags.push(Diagnostic::warning(
@@ -807,9 +807,9 @@ fn envelope(
                     "buffer distance is not positive; the envelope adds no exterior band",
                 ));
             }
-            base.offset(*distance_mm)
+            base.offset_join(*distance_mm, *join)
         }
-        EnvelopeProvider::ConvexHull { distance_mm } => {
+        EnvelopeProvider::ConvexHull { distance_mm, join } => {
             let hull = geom::convex_hull(&reference_points(refs));
             if hull.len() < 3 {
                 diags.push(Diagnostic::error(
@@ -822,7 +822,7 @@ fn envelope(
             if *distance_mm == 0.0 {
                 base
             } else {
-                base.offset(*distance_mm)
+                base.offset_join(*distance_mm, *join)
             }
         }
     }
@@ -1300,8 +1300,20 @@ mod tests {
                 "circle",
                 EnvelopeProvider::BoundingCircle { margin_mm: 0.5 },
             ),
-            ("buffer", EnvelopeProvider::Buffer { distance_mm: 0.5 }),
-            ("hull", EnvelopeProvider::ConvexHull { distance_mm: 0.5 }),
+            (
+                "buffer",
+                EnvelopeProvider::Buffer {
+                    distance_mm: 0.5,
+                    join: JoinStyle::Round,
+                },
+            ),
+            (
+                "hull",
+                EnvelopeProvider::ConvexHull {
+                    distance_mm: 0.5,
+                    join: JoinStyle::Round,
+                },
+            ),
         ];
         for (name, provider) in providers {
             profile.working_layers.push(envelope_layer(
@@ -1481,5 +1493,41 @@ mod tests {
                 .iter()
                 .any(|d| d.code == "eval.subject_outside_domain")
         );
+    }
+
+    #[test]
+    fn buffer_envelope_honours_the_join_style() {
+        let mut sources = Sources::default();
+        sources.add("board.dxf", board());
+        let mut profile = pcb_positive_ldi();
+        profile.working_layers.push(WorkingLayer {
+            id: LayerId::new("env"),
+            name: "env".into(),
+            kind: GeometryKind::Envelope,
+            inputs: vec![Operand::Source(SourceId::new("src-outline"))],
+            operands: Vec::new(),
+            op: LayerOp::Union,
+            envelope: Some(EnvelopeProvider::Buffer {
+                distance_mm: 1.0,
+                join: JoinStyle::Miter { limit: 4.0 },
+            }),
+            interpretation: Interpretation {
+                loop_rule: LoopRuleCfg::MergeThenNest,
+                stroke_width: StrokeWidth::None,
+            },
+            passes: Vec::new(),
+            enabled: true,
+            reference_only: true,
+        });
+        let ev = Evaluator::new().evaluate(&profile, &sources);
+        let Geometry::Region(r) = &ev.layers[&LayerId::new("env")].geometry else {
+            panic!()
+        };
+        // The outline rectangle (−2..40 × −2..20) grown by 1 with mitred corners.
+        assert!((r.area() - 44.0 * 24.0).abs() < 1e-9, "{}", r.area());
+        // JSON: a round join is omitted, a mitre is written with its limit.
+        let json = profile::to_json(&profile);
+        assert!(json.contains("\"join\": {"), "{json}");
+        assert!(json.contains("\"kind\": \"miter\""));
     }
 }

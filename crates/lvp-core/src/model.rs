@@ -131,12 +131,45 @@ pub enum EnvelopeProvider {
     /// Smallest enclosing circle of the reference set, grown by a radial margin.
     #[serde(rename_all = "camelCase")]
     BoundingCircle { margin_mm: f64 },
-    /// `buffer(reference_region, distance)` with round joins.
+    /// `buffer(reference_region, distance)` with the given corner joins (round by default).
     #[serde(rename_all = "camelCase")]
-    Buffer { distance_mm: f64 },
-    /// `buffer(convexHull(reference), distance)` with round joins.
+    Buffer {
+        distance_mm: f64,
+        #[serde(default, skip_serializing_if = "JoinStyle::is_round")]
+        join: JoinStyle,
+    },
+    /// `buffer(convexHull(reference), distance)` with the given corner joins.
     #[serde(rename_all = "camelCase")]
-    ConvexHull { distance_mm: f64 },
+    ConvexHull {
+        distance_mm: f64,
+        #[serde(default, skip_serializing_if = "JoinStyle::is_round")]
+        join: JoinStyle,
+    },
+}
+
+/// How an offset turns a corner it moves away from: an exact arc around the corner (round),
+/// the two offset edges extended until they meet (miter, bevelled when the tip would lie
+/// farther than `limit` × distance from the corner), or a straight chord (bevel).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum JoinStyle {
+    #[default]
+    Round,
+    Miter {
+        #[serde(default = "default_miter_limit")]
+        limit: f64,
+    },
+    Bevel,
+}
+
+fn default_miter_limit() -> f64 {
+    4.0
+}
+
+impl JoinStyle {
+    pub fn is_round(&self) -> bool {
+        matches!(self, JoinStyle::Round)
+    }
 }
 
 /// How a layer combines its two operand groups: `union(inputs) op union(operands)`.
@@ -242,6 +275,16 @@ pub enum Pattern {
         first_offset_mm: Option<f64>,
         #[serde(default = "default_true")]
         gap_fill: bool,
+        /// How far beyond the innermost ring the centreline gap fill starts: the swept
+        /// half-width credited to the last ring. Default `pitch / 2`. Larger values keep the
+        /// gap-fill centrelines farther from the last ring (less double exposure); smaller
+        /// values fill narrower cores.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_spacing_mm: Option<f64>,
+        /// Simplifying tolerance for the rings' straight runs (mm, Douglas-Peucker; arcs are
+        /// kept exactly); `None` keeps every vertex. Clamped to a quarter of the pitch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplify_mm: Option<f64>,
     },
     /// Trace the region boundary (outers and holes) at a geometric offset, optionally as
     /// several rings. Kerf compensation is a user-entered distance, applied outward from the
@@ -268,6 +311,9 @@ pub enum Pattern {
         /// Emit holes before the outer contour that contains them (cutting order).
         #[serde(default = "default_true")]
         inner_first: bool,
+        /// Corner joins of the offset rings (round, miter, bevel).
+        #[serde(default, skip_serializing_if = "JoinStyle::is_round")]
+        join: JoinStyle,
     },
     /// Equally spaced parallel scanlines clipped to the region and its holes.
     #[serde(rename_all = "camelCase")]

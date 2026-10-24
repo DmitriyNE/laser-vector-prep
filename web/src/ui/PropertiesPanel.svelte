@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Operand, StrokeWidth, OptimizerMode } from "../core/types.js";
+  import type { Operand, StrokeWidth, OptimizerMode, JoinStyle } from "../core/types.js";
   import { hexRgb, rgbHex, type ProjectStore } from "../state/project.svelte.js";
 
   let { store }: { store: ProjectStore } = $props();
@@ -145,6 +145,22 @@
   }
 </script>
 
+{#snippet joinEditor(get: () => JoinStyle | undefined, set: (j: JoinStyle) => void)}
+  {@const j = get() ?? { kind: "round" }}
+  <label>Corner joins
+    <select value={j.kind} onchange={(e) => { const k = (e.currentTarget as HTMLSelectElement).value; store.update(() => set(k === "miter" ? { kind: "miter", limit: 4 } : k === "bevel" ? { kind: "bevel" } : { kind: "round" })); }}>
+      <option value="round">round (exact arcs)</option>
+      <option value="miter">miter (sharp corners)</option>
+      <option value="bevel">bevel (cut corners)</option>
+    </select>
+  </label>
+  {#if j.kind === "miter"}
+    <label>Miter limit (× distance; sharper corners are bevelled)
+      <input type="number" step="0.5" min="1" value={j.limit} oninput={(e) => { const v = Number((e.currentTarget as HTMLInputElement).value); if (v >= 1) store.update(() => set({ kind: "miter", limit: v })); }} />
+    </label>
+  {/if}
+{/snippet}
+
 {#snippet operandBoxes(ops: Operand[])}
   {#each store.profile.sourceBindings as b (b.id)}
     <label class="check">
@@ -186,6 +202,10 @@
         <label>Margin (mm) <input type="number" step="0.1" bind:value={env.marginMm} oninput={touch} /></label>
       {:else if env.provider === "buffer" || env.provider === "convexHull"}
         <label>Distance (mm) <input type="number" step="0.1" bind:value={env.distanceMm} oninput={touch} /></label>
+        {@render joinEditor(
+          () => (env.provider === "buffer" || env.provider === "convexHull" ? env.join : undefined),
+          (jn) => { if (env.provider === "buffer" || env.provider === "convexHull") env.join = jn; },
+        )}
       {/if}
       <fieldset>
         <legend>Reference set</legend>
@@ -263,6 +283,16 @@
           oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.firstOffsetMm = v === "" ? null : Number(v); }); }} />
       </label>
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.gapFill} onchange={touch} /> centreline gap fill for narrow cores</label>
+      {#if pass.pattern.gapFill}
+        <label>End spacing (mm beyond the last ring where gap fill starts, empty = pitch/2)
+          <input type="number" step="0.001" min="0" value={pass.pattern.endSpacingMm ?? ""}
+            oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.endSpacingMm = v === "" ? null : Number(v); }); }} />
+        </label>
+      {/if}
+      <label>Simplify rings (mm, empty = off, at most pitch/4)
+        <input type="number" step="0.0005" min="0" value={pass.pattern.simplifyMm ?? ""}
+          oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.simplifyMm = v === "" ? null : Number(v); }); }} />
+      </label>
     {:else if pass.pattern.kind === "boundaryTrace"}
       <label>Side
         <select bind:value={pass.pattern.side} onchange={touch}>
@@ -277,6 +307,10 @@
       {#if pass.pattern.rings > 1}
         <label>Ring spacing (mm) <input type="number" step="0.01" min="0.001" bind:value={pass.pattern.ringSpacingMm} oninput={touch} /></label>
       {/if}
+      {@render joinEditor(
+        () => (pass.pattern.kind === "boundaryTrace" ? pass.pattern.join : undefined),
+        (jn) => { if (pass.pattern.kind === "boundaryTrace") pass.pattern.join = jn; },
+      )}
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.innerFirst} onchange={touch} /> holes before outer contours (cutting order)</label>
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
     {:else if pass.pattern.kind === "hatch"}

@@ -210,7 +210,7 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
             (GeometryKind::Envelope, None) => out.push(
                 Diagnostic::error("profile.envelope_provider", format!("envelope layer {:?} has no provider", l.name)).with_context(l.id.to_string()),
             ),
-            (GeometryKind::Envelope, Some(EnvelopeProvider::Buffer { distance_mm })) if *distance_mm <= 0.0 => out.push(
+            (GeometryKind::Envelope, Some(EnvelopeProvider::Buffer { distance_mm, .. })) if *distance_mm <= 0.0 => out.push(
                 Diagnostic::warning("profile.envelope_distance", format!("envelope {:?} buffers by {distance_mm} mm; a positive distance is needed for an exterior band", l.name))
                     .with_context(l.id.to_string()),
             ),
@@ -256,6 +256,20 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                             Diagnostic::error(
                                 "profile.pitch",
                                 format!("pass {:?} has a non-positive pitch", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                    if let Pattern::ContourFill {
+                        end_spacing_mm: Some(e),
+                        ..
+                    } = &p.pattern
+                        && *e < 0.0
+                    {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.end_spacing",
+                                format!("pass {:?} has a negative end spacing", p.name),
                             )
                             .with_context(p.id.to_string()),
                         );
@@ -623,7 +637,10 @@ pub fn pcb_negative_hatch() -> Profile {
         envelope_layer(
             "wl-clearance",
             "Copper + 50 um clearance",
-            EnvelopeProvider::Buffer { distance_mm: 0.05 },
+            EnvelopeProvider::Buffer {
+                distance_mm: 0.05,
+                join: JoinStyle::Round,
+            },
             vec![Operand::Layer(LayerId::new("wl-copper"))],
         ),
         background,
@@ -725,6 +742,7 @@ pub fn boundary_cutting() -> Profile {
                 ring_spacing_mm: 0.0,
                 reverse: false,
                 inner_first: true,
+                join: JoinStyle::Round,
             },
             "grp-cut",
         )],
@@ -782,6 +800,8 @@ pub fn pcb_positive_ldi() -> Profile {
                     pitch_mm: 0.02,
                     first_offset_mm: None,
                     gap_fill: true,
+                    end_spacing_mm: None,
+                    simplify_mm: None,
                 },
                 group: GroupId::new("grp-copper"),
                 enabled: true,
@@ -911,6 +931,8 @@ mod tests {
             pitch_mm: 0.0,
             first_offset_mm: None,
             gap_fill: true,
+            end_spacing_mm: None,
+            simplify_mm: None,
         };
         let d = validate(&p);
         assert!(d.has_errors());

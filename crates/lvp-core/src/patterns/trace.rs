@@ -3,7 +3,7 @@
 
 use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 
-use crate::model::OffsetSide;
+use crate::model::{JoinStyle, OffsetSide};
 use crate::pline::Pline;
 use crate::region::Region;
 
@@ -16,6 +16,7 @@ pub struct TraceParams {
     pub ring_spacing_mm: f64,
     pub reverse: bool,
     pub inner_first: bool,
+    pub join: JoinStyle,
 }
 
 /// Offsets for each ring, signed relative to the filled region (positive grows).
@@ -49,7 +50,7 @@ pub fn boundary_trace_ordered(
     let mut out: Vec<Pline> = Vec::new();
     let mut precedence = Vec::new();
     for d in ring_offsets(p) {
-        let ring = region.offset(d);
+        let ring = region.offset_join(d, p.join);
         // Holes (clockwise) first when cutting: inner features before the outer contour.
         let (holes, outers): (Vec<&Pline>, Vec<&Pline>) =
             ring.loops.iter().partition(|l| l.area() < 0.0);
@@ -126,6 +127,7 @@ mod tests {
             ring_spacing_mm: spacing,
             reverse: false,
             inner_first: true,
+            join: JoinStyle::Round,
         }
     }
 
@@ -191,5 +193,32 @@ mod tests {
             paths[0].area() > 0.0 && paths[1].area() < 0.0,
             "orientation flipped, order kept"
         );
+    }
+
+    #[test]
+    fn mitred_kerf_keeps_square_corners() {
+        let square = Region::from_loops(
+            [rect(Point::new(0.0, 0.0), Point::new(10.0, 10.0))],
+            LoopRule::NonZero,
+        );
+        let params = |join| TraceParams {
+            side: OffsetSide::Outside,
+            offset_mm: 0.5,
+            kerf_mm: 0.0,
+            rings: 1,
+            ring_spacing_mm: 0.0,
+            reverse: false,
+            inner_first: true,
+            join,
+        };
+        let round = boundary_trace(&square, &params(JoinStyle::Round));
+        let mitre = boundary_trace(&square, &params(JoinStyle::Miter { limit: 4.0 }));
+        assert!((round[0].area() - (121.0 - 1.0 + PI * 0.25)).abs() < 1e-9);
+        assert!(
+            (mitre[0].area() - 121.0).abs() < 1e-9,
+            "{}",
+            mitre[0].area()
+        );
+        assert_eq!(mitre[0].vertex_count(), 4);
     }
 }
