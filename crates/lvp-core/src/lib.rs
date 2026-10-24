@@ -9,6 +9,7 @@ pub mod arc;
 pub mod diag;
 pub mod dxf;
 pub mod eval;
+pub mod export;
 pub mod flatten;
 pub mod geom;
 pub mod model;
