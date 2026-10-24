@@ -7,10 +7,16 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+boostvoronoi.workspace = true
 cavalier_contours.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+# boostvoronoi -> cpp_map -> rand -> getrandom: on wasm32 it needs the JS backend (see
+# `.cargo/config.toml` for the matching --cfg flag).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 proptest.workspace = true

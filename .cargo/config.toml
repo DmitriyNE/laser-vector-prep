@@ -7,6 +7,8 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
   "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+  # getrandom (via boostvoronoi -> cpp_map -> rand) needs an explicit backend on wasm32.
+  "--cfg", "getrandom_backend=\"wasm_js\"",
   "-C", "link-arg=--shared-memory",
   "-C", "link-arg=--import-memory",
   "-C", "link-arg=--max-memory=1073741824",

@@ -588,24 +588,36 @@ fn merge_then_nest(ccw: Vec<Pline>) -> Vec<Pline> {
 /// Round-capped, round-joined stroke of `width` around an open or closed path, as a region.
 /// Built as the union of one capsule per segment, so arcs stay exact.
 pub fn stroke(path: &Pline, width: f64) -> Region {
+    stroke_many(std::slice::from_ref(path), width)
+}
+
+/// Union of the strokes of many paths in one boolean (the swept area of a tool path set).
+pub fn stroke_many(paths: &[Pline], width: f64) -> Region {
     let r = width / 2.0;
-    if r.is_nan() || r <= 0.0 || path.vertex_count() < 2 {
+    if r.is_nan() || r <= 0.0 {
         return Region::empty();
     }
     let mut capsules: Vec<Pline> = Vec::new();
-    for (v1, v2) in path.iter_segments() {
+    for (v1, v2) in paths
+        .iter()
+        .filter(|p| p.vertex_count() >= 2)
+        .flat_map(|p| p.iter_segments())
+    {
         let a = pt(v1.pos());
         let b = pt(v2.pos());
         if a.distance(b) <= 1e-12 {
             continue;
         }
         match Arc::from_bulge(a, b, v1.bulge) {
-            Some(arc) if arc.radius > r => capsules.push(arc_capsule(&arc, r)),
+            Some(arc) if arc_capsule_is_well_formed(&arc, r) => capsules.push(arc_capsule(&arc, r)),
             Some(arc) => {
-                // Arc tighter than the stroke radius: fall back to flattened lines.
+                // Arc tighter than the stroke radius, or offset arcs collapsing to a point:
+                // fall back to flattened line capsules.
                 if let Ok(pts) = arc.flatten(r * 0.05) {
                     for w in pts.windows(2) {
-                        capsules.push(line_capsule(w[0], w[1], r));
+                        if w[0].distance(w[1]) > pline::REPEAT_EPS {
+                            capsules.push(line_capsule(w[0], w[1], r));
+                        }
                     }
                 }
             }
@@ -613,6 +625,16 @@ pub fn stroke(path: &Pline, width: f64) -> Region {
         }
     }
     Region::from_loops(capsules, LoopRule::NonZero)
+}
+
+/// The inner offset arc must keep a usable chord, or the capsule degenerates.
+fn arc_capsule_is_well_formed(arc: &Arc, r: f64) -> bool {
+    if arc.radius <= r {
+        return false;
+    }
+    let chord = arc.start().distance(arc.end());
+    let inner_chord = chord * (arc.radius - r) / arc.radius;
+    inner_chord > 10.0 * pline::REPEAT_EPS
 }
 
 fn unit(p: Point) -> Point {

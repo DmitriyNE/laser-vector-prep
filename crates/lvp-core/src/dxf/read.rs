@@ -1410,11 +1410,17 @@ pub fn read_str(text: &str, opts: &ReadOptions) -> Result<DxfDocument, DxfReadEr
         })
         .collect();
     for (layer, prim) in placed {
+        // Convert to mm and drop coincident vertices (a zero-length arc is undefined).
         let prim = match prim {
-            Primitive::Path { pline, width } => Primitive::Path {
-                pline: transform_pline(&pline, &unit_xf, opts.tolerance_mm),
-                width: width.map(|w| w * scale),
-            },
+            Primitive::Path { pline, width } => {
+                match pline::sanitize(&transform_pline(&pline, &unit_xf, opts.tolerance_mm)) {
+                    Some(pline) => Primitive::Path {
+                        pline,
+                        width: width.map(|w| w * scale),
+                    },
+                    None => continue,
+                }
+            }
             Primitive::Hatch {
                 loops,
                 rule,
@@ -1423,7 +1429,9 @@ pub fn read_str(text: &str, opts: &ReadOptions) -> Result<DxfDocument, DxfReadEr
             } => Primitive::Hatch {
                 loops: loops
                     .iter()
-                    .map(|l| transform_pline(l, &unit_xf, opts.tolerance_mm))
+                    .filter_map(|l| {
+                        pline::sanitize(&transform_pline(l, &unit_xf, opts.tolerance_mm))
+                    })
                     .collect(),
                 rule,
                 solid,

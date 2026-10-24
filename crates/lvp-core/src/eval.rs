@@ -651,7 +651,8 @@ mod tests {
         assert_eq!(r.holes().count(), 1);
         let fill = e.pass(&PassId::new("pass-copper-fill")).unwrap();
         assert!(!fill.paths.is_empty());
-        assert!(fill.paths.iter().all(|p| p.is_closed()));
+        // Rings are closed; gap-fill centrelines (open) are legitimate too.
+        assert!(fill.paths.iter().filter(|p| p.is_closed()).count() > 10);
         let outline = e.pass(&PassId::new("pass-outline")).unwrap();
         assert_eq!(outline.paths.len(), 1);
         assert!(e.unbound_layers.is_empty());

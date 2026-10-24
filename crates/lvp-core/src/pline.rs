@@ -164,6 +164,26 @@ pub fn length(p: &Pline) -> f64 {
     p.path_length()
 }
 
+/// Positions closer than this are the same vertex. Below any manufacturing relevance, above
+/// cavalier's own fuzzy epsilon (so its debug assertions on coincident vertices hold).
+pub const REPEAT_EPS: f64 = 1e-6;
+
+/// Remove coincident consecutive vertices (including a closing duplicate of the first
+/// vertex). Returns `None` when fewer than two vertices remain. Every polyline entering the
+/// kernel must pass through here: a zero-length arc segment is undefined.
+pub fn sanitize(p: &Pline) -> Option<Pline> {
+    let mut q = p.remove_repeat_pos(REPEAT_EPS).unwrap_or_else(|| p.clone());
+    if q.is_closed()
+        && q.vertex_count() >= 2
+        && q.at(0)
+            .pos()
+            .fuzzy_eq_eps(q.last().expect("non-empty").pos(), REPEAT_EPS)
+    {
+        q.remove_last();
+    }
+    (q.vertex_count() >= 2).then_some(q)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +229,28 @@ mod tests {
         let pts = flatten(&c, 1e-3).unwrap();
         assert!(pts.len() > 8);
         assert!(pts[0].distance(*pts.last().unwrap()) > 1e-3);
+    }
+
+    #[test]
+    fn sanitize_drops_repeats_and_closing_duplicate() {
+        // Two half-circle arcs, each start vertex duplicated, plus a closing duplicate.
+        let mut p = Pline::new_closed();
+        p.add(0.0, 0.0, 1.0);
+        p.add(0.0, 0.0, 1.0);
+        p.add(2.0, 0.0, 1.0);
+        p.add(2.0, 0.0, 1.0);
+        p.add(0.0, 0.0, 0.0);
+        let q = sanitize(&p).unwrap();
+        assert_eq!(q.vertex_count(), 2);
+        assert!(
+            (q.area() - PI).abs() < 1e-9,
+            "unit circle remains: {}",
+            q.area()
+        );
+        let mut single = Pline::new();
+        single.add(1.0, 1.0, 0.0);
+        single.add(1.0, 1.0, 0.0);
+        assert!(sanitize(&single).is_none());
     }
 
     #[test]

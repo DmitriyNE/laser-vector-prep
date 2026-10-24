@@ -4,6 +4,8 @@
 //! never a machine process; cosmetic PDF stroke width and assumed mark width are not
 //! inputs here (except where a coverage audit asks for them explicitly).
 
+pub mod gapfill;
+
 use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 
 use crate::diag::Diagnostic;
@@ -119,14 +121,35 @@ fn contour_fill(
     }
     out.stats.rings = rings;
     if gap_fill {
-        // Centreline finish for cores narrower than a pitch arrives with the medial-axis
-        // step; until then the request is recorded, not silently dropped.
-        out.diagnostics.push(Diagnostic::info(
-            "pattern.gap_fill_pending",
-            "gap fill is not implemented yet; rings only",
-        ));
+        let gaps = gapfill::uncovered(region, &out.paths, pitch_mm);
+        if !gaps.is_empty() {
+            let (lines, skipped) = gapfill::centrelines(
+                &gaps,
+                &gapfill::GapFillOptions {
+                    assumed_width_mm: pitch_mm,
+                    flatten_tolerance_mm: (pitch_mm * 0.01).max(1e-5),
+                    min_length_mm: pitch_mm / 2.0,
+                },
+            );
+            out.stats.gap_fills = lines.len();
+            out.paths.extend(lines);
+            if skipped > 0 {
+                out.diagnostics.push(Diagnostic::warning(
+                    "pattern.gap_fill_skipped",
+                    format!(
+                        "{skipped} uncovered sliver(s) were too thin or degenerate for a centreline"
+                    ),
+                ));
+            }
+        }
     }
     out
+}
+
+/// Area of `region` left unswept by `paths` when each is assumed `width` wide: the "missed
+/// area" audit of the spec. A geometric surrogate, not an exposure model.
+pub fn missed_area(region: &Region, paths: &[Pline], width: f64) -> f64 {
+    gapfill::uncovered(region, paths, width).area().max(0.0)
 }
 
 #[cfg(test)]
@@ -194,6 +217,37 @@ mod tests {
             areas
                 .iter()
                 .any(|a| (a + std::f64::consts::PI * 3.5 * 3.5).abs() < 1e-9)
+        );
+    }
+
+    #[test]
+    fn gap_fill_reduces_missed_area_without_touching_rings() {
+        // A 20 mm bar 0.45 mm wide: one ring at 0.05, nothing at 0.15 -> a core gap remains.
+        let bar = Region::from_loops(
+            [rect(Point::new(0.0, 0.0), Point::new(20.0, 0.45))],
+            LoopRule::NonZero,
+        );
+        let pattern = |gap| Pattern::ContourFill {
+            pitch_mm: 0.1,
+            first_offset_mm: None,
+            gap_fill: gap,
+        };
+        let plain = generate(&pattern(false), &Geometry::Region(bar.clone()));
+        let filled = generate(&pattern(true), &Geometry::Region(bar.clone()));
+        assert!(filled.stats.gap_fills >= 1);
+        assert_eq!(
+            filled.paths.len(),
+            plain.paths.len() + filled.stats.gap_fills
+        );
+        for (a, b) in plain.paths.iter().zip(filled.paths.iter()) {
+            assert_eq!(a.vertex_count(), b.vertex_count(), "rings unchanged");
+        }
+        let missed_plain = missed_area(&bar, &plain.paths, 0.1);
+        let missed_filled = missed_area(&bar, &filled.paths, 0.1);
+        assert!(missed_plain > 0.5, "plain misses {missed_plain}");
+        assert!(
+            missed_filled < 0.1 * missed_plain,
+            "filled misses {missed_filled} vs {missed_plain}"
         );
     }
 
