@@ -59,11 +59,30 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 - [ ] Preset pitches (20 µm fill, 50 µm marking) are starting points, not measured values;
       revisit once the machine has been characterised
 
-## M3 — breadth and optimization
+## M3 — breadth and optimization (started 2026-10-24; D22, D23)
 
-- [ ] Gerber RS-274X, SVG, vector PDF subset readers
-- [ ] Path ordering modes, bleed-aware optimizer + heatmap
-- [ ] SVG/DXF export
+Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF export.
+
+- [ ] Shared source document; file-name glob and layer-function match rules; format
+      detection by content
+- [ ] Gerber RS-274X reader: apertures C/R/O/P, macros with variables and expressions,
+      D01/D02/D03, G01/G02/G03 with G74/G75, G36/G37 regions, LP polarity compositing in
+      source order, SR, AB, LM/LR/LS, X2 attributes (TF.FileFunction → layer function);
+      synthetic Gerber fixtures
+- [ ] Path optimizer: nearest-endpoint baseline, 2-opt / or-opt moves, open-path reversal,
+      seam choice on loops; modes as-generated / minimum jump / bleed-aware with protected
+      regions; jump footprint heatmap; inside-before-outside constraint for cutting passes;
+      objective before/after in the UI
+- [ ] SVG reader via usvg (text refused, clip paths applied as intersections, masks/filters
+      diagnosed)
+- [ ] Vector PDF reader: lopdf object model + own content-stream interpreter (paths,
+      transforms, colours, page scale); region vs trajectory interpretation per layer
+- [ ] GDSII reader: BOUNDARY, PATH (pathtype ends), BOX, SREF/AREF flattening,
+      layer/datatype as layer names, UNITS; TEXT/NODE diagnosed
+- [ ] IPC-2581 reader: Layer + LayerFeature sets, standard/user primitive dictionaries,
+      line descriptors, polarity, Profile; layerFunction as layer function
+- [ ] SVG and DXF export of generated paths per output group
+- [ ] Gap fill refinements (`end_spacing`, join style) from the M1 list
 
 ## M4 — robustness/release
 

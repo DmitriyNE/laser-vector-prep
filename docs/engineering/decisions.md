@@ -227,3 +227,27 @@ island grouping. Chosen over an R-tree crate because loops on PCB artwork are si
 size, the grid is deterministic and adds no dependency. Measured on synthetic boards: dense
 5000 pads 3.0 s → 121 ms, sparse 240 → 21 ms, one large blob 530 → 92 ms. This closes the
 M1 question whether `i_overlay` would be needed for performance.
+
+## D22 — M3 readers: usvg and lopdf as libraries, Gerber (and later GDSII, IPC-2581) our own (2026-10-24)
+
+Spike numbers on top of the 1.05 MB wasm: usvg 0.49 without text +0.52 MB / 22 crates,
+lopdf 0.46 +0.75 MB / 61 crates, gerber_parser 0.5 +1.75 MB / 49 crates (regex, chrono,
+strum). Owner chose libraries where they buy fidelity we would otherwise get wrong (SVG CSS,
+`use`, symbols, viewBox; PDF xref/object streams and filters) and our own parsers where the
+grammar is small: RS-274X including aperture macros, step-and-repeat, polarity and X2
+attributes. PDF content-stream geometry (path operators, transforms, colours) is our code on
+top of lopdf's object model. Owner added GDSII (binary records; own parser) and IPC-2581
+(XML via roxmltree; own interpretation of the feature dictionaries) to M3 after the
+spec's three formats. Order chosen: Gerber → path optimizer → SVG → PDF → GDSII →
+IPC-2581 → SVG/DXF export, each committed and usable on its own.
+
+## D23 — Source layers carry a function; slots match by file-name glob and function (2026-10-24)
+
+One-layer-per-file formats (Gerber) and formats that declare what a layer is (Gerber X2
+`TF.FileFunction`, IPC-2581 `layerFunction`) need rules beyond the exact layer name. Owner
+chose: a case-insensitive glob on the file name (`*` and `?` only, no regex) and a glob on
+a per-layer `function` string that each reader fills in when the format declares it
+(`Copper,L1,Top`, `Profile,NP`, …). Both are ordinary `MatchRule` variants, so the
+first-match-wins slot semantics and the explicit-mapping UI are unchanged. The source
+document type is shared by all readers (`source::SourceDocument`); a file is detected by
+extension and content, never by trusting the extension alone.

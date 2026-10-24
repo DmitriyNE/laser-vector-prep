@@ -1,6 +1,6 @@
 # Laser Vector Prep — browser-only geometry and toolpath preprocessor
 
-**Coding-agent handoff specification · v1.3 · 2026-10-24**  
+**Coding-agent handoff specification · v1.4 · 2026-10-24**  
 **Status:** requirements, not an implementation  
 **Delivery:** static web application. All file parsing, geometry operations, path generation, preview, optimization, profile management and export must run in the browser.
 
@@ -55,6 +55,8 @@ Parsing is local and does not execute uploaded code, resolve external URLs, or r
 | **Gerber RS-274X** | Units, strokes/flashes/arcs/regions, apertures, clear/dark polarity in source order, step-and-repeat and relevant attributes. Each file may map to a source layer. |
 | **SVG** | Paths, standard shapes, fills/strokes, units/viewBox, grouping and nested transforms, fill rules, declared support for clipping. Warn/block unsupported masks/text/images/filters that affect output geometry. |
 | **Vector PDF** | A documented supported vector subset: stroked paths, filled paths, transforms, colors and real page scale. User-selectable region-artwork vs trajectory-passthrough interpretation. Unsupported appearance features must not silently become raster approximations. |
+| **GDSII** (added v1.4) | Units from the UNITS record; BOUNDARY polygons, PATH with width and path-type end styles, BOX; SREF/AREF cell references flattened with their transforms; layer/datatype pairs as source layers. TEXT and NODE reported, not geometry. |
+| **IPC-2581** (added v1.4) | Units and layer dictionary; per-layer feature sets with standard and user primitive dictionaries, line descriptors (width, end style), positive/negative polarity in source order, board profile; `layerFunction` exposed for profile binding. Component/netlist data ignored. |
 
 Interpretation must distinguish **linework centerlines** from **filled regions**. A stroked open path is not a closed area just because an output laser process exists. Permit explicit stroke expansion to a region using original or user-specified width, with correct joins and caps. Region-only operations (boolean inversion, region fill) must diagnose unresolved open geometry; never close an open path implicitly.
 
