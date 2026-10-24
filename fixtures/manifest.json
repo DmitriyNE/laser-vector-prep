@@ -431,6 +431,43 @@
         "0.6 green rounds to 0x99; CMYK and gray paints are converted to RGB names the same way"
       ],
       "units": "pt"
+    },
+    {
+      "description": "PAD cell (20 um square on 1/0, 10 um square on 2/0) placed plainly, mirrored + 2x + 90 degrees, and as a 3 x 2 AREF; paths with flush, round, square, custom and mitred shapes on 3/0; a BOX on 4/0; TEXT on 5/0. 1 nm database unit, 1 um user unit.",
+      "expect": {
+        "bounds_mm": [
+          0.0,
+          -0.002,
+          0.31,
+          0.15
+        ],
+        "diagnostics": [
+          "gds.text"
+        ],
+        "layer_1_area_mm2": 0.0044,
+        "layer_1_islands": 8,
+        "layer_2_area_mm2": 0.0011,
+        "layer_3_fill_area_mm2": 0.0009919999999999998,
+        "layer_3_round_paths": 1,
+        "layer_3_round_width_mm": 0.004,
+        "layer_4_area_mm2": 0.0003,
+        "layers": [
+          "1/0",
+          "2/0",
+          "3/0",
+          "4/0"
+        ]
+      },
+      "file": "gds/cells.gds",
+      "format": "gds",
+      "name": "cells",
+      "notes": [
+        "1/0 and 2/0 come from the same PAD cell: 8 placements each (1 + 6 in the array + 1 magnified)",
+        "the mirrored, rotated, magnified placement maps the pad to x in [0.1, 0.14], y in [0, 0.04] mm",
+        "flush/square/custom paths are exact polygons; the round-ended path stays a centreline with width",
+        "the L-shaped flush path is mitred: a 32 x 4 leg plus a 4 x 28 leg (the mitre fills the outer corner)"
+      ],
+      "units": "um"
     }
   ],
   "generator": "lvp-fixtures 0.1.0 (`just fixtures`)"

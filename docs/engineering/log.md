@@ -3,6 +3,16 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — M3 step 5: GDSII
+
+Own stream reader (D22): records → structures → flattened top cells with the GDS reference
+transform (reflect about x, magnify, rotate, translate) composed through SREF/AREF nesting
+with depth and instance caps. Paths with flush, square or custom ends become exact mitred
+polygons; round-ended paths stay centrelines with width. Layers are `layer/datatype`,
+prefixed by the structure name when several top cells exist. A generated fixture
+(`gds/cells.gds`) pins areas, counts and bounds; the reader's own 8-byte real decoding is
+round-trip tested against the emitter.
+
 ## 2026-10-24 — M3 step 4: vector PDF
 
 lopdf for the object model, our interpreter for the content stream (D22). Layers are

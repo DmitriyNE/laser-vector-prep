@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+pub mod gds;
 pub mod gerber;
 pub mod pdf;
 pub mod svg;
@@ -446,11 +447,26 @@ pub fn manifest(fixtures: &[Fixture]) -> Value {
             })
         })
         .collect();
+    let gds_entries: Vec<Value> = gds::all()
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "file": f.file_name(),
+                "format": "gds",
+                "units": "um",
+                "description": f.description,
+                "expect": f.expect,
+                "notes": f.notes,
+            })
+        })
+        .collect();
     let entries: Vec<Value> = entries
         .into_iter()
         .chain(gerber_entries)
         .chain(svg_entries)
         .chain(pdf_entries)
+        .chain(gds_entries)
         .collect();
     json!({
         "generator": format!("lvp-fixtures {} (`just fixtures`)", env!("CARGO_PKG_VERSION")),
@@ -482,6 +498,7 @@ pub fn render() -> Vec<(String, Vec<u8>)> {
             .map(|f| (f.file_name(), f.text.into_bytes())),
     );
     files.extend(pdf::all().into_iter().map(|f| (f.file_name(), f.bytes)));
+    files.extend(gds::all().into_iter().map(|f| (f.file_name(), f.bytes)));
     let mut manifest =
         serde_json::to_string_pretty(&manifest(&fixtures)).expect("manifest serialises");
     manifest.push('\n');

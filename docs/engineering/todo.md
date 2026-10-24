@@ -92,8 +92,11 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       transforms, colours, page scale); region vs trajectory interpretation per layer
 - [ ] PDF: clipping applies to fills only (strokes diagnosed); dash patterns and non-round
       caps are read solid/round; encrypted files are refused
-- [ ] GDSII reader: BOUNDARY, PATH (pathtype ends), BOX, SREF/AREF flattening,
+- [x] GDSII reader: BOUNDARY, PATH (pathtype ends), BOX, SREF/AREF flattening,
       layer/datatype as layer names, UNITS; TEXT/NODE diagnosed
+- [ ] GDSII: a layer map (number → name) could name layers like the EDA tool does; today
+      they are `layer/datatype`
+- [ ] GDSII: angles with absolute-magnification/angle STRANS bits are treated as relative
 - [ ] IPC-2581 reader: Layer + LayerFeature sets, standard/user primitive dictionaries,
       line descriptors, polarity, Profile; layerFunction as layer function
 - [ ] SVG and DXF export of generated paths per output group
