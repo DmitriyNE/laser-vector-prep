@@ -16,9 +16,9 @@ export type Payload =
   | { kind: "getProfile" }
   | { kind: "validateProfile"; profile: Profile }
   | { kind: "evaluate" }
-  | { kind: "previewPass"; id: string; toleranceMm: number }
-  | { kind: "previewLayer"; id: string; toleranceMm: number }
-  | { kind: "previewSource"; file: number; layer: string; toleranceMm: number }
+  | { kind: "previewPass"; id: string }
+  | { kind: "previewLayer"; id: string }
+  | { kind: "previewSource"; file: number; layer: string }
   | { kind: "previewJumps"; id: string }
   | { kind: "heatmap"; id: string }
   | { kind: "exportPdf" }

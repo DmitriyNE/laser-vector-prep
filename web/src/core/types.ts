@@ -246,9 +246,14 @@ export interface Heatmap {
   mask: Uint8Array;
 }
 
-/** Flattened polylines: path i spans coords[2*starts[i] .. 2*starts[i+1]]. */
+/**
+ * Polylines with unflattened arcs: path i has vertices starts[i] .. starts[i+1]; vertex k is
+ * (coords[2k], coords[2k+1]) and bulges[k] is tan(sweep/4) of the segment leaving it (a
+ * closed path's last vertex closes it). Millimetres, y up.
+ */
 export interface Preview {
   coords: Float32Array;
+  bulges: Float32Array;
   starts: Uint32Array;
   closed: Uint8Array;
 }

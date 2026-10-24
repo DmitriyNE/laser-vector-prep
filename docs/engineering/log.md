@@ -3,6 +3,13 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — Arcs end to end
+
+Preview, PDF/SVG export and SVG/PDF import no longer tessellate circular arcs (D26). The
+board's copper rings now render smooth at 3000 px/mm, PDF and SVG exports carry curves,
+and a PDF or SVG exported by the app reads back with its arcs. Readers also close a
+stroked path that returns to its start, as the Gerber reader already did.
+
 ## 2026-10-25 — M3 step 8: gap fill refinements and format reference
 
 Join styles for boundary traces and buffer/hull envelopes, end spacing and ring

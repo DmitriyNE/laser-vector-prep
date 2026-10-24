@@ -10,9 +10,9 @@ const ready = (async () => {
 
 function preview(p: wasm.Preview | undefined): { result: Preview | null; transfer: Transferable[] } {
   if (!p) return { result: null, transfer: [] };
-  const out: Preview = { coords: p.coords, starts: p.starts, closed: p.closed };
+  const out: Preview = { coords: p.coords, bulges: p.bulges, starts: p.starts, closed: p.closed };
   p.free();
-  return { result: out, transfer: [out.coords.buffer, out.starts.buffer, out.closed.buffer] };
+  return { result: out, transfer: [out.coords.buffer, out.bulges.buffer, out.starts.buffer, out.closed.buffer] };
 }
 
 function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
@@ -44,11 +44,11 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
     case "evaluate":
       return { result: JSON.parse(wasm.evaluate()), transfer: [] };
     case "previewPass":
-      return preview(wasm.preview_pass(req.id, req.toleranceMm));
+      return preview(wasm.preview_pass(req.id));
     case "previewLayer":
-      return preview(wasm.preview_layer(req.id, req.toleranceMm));
+      return preview(wasm.preview_layer(req.id));
     case "previewSource":
-      return preview(wasm.preview_source(req.file, req.layer, req.toleranceMm));
+      return preview(wasm.preview_source(req.file, req.layer));
     case "previewJumps":
       return preview(wasm.preview_jumps(req.id));
     case "heatmap": {

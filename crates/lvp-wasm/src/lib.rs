@@ -140,6 +140,11 @@ impl Preview {
     }
 
     #[wasm_bindgen(getter)]
+    pub fn bulges(&self) -> Vec<f32> {
+        self.inner.bulges.clone()
+    }
+
+    #[wasm_bindgen(getter)]
     pub fn starts(&self) -> Vec<u32> {
         self.inner.starts.clone()
     }
@@ -157,27 +162,20 @@ impl From<PreviewBuffer> for Preview {
 }
 
 #[wasm_bindgen]
-pub fn preview_pass(id: &str, tolerance_mm: f64) -> Option<Preview> {
-    with(|p| {
-        p.preview_pass(&PassId::new(id), tolerance_mm)
-            .map(Into::into)
-    })
+pub fn preview_pass(id: &str) -> Option<Preview> {
+    with(|p| p.preview_pass(&PassId::new(id)).map(Into::into))
 }
 
 #[wasm_bindgen]
-pub fn preview_layer(id: &str, tolerance_mm: f64) -> Option<Preview> {
-    with(|p| {
-        p.preview_layer(&LayerId::new(id), tolerance_mm)
-            .map(Into::into)
-    })
+pub fn preview_layer(id: &str) -> Option<Preview> {
+    with(|p| p.preview_layer(&LayerId::new(id)).map(Into::into))
 }
 
 #[wasm_bindgen]
-pub fn preview_source(file: usize, layer: &str, tolerance_mm: f64) -> Option<Preview> {
-    with(|p| p.preview_source(file, layer, tolerance_mm).map(Into::into))
+pub fn preview_source(file: usize, layer: &str) -> Option<Preview> {
+    with(|p| p.preview_source(file, layer).map(Into::into))
 }
 
-/// Hypothetical straight beam-off jumps of a pass, preview only.
 /// Hypothetical jumps of an output group's planned order (preview only, never exported).
 #[wasm_bindgen]
 pub fn preview_jumps(group_id: &str) -> Option<Preview> {

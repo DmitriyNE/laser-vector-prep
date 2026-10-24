@@ -290,3 +290,24 @@ with round joins. Choices made without a separate question (owner may redefine):
 - **Simplify** (contour fill rings): arcs whose sagitta is within half the tolerance become
   chords, then Douglas-Peucker runs over straight runs with the other half; larger arcs are
   kept exactly. Clamped to a quarter of the pitch so neighbouring rings cannot touch.
+
+## D26 — Arcs stay arcs end to end (2026-10-25)
+
+Owner question: "Why is everything tessellated into line segments?" The geometry model was
+already lines plus exact arcs, but the preview flattened at a fixed 5 µm (visible facets
+past about 200 px/mm, exactly the zoom needed to inspect a 20 µm fill), PDF and SVG
+exports flattened at 1 µm, and SVG/PDF circles arrived as Béziers and were flattened at
+import. Owner approved removing all four:
+
+- **Preview** buffers carry vertices and bulges; the canvas draws arcs with `arc()` and
+  falls back to a line only when the sagitta is under a quarter pixel.
+- **SVG export** writes arc commands (exact).
+- **PDF export** writes cubic Béziers, split so each piece is within the curve tolerance
+  (default 1 µm; the former "arc flattening tolerance" setting) of the arc. PDF has no arc
+  operator; this is the closest exact-enough form and far smaller than polylines.
+- **SVG/PDF import** recognises a cubic as a circular arc when its end tangents are
+  symmetric about the chord and it stays within `max(1 µm, 0.03 % of the radius)` of the
+  circle. The relative allowance is the error the standard Bézier approximation of an arc
+  itself makes, so a circle drawn as four Béziers comes back as the exact circle it stands
+  for rather than as a polygon within 1 µm of the Bézier. Ellipses and general Béziers
+  are still flattened.

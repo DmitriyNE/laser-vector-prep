@@ -148,35 +148,40 @@ pub struct EvaluationSummary {
     pub has_errors: bool,
 }
 
-/// Flattened polylines for drawing: path `i` is `coords[2*starts[i] .. 2*starts[i+1]]`.
-/// `starts` has one more entry than there are paths. Coordinates are mm, `f32` (preview is
-/// never the authoritative geometry).
+/// Polylines for drawing, arcs unflattened: path `i` has vertices
+/// `starts[i] .. starts[i+1]`, vertex `k` at `coords[2k], coords[2k+1]` with `bulges[k]` the
+/// bulge (`tan(sweep / 4)`) of the segment leaving it (for a closed path, the last vertex's
+/// bulge closes it). `starts` has one more entry than there are paths. Coordinates are mm,
+/// `f32` (preview is never the authoritative geometry).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreviewBuffer {
     pub coords: Vec<f32>,
+    pub bulges: Vec<f32>,
     pub starts: Vec<u32>,
     pub closed: Vec<u8>,
 }
 
 impl PreviewBuffer {
-    pub fn from_plines<'a, I: IntoIterator<Item = &'a Pline>>(
-        plines: I,
-        tolerance_mm: f64,
-    ) -> Self {
+    pub fn from_plines<'a, I: IntoIterator<Item = &'a Pline>>(plines: I) -> Self {
         let mut b = PreviewBuffer {
             starts: vec![0],
             ..Default::default()
         };
         for p in plines {
-            let Ok(pts) = pline::flatten(p, tolerance_mm) else {
-                continue;
-            };
-            if pts.len() < 2 {
+            let n = p.vertex_count();
+            if n < 2 {
                 continue;
             }
-            for q in &pts {
-                b.coords.push(q.x as f32);
-                b.coords.push(q.y as f32);
+            for (i, v) in p.iter_vertexes().enumerate() {
+                b.coords.push(v.x as f32);
+                b.coords.push(v.y as f32);
+                // An open path's last vertex has no outgoing segment.
+                let bulge = if !p.is_closed() && i + 1 == n {
+                    0.0
+                } else {
+                    v.bulge
+                };
+                b.bulges.push(bulge as f32);
             }
             b.starts.push((b.coords.len() / 2) as u32);
             b.closed.push(u8::from(p.is_closed()));
@@ -495,12 +500,7 @@ impl Project {
         })
     }
 
-    pub fn preview_source(
-        &self,
-        file: usize,
-        layer: &str,
-        tolerance_mm: f64,
-    ) -> Option<PreviewBuffer> {
+    pub fn preview_source(&self, file: usize, layer: &str) -> Option<PreviewBuffer> {
         let l = self.sources.files.get(file)?.doc.layer(layer)?;
         let plines: Vec<&Pline> = l
             .primitives
@@ -510,24 +510,22 @@ impl Project {
                 Primitive::Hatch { loops, .. } => loops.iter().collect(),
             })
             .collect();
-        Some(PreviewBuffer::from_plines(plines, tolerance_mm))
+        Some(PreviewBuffer::from_plines(plines))
     }
 
-    pub fn preview_layer(&self, id: &LayerId, tolerance_mm: f64) -> Option<PreviewBuffer> {
+    pub fn preview_layer(&self, id: &LayerId) -> Option<PreviewBuffer> {
         let r = self.last.as_ref()?.layers.get(id)?;
         Some(match &r.geometry {
-            Geometry::Region(reg) => PreviewBuffer::from_plines(reg.loops.iter(), tolerance_mm),
-            Geometry::Linework(ps) => PreviewBuffer::from_plines(ps.iter(), tolerance_mm),
+            Geometry::Region(reg) => PreviewBuffer::from_plines(reg.loops.iter()),
+            Geometry::Linework(ps) => PreviewBuffer::from_plines(ps.iter()),
         })
     }
 
-    pub fn preview_pass(&self, id: &PassId, tolerance_mm: f64) -> Option<PreviewBuffer> {
+    pub fn preview_pass(&self, id: &PassId) -> Option<PreviewBuffer> {
         let pr = self.last.as_ref()?.pass(id)?;
-        Some(PreviewBuffer::from_plines(pr.paths.iter(), tolerance_mm))
+        Some(PreviewBuffer::from_plines(pr.paths.iter()))
     }
 
-    /// Hypothetical straight beam-off jumps between consecutive paths of a pass, in planner
-    /// order. Preview only; never exported.
     /// Hypothetical straight beam-off jumps of a group's planned order (preview only).
     pub fn preview_jumps(&self, group: &GroupId) -> Option<PreviewBuffer> {
         let ev = self.last.as_ref()?;
@@ -540,6 +538,7 @@ impl Project {
         for (from, to) in order::jumps(plan, &paths, &self.profile.optimizer) {
             b.coords
                 .extend([from.x as f32, from.y as f32, to.x as f32, to.y as f32]);
+            b.bulges.extend([0.0, 0.0]);
             b.starts.push((b.coords.len() / 2) as u32);
             b.closed.push(0);
         }
@@ -627,7 +626,7 @@ mod tests {
             "outline sets the bounds: {b:?}"
         );
 
-        let buf = p.preview_pass(&fill.id, 0.01).unwrap();
+        let buf = p.preview_pass(&fill.id).unwrap();
         assert_eq!(buf.path_count(), fill.paths);
         assert_eq!(buf.starts.len(), fill.paths + 1);
         assert!(buf.starts.windows(2).all(|w| w[1] > w[0]));
@@ -644,11 +643,15 @@ mod tests {
         assert_eq!(copper.paths, fill.paths);
         assert_eq!(copper.after.jumps, fill.paths - 1);
         assert_eq!(copper.mode, OptimizerMode::AsGenerated);
-        let layer = p.preview_layer(&LayerId::new("wl-copper"), 0.01).unwrap();
+        let layer = p.preview_layer(&LayerId::new("wl-copper")).unwrap();
         assert_eq!(layer.path_count(), 11);
-        let src = p.preview_source(0, "ROUTE_TOOL_PATH", 0.01).unwrap();
+        let src = p.preview_source(0, "ROUTE_TOOL_PATH").unwrap();
         assert_eq!(src.path_count(), 1);
         assert_eq!(src.closed, vec![1]);
+        // Arcs travel unflattened: the rounded outline is 8 vertices, 4 of them bulged.
+        assert_eq!(src.bulges.len() * 2, src.coords.len());
+        assert_eq!(src.coords.len(), 16);
+        assert_eq!(src.bulges.iter().filter(|b| **b != 0.0).count(), 4);
 
         let pdf = p.export_pdf().unwrap();
         assert!(pdf.starts_with(b"%PDF-1.4"));
@@ -664,18 +667,16 @@ mod tests {
     fn previews_of_empty_layers_and_passes_are_empty_buffers() {
         let mut p = Project::new();
         p.evaluate();
-        let layer = p.preview_layer(&LayerId::new("wl-copper"), 0.01).unwrap();
+        let layer = p.preview_layer(&LayerId::new("wl-copper")).unwrap();
         assert_eq!(layer.path_count(), 0);
         assert_eq!(layer.starts, vec![0]);
-        let pass = p
-            .preview_pass(&PassId::new("pass-copper-fill"), 0.01)
-            .unwrap();
+        let pass = p.preview_pass(&PassId::new("pass-copper-fill")).unwrap();
         assert_eq!(pass.path_count(), 0);
         let jumps = p.preview_jumps(&GroupId::new("grp-copper")).unwrap();
         assert_eq!(jumps.path_count(), 0);
         assert!(p.heatmap(&GroupId::new("grp-copper")).is_none());
-        assert!(p.preview_layer(&LayerId::new("nope"), 0.01).is_none());
-        assert!(p.preview_source(7, "x", 0.01).is_none());
+        assert!(p.preview_layer(&LayerId::new("nope")).is_none());
+        assert!(p.preview_source(7, "x").is_none());
     }
 
     #[test]

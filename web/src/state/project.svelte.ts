@@ -24,7 +24,6 @@ export type Selection =
   | { kind: "pass"; id: string }
   | { kind: "group"; id: string };
 
-export const PREVIEW_TOLERANCE_MM = 0.005;
 const LAST_PROFILE_KEY = "lastProfile";
 
 export class ProjectStore {
@@ -179,12 +178,12 @@ export class ProjectStore {
 
   preview(kind: "pass" | "layer", id: string): Promise<Preview | null> {
     return kind === "pass"
-      ? this.worker.call({ kind: "previewPass", id, toleranceMm: PREVIEW_TOLERANCE_MM })
-      : this.worker.call({ kind: "previewLayer", id, toleranceMm: PREVIEW_TOLERANCE_MM });
+      ? this.worker.call({ kind: "previewPass", id })
+      : this.worker.call({ kind: "previewLayer", id });
   }
 
   previewSource(file: number, layer: string): Promise<Preview | null> {
-    return this.worker.call({ kind: "previewSource", file, layer, toleranceMm: PREVIEW_TOLERANCE_MM });
+    return this.worker.call({ kind: "previewSource", file, layer });
   }
 
   /** Hypothetical jumps of an output group's planned order. */

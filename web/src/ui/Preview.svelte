@@ -167,23 +167,53 @@
       ctx.strokeStyle = it.color;
       ctx.lineWidth = selected ? it.width + 1.5 : it.width;
       ctx.setLineDash(it.dash);
-      const { coords, starts, closed } = it.preview;
+      const { coords, bulges, starts, closed } = it.preview;
       for (let i = 0; i + 1 < starts.length; i++) {
         const a = starts[i]!;
         const b = starts[i + 1]!;
         if (b - a < 2) continue;
+        const isClosed = closed[i] === 1;
         ctx.beginPath();
-        for (let k = a; k < b; k++) {
-          const [sx, sy] = toScreen(coords[2 * k]!, coords[2 * k + 1]!, w, h);
-          if (k === a) ctx.moveTo(sx, sy);
-          else ctx.lineTo(sx, sy);
+        const [x0, y0] = toScreen(coords[2 * a]!, coords[2 * a + 1]!, w, h);
+        ctx.moveTo(x0, y0);
+        const segments = isClosed ? b - a : b - a - 1;
+        for (let s = 0; s < segments; s++) {
+          const k = a + s;
+          const n = s + 1 < b - a ? k + 1 : a; // the closing segment returns to the start
+          segment(ctx, coords[2 * k]!, coords[2 * k + 1]!, coords[2 * n]!, coords[2 * n + 1]!, bulges[k]!, w, h);
         }
-        if (closed[i]) ctx.closePath();
+        if (isClosed) ctx.closePath();
         ctx.stroke();
       }
     }
     ctx.setLineDash([]);
     drawRulers(ctx, w, h);
+  }
+
+  /**
+   * Add the segment from (x1, y1) to (x2, y2) mm with `bulge` to the current canvas path:
+   * a native arc, or a line when the arc's sagitta is below a fraction of a pixel. The y
+   * flip turns the model's counter-clockwise arcs into the canvas's anticlockwise ones.
+   */
+  function segment(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, bulge: number, w: number, h: number) {
+    const [sx2, sy2] = toScreen(x2, y2, w, h);
+    const chord = Math.hypot(x2 - x1, y2 - y1);
+    if (bulge === 0 || chord === 0 || (Math.abs(bulge) * chord * ppm) / 2 < 0.25) {
+      ctx.lineTo(sx2, sy2);
+      return;
+    }
+    // Centre: chord midpoint plus the left normal times chord (1 - b^2) / (4 b).
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+    const off = (1 - bulge * bulge) / (4 * bulge);
+    const cx = mx - (y2 - y1) * off;
+    const cy = my + (x2 - x1) * off;
+    const r = Math.hypot(x1 - cx, y1 - cy);
+    const [scx, scy] = toScreen(cx, cy, w, h);
+    const [sx1, sy1] = toScreen(x1, y1, w, h);
+    const a0 = Math.atan2(sy1 - scy, sx1 - scx);
+    const a1 = Math.atan2(sy2 - scy, sx2 - scx);
+    ctx.arc(scx, scy, r * ppm, a0, a1, bulge > 0);
   }
 
   function niceStep(pxPerMm: number): number {

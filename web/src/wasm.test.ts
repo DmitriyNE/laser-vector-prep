@@ -50,10 +50,13 @@ describe("lvp-wasm project API", () => {
     expect(ev.passes.length).toBe(2);
 
     const pass = ev.passes[0]!;
-    const preview = wasm.preview_pass(pass.id, 0.01)!;
+    const preview = wasm.preview_pass(pass.id)!;
     expect(preview.starts.length).toBe(pass.paths + 1);
     expect(preview.coords.length).toBe(preview.starts[pass.paths]! * 2);
+    expect(preview.bulges.length).toBe(preview.starts[pass.paths]!);
     expect(preview.closed.length).toBe(pass.paths);
+    // Contour rings around round pads keep their arcs.
+    expect(preview.bulges.some((b) => b !== 0)).toBe(true);
     preview.free();
     // Jumps are planned per output group; the copper group holds only this pass.
     const jumps = wasm.preview_jumps(pass.group)!;

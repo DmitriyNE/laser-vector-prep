@@ -22,7 +22,9 @@ How the pieces fit, and where a given responsibility lives. Requirements are in
 
 The worker owns all geometry. The UI never sees a polyline as data: it receives
 summaries (counts, areas, bounds, diagnostics) and flat `Float32Array` preview buffers
-that are drawn and discarded. Preview is never the authoritative geometry.
+(vertices plus the bulge of each segment) that are drawn and discarded. The canvas draws
+arcs natively, so curves stay smooth at any zoom. Preview is never the authoritative
+geometry.
 
 ## Core crate (`crates/lvp-core`)
 
@@ -37,8 +39,8 @@ Pure Rust, host-testable, no browser dependencies. All lengths in millimetres.
 | `dxf::read` / `dxf::write` | DXF subset reader (LINE, ARC, CIRCLE, LWPOLYLINE/POLYLINE, ELLIPSE, SPLINE, HATCH, INSERT, SOLID) with diagnostics for everything else; R2000 writer used for fixtures and later export. |
 | `ipc` | IPC-2581 reader (our own, D22) on roxmltree: layers and steps, standard and user primitive dictionaries, line descriptors (round ends stay centrelines, square and flat ends become exact polygons), pads with transforms, positive/negative sets composited in source order, the board profile, `layerFunction,side` as the layer function; components and nets are ignored. |
 | `gds` | GDSII stream reader (our own, D22): records, structures, BOUNDARY/PATH/BOX, SREF/AREF flattening with reflection, magnification and rotation, database and user units; paths with flush, square or custom ends become exact mitred polygons, round-ended paths stay centrelines with width; layers are `layer/datatype`; TEXT and NODE are counted. |
-| `pdf` | Vector PDF reader (D22): lopdf for the object model, our content-stream interpreter for paths, Béziers, fill rules, strokes with scaled widths, `q`/`Q`/`cm`, device colours, clipping on fills, form XObjects and optional-content groups as layers (otherwise the paint colour `#rrggbb`); text, images, shadings and patterns are diagnosed. Points are converted at 25.4/72 mm with `UserUnit`. |
-| `svg` | SVG reader on usvg (D22): named top-level groups (Inkscape labels) become layers, fills become loops with the SVG fill rule, strokes become centrelines with their scaled width, Béziers are flattened to the read tolerance, clip paths cut fills exactly, y is flipped to the model's y-up frame; text, images, masks, filters and foreign objects are diagnosed, never silently dropped. |
+| `pdf` | Vector PDF reader (D22): lopdf for the object model, our content-stream interpreter for paths, Béziers (circular ones as exact arcs), fill rules, strokes with scaled widths, `q`/`Q`/`cm`, device colours, clipping on fills, form XObjects and optional-content groups as layers (otherwise the paint colour `#rrggbb`); text, images, shadings and patterns are diagnosed. Points are converted at 25.4/72 mm with `UserUnit`. |
+| `svg` | SVG reader on usvg (D22): named top-level groups (Inkscape labels) become layers, fills become loops with the SVG fill rule, strokes become centrelines with their scaled width, Béziers that are circular arcs become exact arcs and other curves are flattened to the read tolerance, clip paths cut fills exactly, y is flipped to the model's y-up frame; text, images, masks, filters and foreign objects are diagnosed, never silently dropped. |
 | `gerber` | RS-274X / X2 reader: standard and macro apertures (`gerber::macros`: variables, arithmetic, primitives 1/2/4/5/6/7/20/21/22), draws with arcs in both quadrant modes, regions, step-and-repeat, aperture blocks, LM/LR/LS transforms, dark/clear compositing in source order, `TF.FileFunction` as the layer function. One layer per file, named after the file. |
 | `model` | Configuration types = the profile schema (serde, camelCase): source bindings, working layers, passes, output groups, export and optimizer settings. |
 | `profile` | Versioned JSON parsing with migrations, structural validation, built-in presets. |
