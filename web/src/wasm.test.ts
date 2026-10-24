@@ -90,7 +90,7 @@ describe("lvp-wasm project API", () => {
     expect(copper.mode).toBe("bleedAware");
     expect(copper.after.jumpLengthMm).toBeLessThan(copper.before.jumpLengthMm);
     expect(copper.heatmap).toBe(true);
-  }, 60_000); // debug wasm, single thread: the 20 um fill is the case that reproduced the trap
+  }); // the 20 um fill is the case that reproduced the trap (see testTimeout in vite.config.ts)
 
   it("rejects bad input as exceptions and keeps state", () => {
     expect(() => wasm.add_source("x.dxf", new Uint8Array([1, 2, 3]))).toThrow();

@@ -55,5 +55,8 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     exclude: ["e2e/**", "node_modules/**"],
+    // The wasm tests run the debug build on one thread (no pool in Node); CI runners are
+    // several times slower than a workstation.
+    testTimeout: 60_000,
   },
 });
