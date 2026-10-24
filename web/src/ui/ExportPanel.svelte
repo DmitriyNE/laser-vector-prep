@@ -17,7 +17,7 @@
   <h2>Export</h2>
   <label>PDF stroke width (mm) <input type="number" step="0.0001" min="0.0001" bind:value={store.profile.export.strokeWidthMm} oninput={touch} /></label>
   <label>Page margin (mm) <input type="number" step="0.1" min="0" bind:value={store.profile.export.marginMm} oninput={touch} /></label>
-  <label>Arc flattening tolerance (mm) <input type="number" step="0.0001" min="0.00001" bind:value={store.profile.export.flattenToleranceMm} oninput={touch} /></label>
+  <label>Curve tolerance (mm, PDF arcs as Bézier curves) <input type="number" step="0.0001" min="0.00001" bind:value={store.profile.export.flattenToleranceMm} oninput={touch} /></label>
   <p class="hint">
     {totalPaths} trajectories, {totalLength.toFixed(1)} mm total, {size}. 1:1 scale, no fitting.
     Stroke width is for the importer; it is not a kerf, pitch or exposure width.

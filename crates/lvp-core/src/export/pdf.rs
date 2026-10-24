@@ -1,8 +1,11 @@
 //! Minimal vector PDF writer: one stroked path per trajectory, exact RGB strokes, finite
 //! cosmetic widths, 1:1 physical scale (72 pt per inch), no fills, no raster, no
-//! compression, no dates (output is byte-deterministic).
+//! compression, no dates (output is byte-deterministic). Straight segments are `l`; arcs
+//! are cubic Béziers (`c`) split so each stays within the curve tolerance of the arc.
 
 use std::fmt::Write as _;
+
+use cavalier_contours::polyline::PlineSource;
 
 use crate::geom::{BBox, Point};
 
@@ -69,6 +72,41 @@ pub struct PdfOptions {
     pub keywords: String,
     /// Force a page layout (for per-group files that must register); `None` fits the paths.
     pub layout: Option<Layout>,
+    /// Largest distance between an arc and the Bézier curves written for it (mm).
+    pub curve_tolerance_mm: f64,
+}
+
+/// Relative radial error of the cubic approximation of a quarter-turn arc
+/// (h = 4/3 tan(φ/4)); it scales with the sixth power of the swept angle.
+const QUARTER_ARC_REL_ERROR: f64 = 2.8e-4;
+
+/// Cubic Béziers `[c1, c2, end]` for the arc from `a` to `b` with `bulge`, split into equal
+/// pieces short enough that each deviates from the circle by at most `tolerance`. The last
+/// piece ends exactly at `b`.
+pub fn arc_to_cubics(a: Point, b: Point, bulge: f64, tolerance: f64) -> Vec<[Point; 3]> {
+    use std::f64::consts::FRAC_PI_2;
+    let Some(arc) = crate::arc::Arc::from_bulge(a, b, bulge) else {
+        return vec![[a, b, b]];
+    };
+    let r = arc.radius;
+    let ratio = (tolerance.max(1e-9) / (QUARTER_ARC_REL_ERROR * r)).min(1.0);
+    let max_piece = FRAC_PI_2 * ratio.powf(1.0 / 6.0);
+    let n = (arc.sweep.abs() / max_piece).ceil().max(1.0) as usize;
+    let phi = arc.sweep / n as f64;
+    let h = 4.0 / 3.0 * (phi / 4.0).tan();
+    let c = arc.center;
+    let on = |t: f64| Point::new(c.x + r * t.cos(), c.y + r * t.sin());
+    (0..n)
+        .map(|k| {
+            let a0 = arc.start_angle + phi * k as f64;
+            let a1 = a0 + phi;
+            let p0 = if k == 0 { a } else { on(a0) };
+            let p3 = if k + 1 == n { b } else { on(a1) };
+            let c1 = Point::new(p0.x - h * r * a0.sin(), p0.y + h * r * a0.cos());
+            let c2 = Point::new(p3.x + h * r * a1.sin(), p3.y - h * r * a1.cos());
+            [c1, c2, p3]
+        })
+        .collect()
 }
 
 /// Fixed formatting: four decimals (0.1 mil = 2.5 um resolution in points is far below the
@@ -106,14 +144,19 @@ fn pdf_string(s: &str) -> String {
 
 /// Write the PDF. Returns the bytes and the layout used.
 pub fn write(paths: &[ExportPath], opts: &PdfOptions) -> Result<(Vec<u8>, Layout), PdfError> {
-    let drawable: Vec<&ExportPath> = paths.iter().filter(|p| p.points.len() >= 2).collect();
+    let drawable: Vec<&ExportPath> = paths
+        .iter()
+        .filter(|p| p.pline.vertex_count() >= 2)
+        .collect();
     if drawable.is_empty() {
         return Err(PdfError::NothingToExport);
     }
-    if drawable
-        .iter()
-        .any(|p| p.points.iter().any(|q| !q.is_finite()) || !p.width_mm.is_finite())
-    {
+    if drawable.iter().any(|p| {
+        p.pline
+            .iter_vertexes()
+            .any(|v| !v.x.is_finite() || !v.y.is_finite() || !v.bulge.is_finite())
+            || !p.width_mm.is_finite()
+    }) {
         return Err(PdfError::NonFiniteCoordinate);
     }
     let layout = match opts.layout {
@@ -147,21 +190,38 @@ pub fn write(paths: &[ExportPath], opts: &PdfOptions) -> Result<(Vec<u8>, Layout
             let _ = writeln!(content, "{} w", num(p.width_mm * PT_PER_MM));
             width = Some(p.width_mm);
         }
-        for (i, q) in p.points.iter().enumerate() {
-            let (x, y) = to_pt(*q);
-            let _ = writeln!(
-                content,
-                "{} {} {}",
-                num(x),
-                num(y),
-                if i == 0 { "m" } else { "l" }
-            );
+        let (start, segments) = p.segments();
+        let (x, y) = to_pt(start);
+        let _ = writeln!(content, "{} {} m", num(x), num(y));
+        let last = segments.len().saturating_sub(1);
+        let mut from = start;
+        for (i, (bulge, to)) in segments.iter().enumerate() {
+            if *bulge == 0.0 {
+                // A closed path's final straight segment is drawn by `h`.
+                if !(p.closed() && i == last) {
+                    let (x, y) = to_pt(*to);
+                    let _ = writeln!(content, "{} {} l", num(x), num(y));
+                }
+            } else {
+                for [c1, c2, end] in arc_to_cubics(from, *to, *bulge, opts.curve_tolerance_mm) {
+                    let (x1, y1) = to_pt(c1);
+                    let (x2, y2) = to_pt(c2);
+                    let (x3, y3) = to_pt(end);
+                    let _ = writeln!(
+                        content,
+                        "{} {} {} {} {} {} c",
+                        num(x1),
+                        num(y1),
+                        num(x2),
+                        num(y2),
+                        num(x3),
+                        num(y3)
+                    );
+                }
+            }
+            from = *to;
         }
-        content.push_str(if p.closed && p.points.len() >= 3 {
-            "h S\n"
-        } else {
-            "S\n"
-        });
+        content.push_str(if p.closed() { "h S\n" } else { "S\n" });
     }
 
     let page_w = num(layout.width_mm * PT_PER_MM);
@@ -209,12 +269,20 @@ pub fn write(paths: &[ExportPath], opts: &PdfOptions) -> Result<(Vec<u8>, Layout
 mod tests {
     use super::*;
     use crate::model::{GroupId, Rgb};
+    use cavalier_contours::polyline::PlineSourceMut;
     use proptest::prelude::*;
 
     fn path(pts: &[(f64, f64)], closed: bool, color: Rgb, width: f64) -> ExportPath {
+        let mut pline = if closed {
+            crate::pline::Pline::new_closed()
+        } else {
+            crate::pline::Pline::new()
+        };
+        for (x, y) in pts {
+            pline.add(*x, *y, 0.0);
+        }
         ExportPath {
-            points: pts.iter().map(|(x, y)| Point::new(*x, *y)).collect(),
-            closed,
+            pline,
             color,
             width_mm: width,
             group: GroupId::new("g"),
@@ -249,6 +317,7 @@ mod tests {
             title: "t (x)".into(),
             keywords: "k".into(),
             layout: None,
+            curve_tolerance_mm: 0.001,
         };
         let (bytes, layout) = write(&paths, &opts).unwrap();
         assert_eq!(layout.origin, Point::new(-5.0, -5.0));
@@ -304,6 +373,7 @@ mod tests {
             title: "d".into(),
             keywords: String::new(),
             layout: None,
+            curve_tolerance_mm: 0.001,
         };
         let (a, _) = write(&paths, &opts).unwrap();
         let (b, _) = write(&paths, &opts).unwrap();
@@ -336,6 +406,7 @@ mod tests {
             title: String::new(),
             keywords: String::new(),
             layout: None,
+            curve_tolerance_mm: 0.001,
         };
         assert_eq!(write(&[], &opts).unwrap_err(), PdfError::NothingToExport);
         assert_eq!(
@@ -366,6 +437,7 @@ mod tests {
                     title: String::new(),
                     keywords: String::new(),
                     layout: Some(layout),
+                    curve_tolerance_mm: 0.001,
                 },
             )
             .unwrap()
@@ -393,7 +465,7 @@ mod tests {
             margin in 0.0..20.0f64,
         ) {
             let p = path(&pts, false, Rgb::BLUE, 0.0254);
-            let opts = PdfOptions { margin_mm: margin, title: String::new(), keywords: String::new(), layout: None };
+            let opts = PdfOptions { margin_mm: margin, title: String::new(), keywords: String::new(), layout: None, curve_tolerance_mm: 0.001 };
             let (bytes, layout) = write(std::slice::from_ref(&p), &opts).unwrap();
             let ops = ops(&bytes);
             let coords: Vec<(f64, f64)> = ops
@@ -409,5 +481,75 @@ mod tests {
                 prop_assert!((x - ex).abs() <= 5.1e-5 && (y - ey).abs() <= 5.1e-5);
             }
         }
+    }
+
+    #[test]
+    fn arcs_become_beziers_within_tolerance() {
+        use crate::pline::circle;
+        // Every Bézier piece stays within the tolerance of its circle, for small and large
+        // radii; a 1 mm circle at 1 um needs four pieces, a 100 mm circle more.
+        for (r, tol) in [(1.0, 0.001), (100.0, 0.001), (10.0, 0.0001), (0.05, 0.001)] {
+            let c = circle(Point::new(3.0, -2.0), r);
+            let a = Point::new(3.0 - r, -2.0);
+            let b = Point::new(3.0 + r, -2.0);
+            let pieces = arc_to_cubics(a, b, c.at(0).bulge, tol);
+            let mut from = a;
+            let mut worst: f64 = 0.0;
+            for [c1, c2, end] in &pieces {
+                for i in 0..=32 {
+                    let t = i as f64 / 32.0;
+                    let u = 1.0 - t;
+                    let x = u * u * u * from.x
+                        + 3.0 * u * u * t * c1.x
+                        + 3.0 * u * t * t * c2.x
+                        + t * t * t * end.x;
+                    let y = u * u * u * from.y
+                        + 3.0 * u * u * t * c1.y
+                        + 3.0 * u * t * t * c2.y
+                        + t * t * t * end.y;
+                    worst = worst.max(((x - 3.0).hypot(y + 2.0) - r).abs());
+                }
+                from = *end;
+            }
+            assert_eq!(from, b, "last piece ends exactly at the arc end");
+            assert!(
+                worst <= tol,
+                "r {r} tol {tol}: worst {worst} with {} pieces",
+                pieces.len()
+            );
+        }
+        assert_eq!(
+            arc_to_cubics(Point::new(-1.0, 0.0), Point::new(1.0, 0.0), 1.0, 0.001).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn circles_are_written_as_curves_not_segments() {
+        let ring = ExportPath {
+            pline: crate::pline::circle(Point::new(5.0, 5.0), 2.0),
+            color: Rgb::BLUE,
+            width_mm: 0.0254,
+            group: GroupId::new("g"),
+        };
+        let opts = PdfOptions {
+            margin_mm: 1.0,
+            title: String::new(),
+            keywords: String::new(),
+            layout: None,
+            curve_tolerance_mm: 0.001,
+        };
+        let (bytes, layout) = write(&[ring], &opts).unwrap();
+        // The page fits the circle exactly: arc bounds, not vertex bounds.
+        assert!((layout.width_mm - 6.0).abs() < 1e-12 && (layout.height_mm - 6.0).abs() < 1e-12);
+        let ops = ops(&bytes);
+        let count = |op: &str| {
+            ops.iter()
+                .filter(|o| o.last().map(String::as_str) == Some(op))
+                .count()
+        };
+        assert_eq!(count("l"), 0);
+        assert!(count("c") >= 4 && count("c") <= 8, "{}", count("c"));
+        assert_eq!(count("m"), 1);
     }
 }

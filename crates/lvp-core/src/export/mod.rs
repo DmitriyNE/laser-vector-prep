@@ -16,11 +16,12 @@ use crate::model::{GroupId, PassId, Profile, Rgb};
 use crate::order;
 use crate::pline::{self, Pline};
 
-/// One stroked trajectory ready for an exporter: flattened, in document mm.
-#[derive(Clone, Debug, PartialEq)]
+/// One stroked trajectory ready for an exporter: exact lines and arcs in document mm, in
+/// the planned direction. Each writer decides how arcs are expressed (DXF and SVG exactly,
+/// PDF as cubic Béziers within the export tolerance).
+#[derive(Clone, Debug)]
 pub struct ExportPath {
-    pub points: Vec<Point>,
-    pub closed: bool,
+    pub pline: Pline,
     pub color: Rgb,
     /// Cosmetic stroke width in mm (importer hint, not a process parameter).
     pub width_mm: f64,
@@ -28,8 +29,33 @@ pub struct ExportPath {
 }
 
 impl ExportPath {
+    pub fn closed(&self) -> bool {
+        self.pline.is_closed()
+    }
+
+    /// Exact bounds (arc extremes included).
     pub fn bounds(&self) -> Option<BBox> {
-        BBox::of_points(self.points.iter().copied())
+        pline::bounds(&self.pline)
+    }
+
+    /// Start point and the segments `(bulge, end point)` in drawing order, including the
+    /// closing segment of a closed path.
+    pub fn segments(&self) -> (Point, Vec<(f64, Point)>) {
+        let p = &self.pline;
+        let n = p.vertex_count();
+        let at = |i: usize| {
+            let v = p.at(i % n);
+            Point::new(v.x, v.y)
+        };
+        let count = if p.is_closed() {
+            n
+        } else {
+            n.saturating_sub(1)
+        };
+        (
+            at(0),
+            (0..count).map(|i| (p.at(i).bulge, at(i + 1))).collect(),
+        )
     }
 }
 
@@ -66,7 +92,6 @@ impl From<pdf::PdfError> for ExportError {
 pub fn collect_paths(profile: &Profile, ev: &Evaluation) -> (Vec<ExportPath>, Vec<Diagnostic>) {
     let mut out = Vec::new();
     let mut diags = Vec::new();
-    let tol = profile.export.flatten_tolerance_mm.max(1e-6);
     for (pass_id, pr) in &ev.passes {
         if profile.group(&pr.group).is_none() {
             diags.push(Diagnostic::error(
@@ -102,20 +127,14 @@ pub fn collect_paths(profile: &Profile, ev: &Evaluation) -> (Vec<ExportPath>, Ve
                 .flat_map(|(id, r)| r.paths.iter().map(move |p| (id.clone(), p.clone())))
                 .collect(),
         };
-        for (pass_id, p) in ordered {
-            match pline::flatten(&p, tol) {
-                Ok(points) if points.len() >= 2 => out.push(ExportPath {
-                    points,
-                    closed: p.is_closed(),
+        for (_, p) in ordered {
+            if p.vertex_count() >= 2 {
+                out.push(ExportPath {
+                    pline: p,
                     color: group.color,
                     width_mm,
                     group: group.id.clone(),
-                }),
-                Ok(_) => {}
-                Err(e) => diags.push(
-                    Diagnostic::warning("export.flatten", format!("path skipped: {e}"))
-                        .with_context(format!("pass {pass_id}")),
-                ),
+                });
             }
         }
     }
@@ -136,6 +155,7 @@ pub fn export_pdf(
         title: profile.name.clone(),
         keywords: group_summary(profile),
         layout: None,
+        curve_tolerance_mm: profile.export.flatten_tolerance_mm,
     };
     let (bytes, _) = pdf::write(&paths, &opts)?;
     Ok((bytes, diags))
@@ -175,6 +195,7 @@ pub fn export_pdf_per_group(
             title: format!("{} - {}", profile.name, group.name),
             keywords: group_summary(profile),
             layout: Some(layout),
+            curve_tolerance_mm: profile.export.flatten_tolerance_mm,
         };
         let (bytes, _) = pdf::write(&subset, &opts)?;
         files.push(GroupFile {

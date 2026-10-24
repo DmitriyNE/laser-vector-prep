@@ -1,5 +1,6 @@
 //! SVG export: one `<g>` per exporting output group (an Inkscape layer with the group's
 //! name), stroked paths only, millimetre units with a 1:1 viewBox, round caps and joins.
+//! Arcs are written as exact SVG arc commands.
 //! The page is the paths' bounds plus the export margin; y is flipped from the model's
 //! y-up frame to SVG's y-down frame. Reading the file back with the app's SVG reader gives
 //! one layer per group.
@@ -82,20 +83,37 @@ pub fn write(paths: &[ExportPath], opts: &SvgOptions<'_>) -> Option<String> {
             num(first.width_mm)
         );
         for p in group_paths {
-            if p.points.len() < 2 {
+            let (start, segments) = p.segments();
+            if segments.is_empty() {
                 continue;
             }
-            let mut d = String::new();
-            for (i, pt) in p.points.iter().enumerate() {
-                let _ = write!(
-                    d,
-                    "{}{} {}",
-                    if i == 0 { "M" } else { " L" },
-                    tx(pt.x),
-                    ty(pt.y)
-                );
+            let mut d = format!("M{} {}", tx(start.x), ty(start.y));
+            let last = segments.len() - 1;
+            let mut from = start;
+            for (i, (bulge, to)) in segments.iter().enumerate() {
+                if *bulge == 0.0 {
+                    if !(p.closed() && i == last) {
+                        let _ = write!(d, " L{} {}", tx(to.x), ty(to.y));
+                    }
+                } else {
+                    // |bulge| <= 1 (at most a half turn), so the large-arc flag is 0. The
+                    // y flip turns counter-clockwise into SVG's negative-angle direction.
+                    let chord = (to.x - from.x).hypot(to.y - from.y);
+                    let r = chord * (1.0 + bulge * bulge) / (4.0 * bulge.abs());
+                    let sweep = if *bulge > 0.0 { 0 } else { 1 };
+                    let _ = write!(
+                        d,
+                        " A{} {} 0 0 {} {} {}",
+                        num(r),
+                        num(r),
+                        sweep,
+                        tx(to.x),
+                        ty(to.y)
+                    );
+                }
+                from = *to;
             }
-            if p.closed {
+            if p.closed() {
                 d.push_str(" Z");
             }
             let _ = writeln!(out, r#"    <path d="{d}"/>"#);

@@ -2,6 +2,7 @@
 //! constraints, drive the export order, and report footprint coverage over protected
 //! regions.
 
+use cavalier_contours::polyline::PlineSource;
 use lvp_core::eval::{Evaluator, Sources};
 use lvp_core::export::collect_paths;
 use lvp_core::model::{GroupId, LayerId, OptimizerMode, PassId, Pattern};
@@ -77,8 +78,8 @@ fn minimum_jump_shortens_travel_and_orders_the_export() {
     );
     let v0 = cavalier_contours::polyline::PlineSource::at(&planned_first, 0);
     assert!(
-        (copper_paths[0].points[0].x - v0.x).abs() < 1e-9
-            && (copper_paths[0].points[0].y - v0.y).abs() < 1e-9
+        (copper_paths[0].pline.at(0).x - v0.x).abs() < 1e-9
+            && (copper_paths[0].pline.at(0).y - v0.y).abs() < 1e-9
     );
 
     // The plan is cached: evaluating again without changes reuses it.

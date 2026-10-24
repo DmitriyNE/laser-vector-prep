@@ -9,7 +9,8 @@ in [`spec.md`](spec.md) §4 and §8; design choices in
 ## Curves
 
 The geometry model holds straight segments and exact circular arcs. Arcs stay exact from
-import to DXF export; the preview draws them as arcs at any zoom. Other curves (ellipses,
+import to DXF and SVG export, and become Bézier curves within 1 µm in PDF export; the
+preview draws them as arcs at any zoom. Other curves (ellipses,
 splines, Béziers that are not circular) are flattened at import within the read tolerance
 of 1 µm. A Bézier counts as a circular arc when its end tangents are symmetric about the
 chord and it stays within 1 µm, or within 0.03 % of the radius, of the circle; 0.03 % is the
@@ -137,6 +138,6 @@ exported. Stroke widths are importer hints, not exposure or kerf.
 
 | Format | Content |
 |---|---|
-| PDF (mandatory) | PDF 1.4, deterministic. 1:1 page around the paths plus the margin, stroked paths only, one exact RGB per output group, stroke width per group (default 0.0254 mm). Optionally one file per group on an identical page so the files register. |
-| SVG | Same page as the PDF, millimetre units with a 1:1 viewBox, one Inkscape layer per group with the group's colour and stroke width, round caps and joins. |
+| PDF (mandatory) | PDF 1.4, deterministic. 1:1 page around the paths plus the margin, stroked paths only, one exact RGB per output group, stroke width per group (default 0.0254 mm). PDF has no arc operator, so arcs are written as cubic Bézier curves, split so each stays within the curve tolerance (default 1 µm) of the arc. Optionally one file per group on an identical page so the files register. |
+| SVG | Same page as the PDF, millimetre units with a 1:1 viewBox, one Inkscape layer per group with the group's colour and stroke width, round caps and joins. Arcs are exact SVG arc commands. |
 | DXF | R2000, model coordinates (no page offset), one layer per group with the nearest AutoCAD colour index, LWPOLYLINEs with bulges so arcs stay arcs. Layer names are made DXF-safe. |

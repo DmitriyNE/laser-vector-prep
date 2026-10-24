@@ -446,7 +446,8 @@ pub struct ExportSettings {
     pub margin_mm: f64,
     /// One PDF per output group instead of one colour-separated file.
     pub separate_files: bool,
-    /// Chordal tolerance when arcs are flattened for export (mm).
+    /// Largest deviation of the Bézier curves the PDF export writes for arcs (mm). DXF and
+    /// SVG exports write arcs exactly. (The name is kept for profile compatibility.)
     pub flatten_tolerance_mm: f64,
 }
 

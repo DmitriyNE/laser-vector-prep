@@ -63,6 +63,14 @@ fn svg_export_round_trips_as_inkscape_layers() {
         copper.primitives.len(),
         paths.iter().filter(|p| p.color == Rgb::BLUE).count()
     );
+    // Arcs are written as SVG arc commands and read back as arcs.
+    assert!(text.contains(" A"), "SVG should contain arc commands");
+    let bulged = copper
+        .primitives
+        .iter()
+        .filter(|p| matches!(p, Primitive::Path { pline, .. } if pline.iter_vertexes().any(|v| v.bulge != 0.0)))
+        .count();
+    assert!(bulged > 0, "arcs survive the SVG round trip");
     for p in &copper.primitives {
         let Primitive::Path { width, .. } = p else {
             panic!("strokes come back as paths")
@@ -70,7 +78,12 @@ fn svg_export_round_trips_as_inkscape_layers() {
         assert!((width.unwrap() - 0.0254).abs() < 1e-6, "{width:?}");
     }
     // The first copper path in the SVG is the first planned path (export order is kept).
-    let first_export = &paths.iter().find(|p| p.color == Rgb::BLUE).unwrap().points[0];
+    let first_export = paths
+        .iter()
+        .find(|p| p.color == Rgb::BLUE)
+        .unwrap()
+        .pline
+        .at(0);
     let Primitive::Path { pline, .. } = &copper.primitives[0] else {
         panic!()
     };

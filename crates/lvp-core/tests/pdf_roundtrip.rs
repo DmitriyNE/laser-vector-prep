@@ -51,6 +51,18 @@ fn exported_pdf_reads_back_as_colour_layers() {
     );
 
     let copper = &doc.layers[0];
+    // Arcs went out as Bézier curves and come back as exact arcs.
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.lines().any(|l| l.ends_with(" c")),
+        "PDF should contain curve operators"
+    );
+    let bulged = copper
+        .primitives
+        .iter()
+        .filter(|p| matches!(p, Primitive::Path { pline, .. } if pline.iter_vertexes().any(|v| v.bulge != 0.0)))
+        .count();
+    assert!(bulged > 0, "arcs survive the PDF round trip");
     let exported_copper = exported
         .iter()
         .filter(|p| p.color == lvp_core::model::Rgb::BLUE)
