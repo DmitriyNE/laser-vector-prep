@@ -39,9 +39,11 @@ export class GeometryWorker {
   call<P extends Payload>(payload: P): Promise<ResultOf<P["kind"]>> {
     const id = this.#nextId++;
     const req: Request = { ...payload, id };
+    // Large input buffers are transferred, not copied.
+    const transfer = "points" in req ? [req.points.buffer] : [];
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.#worker.postMessage(req);
+      this.#worker.postMessage(req, { transfer });
     });
   }
 

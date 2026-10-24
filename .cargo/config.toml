@@ -1,0 +1,17 @@
+# Shared-memory wasm: atomics + bulk memory + mutable globals, a shared, imported linear memory
+# with an explicit 1 GiB ceiling (wasm-ld requires a maximum for shared memory), and the TLS
+# symbols wasm-bindgen's threading transform needs. rustc used to add these linker flags itself
+# when `atomics` was enabled; current nightlies do not. The std for this target is rebuilt with
+# the same features via `-Z build-std=std,panic_abort` (justfile `wasm`), which is why the
+# toolchain is nightly. Host builds are unaffected by this section.
+[target.wasm32-unknown-unknown]
+rustflags = [
+  "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+  "-C", "link-arg=--shared-memory",
+  "-C", "link-arg=--import-memory",
+  "-C", "link-arg=--max-memory=1073741824",
+  "-C", "link-arg=--export=__wasm_init_tls",
+  "-C", "link-arg=--export=__tls_size",
+  "-C", "link-arg=--export=__tls_align",
+  "-C", "link-arg=--export=__tls_base",
+]

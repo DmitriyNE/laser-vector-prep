@@ -5,6 +5,9 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 wasm_crate := "lvp-wasm"
 wasm_out := "web/src/wasm"
+wasm_target := "--target wasm32-unknown-unknown"
+# Shared-memory wasm needs a std built with atomics (see .cargo/config.toml).
+build_std := "-Z build-std=std,panic_abort"
 
 default:
     @just --list --unsorted
@@ -26,21 +29,27 @@ test: wasm
 regression:
     cargo test --workspace -- --ignored
 
+# Regenerate fixtures/ from the deterministic generator (a test fails if they are stale).
+fixtures:
+    cargo run -p lvp-fixtures
+
 # Formatting and lints.
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
-    cargo clippy -p {{wasm_crate}} --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy -p {{wasm_crate}} {{wasm_target}} {{build_std}} -- -D warnings
 
 fmt:
     cargo fmt --all
 
 # Compile the wasm crate and generate JS/TS glue into web/src/wasm. profile: dev | release
 wasm profile="dev": check-wasm-bindgen
-    cargo build -p {{wasm_crate}} --target wasm32-unknown-unknown {{ if profile == "release" { "--release" } else { "" } }}
+    cargo build -p {{wasm_crate}} {{wasm_target}} {{build_std}} {{ if profile == "release" { "--release" } else { "" } }}
     mkdir -p {{wasm_out}}
     wasm-bindgen target/wasm32-unknown-unknown/{{ if profile == "release" { "release" } else { "debug" } }}/lvp_wasm.wasm \
         --out-dir {{wasm_out}} --target web --typescript
+    # wasm-bindgen-rayon's pool worker imports the glue as a package (`../../..`).
+    printf '{ "name": "lvp-wasm", "private": true, "type": "module", "main": "lvp_wasm.js", "types": "lvp_wasm.d.ts" }\n' > {{wasm_out}}/package.json
     {{ if profile == "release" { "wasm-opt -O3 -o " + wasm_out + "/lvp_wasm_bg.wasm " + wasm_out + "/lvp_wasm_bg.wasm" } else { "true" } }}
 
 # wasm-bindgen-cli (from nixpkgs) and the wasm-bindgen crate (Cargo.lock) must match exactly.

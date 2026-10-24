@@ -3,6 +3,7 @@
 
 export type Payload =
   | { kind: "version" }
+  | { kind: "threads" }
   | {
       kind: "flattenArc";
       cx: number;
@@ -11,15 +12,20 @@ export type Payload =
       startAngle: number;
       sweep: number;
       tolerance: number;
-    };
+    }
+  | { kind: "bbox"; points: Float64Array };
 
 export type Kind = Payload["kind"];
 
 export type ResultOf<K extends Kind> = K extends "version"
   ? string
-  : K extends "flattenArc"
-    ? Float64Array
-    : never;
+  : K extends "threads"
+    ? number
+    : K extends "flattenArc"
+      ? Float64Array
+      : K extends "bbox"
+        ? Float64Array | undefined
+        : never;
 
 /** What actually travels to the worker: a payload tagged with a request id. */
 export type Request = Payload & { id: number };

@@ -1,12 +1,19 @@
 /// <reference types="node" />
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, beforeAll } from "vitest";
-import init, { bbox_of, core_version, flatten_arc } from "./wasm/lvp_wasm.js";
+
+type Wasm = typeof import("./wasm/lvp_wasm.js");
+let { bbox_of, core_version, flatten_arc } = {} as Wasm;
 
 // Requires `just wasm` to have generated src/wasm (the justfile `test` recipe does this).
 beforeAll(async () => {
+  // The rayon pool helper registers a message listener on `self` at import time; Node has
+  // no `self`, so give it an inert event target. The pool itself is never started here.
+  (globalThis as { self?: EventTarget }).self ??= new EventTarget();
+  const wasm: Wasm = await import("./wasm/lvp_wasm.js");
+  ({ bbox_of, core_version, flatten_arc } = wasm);
   const bytes = await readFile(new URL("./wasm/lvp_wasm_bg.wasm", import.meta.url));
-  await init({ module_or_path: bytes });
+  await wasm.default({ module_or_path: bytes });
 });
 
 describe("lvp-wasm", () => {
@@ -29,6 +36,7 @@ describe("lvp-wasm", () => {
     expect(() => flatten_arc(0, 0, -1, 0, 1, 0.01)).toThrow(/radius/);
   });
 
+  // Inputs stay below the parallel threshold: rayon's pool needs browser Workers, not Node.
   it("computes bounding boxes and rejects odd buffers", () => {
     expect(bbox_of(new Float64Array([1, 2, -3, 4, 5, -6]))).toEqual(new Float64Array([-3, -6, 5, 4]));
     expect(bbox_of(new Float64Array([]))).toBeUndefined();
