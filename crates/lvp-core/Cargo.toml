@@ -12,6 +12,7 @@ cavalier_contours.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+usvg.workspace = true
 
 # boostvoronoi -> cpp_map -> rand -> getrandom: on wasm32 it needs the JS backend (see
 # `.cargo/config.toml` for the matching --cfg flag).

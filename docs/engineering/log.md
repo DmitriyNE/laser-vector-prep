@@ -3,6 +3,23 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — M3 step 3: SVG
+
+usvg (text feature off) resolves CSS, `use`, the viewBox and shapes; our `svg` module
+maps the tree onto source layers (D22). A raw-XML pre-scan supplies Inkscape layer labels
+and the diagnostics for text, images, masks, filters and foreign objects that usvg would
+otherwise drop quietly. Generated fixture `svg/marking.svg` binds the general-marking
+preset, whose layer-name rules are now format-agnostic.
+
+Learned:
+
+- usvg wraps the document in anonymous groups for the viewBox transform; "top-level
+  groups are layers" must descend through id-less groups first.
+- `line` and two-point paths carry SVG's default black fill; a fill with no enclosed area
+  must not become an (empty) filled primitive.
+- usvg geometry is f32: areas and widths reproduce to about 1e-5 relative, so fixture
+  tolerances are looser than for DXF and Gerber.
+
 ## 2026-10-24 — M3 step 2: path order planning
 
 Per-group plans (D24) with the three spec modes, precedence from cutting passes (holes before

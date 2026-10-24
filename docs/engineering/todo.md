@@ -34,7 +34,8 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 - [x] Worker crash recovery: a wasm trap replaces the worker and re-imports sources
 - [x] Playwright e2e on the installed Chrome (D20): import → evaluate → export through the
       real worker protocol, slot mapping, two-group hatch, service worker + offline
-- [ ] Release wasm is ~0.9 MB (0.36 MB gzip); try `wasm-opt -Oz` and feature trimming
+- [ ] Release wasm is 1.74 MB after usvg (was 1.05 MB; lopdf will add more); try
+      `wasm-opt -Oz`, feature trimming and lazy-loading the readers as separate modules
 - [ ] Worker: cooperative cancellation / progress for long computations (today:
       terminate-and-respawn only; with a shared-memory pool, cancellation must also
       stop rayon work, e.g. via an atomic flag checked between chunks)
@@ -81,8 +82,12 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       point would be exact too and shorten the entry jump further
 - [ ] Optimizer: the improvement phase is single-threaded; the candidate evaluation is
       embarrassingly parallel if large fills make it slow
-- [ ] SVG reader via usvg (text refused, clip paths applied as intersections, masks/filters
+- [x] SVG reader via usvg (text refused, clip paths applied as intersections, masks/filters
       diagnosed)
+- [ ] SVG: clip paths apply to fills only; stroked and unpainted paths inside clipped groups
+      are read unclipped with a warning (needs polyline-by-region clipping)
+- [ ] SVG: stroke caps and joins are always round in stroke expansion (butt/square/miter
+      diagnosed as info)
 - [ ] Vector PDF reader: lopdf object model + own content-stream interpreter (paths,
       transforms, colours, page scale); region vs trajectory interpretation per layer
 - [ ] GDSII reader: BOUNDARY, PATH (pathtype ends), BOX, SREF/AREF flattening,

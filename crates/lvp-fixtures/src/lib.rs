@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 pub mod gerber;
+pub mod svg;
 
 use lvp_core::dxf::write::{Document, Entity, LwVertex, Placed};
 use lvp_core::geom::Point;
@@ -415,7 +416,25 @@ pub fn manifest(fixtures: &[Fixture]) -> Value {
             })
         })
         .collect();
-    let entries: Vec<Value> = entries.into_iter().chain(gerber_entries).collect();
+    let svg_entries: Vec<Value> = svg::all()
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "file": f.file_name(),
+                "format": "svg",
+                "units": "mm",
+                "description": f.description,
+                "expect": f.expect,
+                "notes": f.notes,
+            })
+        })
+        .collect();
+    let entries: Vec<Value> = entries
+        .into_iter()
+        .chain(gerber_entries)
+        .chain(svg_entries)
+        .collect();
     json!({
         "generator": format!("lvp-fixtures {} (`just fixtures`)", env!("CARGO_PKG_VERSION")),
         "conventions": [
@@ -436,6 +455,7 @@ pub fn render() -> Vec<(String, String)> {
         .map(|f| (f.file_name(), f.document.to_dxf()))
         .collect();
     files.extend(gerber::all().into_iter().map(|g| (g.file_name(), g.text)));
+    files.extend(svg::all().into_iter().map(|f| (f.file_name(), f.text)));
     let mut manifest =
         serde_json::to_string_pretty(&manifest(&fixtures)).expect("manifest serialises");
     manifest.push('\n');

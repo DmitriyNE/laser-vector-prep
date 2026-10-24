@@ -429,6 +429,13 @@ fn dxf_layer(name: &str) -> MatchRule {
     }
 }
 
+fn any_layer(name: &str) -> MatchRule {
+    MatchRule::LayerName {
+        format: None,
+        name: name.into(),
+    }
+}
+
 fn function(pattern: &str) -> MatchRule {
     MatchRule::Function {
         pattern: pattern.into(),
@@ -637,9 +644,10 @@ pub fn general_marking() -> Profile {
         "builtin-general-marking",
         "General marking (lines + hatched fill)",
     );
+    // Any format: marking artwork comes from DXF and SVG alike.
     p.source_bindings = vec![
-        slot("src-marks", "Marks", true, vec![dxf_layer("MARK")]),
-        slot("src-fill", "Fill", false, vec![dxf_layer("FILL")]),
+        slot("src-marks", "Marks", true, vec![any_layer("MARK")]),
+        slot("src-fill", "Fill", false, vec![any_layer("FILL")]),
     ];
     p.output_groups = vec![
         group("grp-marks", "Marks", Rgb::BLACK),

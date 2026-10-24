@@ -349,6 +349,49 @@
         "the thermal area is the annulus minus two 0.5 mm bars (closed-form circle strips)"
       ],
       "units": "mm"
+    },
+    {
+      "description": "Inkscape-style layers MARK (stroked lines, polyline, quadratic Bézier, rotated group), FILL (Bézier circle, even-odd ring, scaled `use` pads) and CLIPPED (rect cut to its right half by a clipPath), 60 x 20 mm with a 1:1 viewBox.",
+      "expect": {
+        "bounds_mm": [
+          0.0,
+          0.0,
+          60.0,
+          20.0
+        ],
+        "clipped_area_mm2": 50.0,
+        "clipped_bounds_mm": [
+          50.0,
+          5.0,
+          55.0,
+          15.0
+        ],
+        "fill_area_mm2": 168.53981633974485,
+        "fill_holes": 1,
+        "fill_islands": 4,
+        "layers": [
+          "CLIPPED",
+          "FILL",
+          "MARK"
+        ],
+        "mark_open_paths": 4,
+        "mark_widths_mm": [
+          0.2,
+          0.25,
+          0.2,
+          0.1
+        ]
+      },
+      "file": "svg/marking.svg",
+      "format": "svg",
+      "name": "marking",
+      "notes": [
+        "y is flipped on import: SVG y grows downwards, the model's y grows upwards",
+        "the Bézier circle area is exact to the kappa approximation (about 0.03 %), so the test tolerance is 0.05 mm²",
+        "usvg geometry is f32: positions reproduce to about 1e-6 mm, areas to about 1e-4 mm²",
+        "stroke widths follow the group scale: the rotated line keeps 0.1 mm, the pads' fill is scaled 1.5x"
+      ],
+      "units": "mm"
     }
   ],
   "generator": "lvp-fixtures 0.1.0 (`just fixtures`)"

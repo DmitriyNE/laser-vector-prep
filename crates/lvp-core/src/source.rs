@@ -202,6 +202,7 @@ pub fn read_any(name: &str, bytes: &[u8], opts: &ReadOptions) -> Result<SourceDo
             message: e.to_string(),
         }),
         SourceFormat::Gerber => crate::gerber::read_bytes(name, bytes, opts),
+        SourceFormat::Svg => crate::svg::read_bytes(name, bytes, opts),
         other => Err(ReadError {
             format: Some(other),
             message: format!("{} reading is not implemented yet", format_name(other)),
@@ -297,7 +298,7 @@ mod tests {
     fn unknown_formats_are_refused_with_a_message() {
         let e = read_any("blob.bin", b"\x01\x02", &ReadOptions::default()).unwrap_err();
         assert!(e.message.contains("unrecognised"));
-        let e = read_any("x.svg", b"<svg/>", &ReadOptions::default()).unwrap_err();
+        let e = read_any("x.svg", b"<svg", &ReadOptions::default()).unwrap_err();
         assert_eq!(e.format, Some(SourceFormat::Svg));
         let d = read_any(
             "x.gtl",
