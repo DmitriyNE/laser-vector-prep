@@ -1,3 +1,4 @@
+import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig, type Plugin } from "vitest/config";
 
 // In dev/preview the server sets the isolation headers itself. On static hosting the
@@ -19,7 +20,7 @@ const coiServiceWorkerTag: Plugin = {
 export default defineConfig({
   // Relative URLs so the bundle works from any sub-path (e.g. GitHub Pages).
   base: "./",
-  plugins: [coiServiceWorkerTag],
+  plugins: [svelte(), coiServiceWorkerTag],
   server: { headers: crossOriginIsolation },
   preview: { headers: crossOriginIsolation },
   build: {
