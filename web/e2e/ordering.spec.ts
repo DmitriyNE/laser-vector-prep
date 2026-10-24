@@ -14,43 +14,28 @@ async function settle(page: import("@playwright/test").Page) {
   });
 }
 
-test("path order planning: minimum jump shortens travel, bleed-aware protects copper and draws a heatmap", async ({ page }) => {
+test("path order planning: LDI preset is bleed-aware by default; as generated and minimum jump compare", async ({ page }) => {
   await page.goto(url);
   await waitForApp(page);
   await importDxf(page, fixture("board-islands.dxf"));
+  const order = page.locator(".panel.order");
+  const mode = order.locator("select").first();
+  const waitMode = (m: string) =>
+    page.waitForFunction((want) => {
+      const lvp = (globalThis as unknown as { lvp: { evaluating: boolean; evaluation: { groups: { mode: string }[] } | null } }).lvp;
+      return !lvp.evaluating && lvp.evaluation?.groups[0]?.mode === want;
+    }, m);
 
-  // As generated: the Path order table shows the copper group with before == after.
+  // Default: bleed-aware, protecting the keep-clear background; coverage numbers and a heatmap.
+  await expect(mode).toHaveValue("bleedAware");
+  await expect(order.getByLabel("Keep clear (background)")).toBeChecked();
   let gs = await groups(page);
-  const copper0 = gs.find((g) => g.name === "Copper")!;
-  expect(copper0.mode).toBe("asGenerated");
-  expect(copper0.after.jumpLengthMm).toBeCloseTo(copper0.before.jumpLengthMm, 6);
-  await expect(page.locator(".group-row").first()).toContainText("Copper");
-
-  // Minimum jump from the panel.
-  await page.locator(".panel.order").locator("select").first().selectOption("minimumJump");
-  await page.waitForFunction(() => {
-    const lvp = (globalThis as unknown as { lvp: { evaluating: boolean; evaluation: { groups: { mode: string }[] } } }).lvp;
-    return !lvp.evaluating && lvp.evaluation.groups[0]?.mode === "minimumJump";
-  });
-  gs = await groups(page);
-  const copper1 = gs.find((g) => g.name === "Copper")!;
-  expect(copper1.paths).toBe(copper0.paths);
-  expect(copper1.after.jumpLengthMm).toBeLessThan(copper1.before.jumpLengthMm);
-  const ev = await summary(page);
-  expect(ev.hasErrors).toBe(false);
-
-  // Bleed-aware with the copper layer protected gives coverage numbers and a heatmap.
-  await page.locator(".panel.order").locator("select").first().selectOption("bleedAware");
-  await page.locator(".panel.order").getByLabel("Copper", { exact: true }).check();
-  await page.waitForFunction(() => {
-    const lvp = (globalThis as unknown as { lvp: { evaluating: boolean; evaluation: { groups: { mode: string; heatmap: boolean }[] } } }).lvp;
-    return !lvp.evaluating && lvp.evaluation.groups[0]?.mode === "bleedAware" && lvp.evaluation.groups[0]?.heatmap;
-  });
-  gs = await groups(page);
-  const copper2 = gs.find((g) => g.name === "Copper")!;
-  expect(copper2.heatmap).toBe(true);
-  expect(copper2.after.coveredMm2).toBeDefined();
-  expect(copper2.after.coveredMm2!).toBeLessThanOrEqual(copper2.before.coveredMm2! + 1e-9);
+  const bleed = gs.find((g) => g.name === "Copper")!;
+  expect(bleed.mode).toBe("bleedAware");
+  expect(bleed.heatmap).toBe(true);
+  expect(bleed.after.coveredMm2).toBeDefined();
+  expect(bleed.after.coveredMm2!).toBeLessThanOrEqual(bleed.before.coveredMm2! + 1e-9);
+  expect(bleed.after.jumpLengthMm).toBeLessThan(bleed.before.jumpLengthMm);
   const heat = await page.evaluate(async () => {
     const lvp = (globalThis as unknown as { lvp: { heatmap: (id: string) => Promise<{ width: number; height: number; counts: Uint16Array; mask: Uint8Array } | null> } }).lvp;
     const h = await lvp.heatmap("grp-copper");
@@ -59,6 +44,27 @@ test("path order planning: minimum jump shortens travel, bleed-aware protects co
   expect(heat).not.toBeNull();
   expect(heat!.cells).toBe(heat!.w * heat!.h);
   expect(heat!.masked).toBeGreaterThan(100);
+
+  // As generated: before == after.
+  await mode.selectOption("asGenerated");
+  await waitMode("asGenerated");
+  gs = await groups(page);
+  const generated = gs.find((g) => g.name === "Copper")!;
+  expect(generated.after.jumpLengthMm).toBeCloseTo(generated.before.jumpLengthMm, 6);
+  await expect(page.locator(".group-row").first()).toContainText("Copper");
+
+  // Minimum jump: same paths, shorter travel.
+  await mode.selectOption("minimumJump");
+  await waitMode("minimumJump");
+  gs = await groups(page);
+  const minimum = gs.find((g) => g.name === "Copper")!;
+  expect(minimum.paths).toBe(generated.paths);
+  expect(minimum.after.jumpLengthMm).toBeLessThan(minimum.before.jumpLengthMm);
+  const ev = await summary(page);
+  expect(ev.hasErrors).toBe(false);
+
+  await mode.selectOption("bleedAware");
+  await waitMode("bleedAware");
 
   // Toggling the overlays does not break drawing.
   await page.locator(".hud").getByLabel("jumps").check();

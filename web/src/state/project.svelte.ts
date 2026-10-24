@@ -47,7 +47,7 @@ export class ProjectStore {
     workingLayers: [],
     outputGroups: [],
     export: { strokeWidthMm: 0.0254, marginMm: 5, separateFiles: false, flattenToleranceMm: 0.001 },
-    optimizer: { mode: "asGenerated", footprintMm: 0.1, bleedWeight: 1, protected: [], cellMm: 0.05, maxSweeps: 20 },
+    optimizer: { mode: "minimumJump", footprintMm: 0.1, bleedWeight: 1, protected: [], cellMm: 0.05, maxSweeps: 20 },
   });
   /** Saved profile the edits are based on; `null` while based on a preset or an import. */
   activeSavedId: string | null = $state(null);

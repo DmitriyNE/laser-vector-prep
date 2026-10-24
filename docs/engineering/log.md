@@ -3,6 +3,12 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — Path-order defaults
+
+Bleed-aware by default for the two LDI presets, minimum jump for the rest and for new
+profiles (D28). On the board fixture the positive preset's travel drops from 2647 mm to
+49 mm and the keep-clear area under jump footprints from 34.3 to 2.5 mm².
+
 ## 2026-10-25 — CI and GitHub Pages
 
 `.github/workflows/ci.yml`: lint, test, build and browser tests in the Nix dev shell on

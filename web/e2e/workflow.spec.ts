@@ -76,7 +76,7 @@ test("two operand groups: envelope minus copper, hatched", async ({ page }) => {
   const hatch = ev.passes.find((p) => p.name === "Hatch")!;
   expect(hatch.paths).toBeGreaterThan(300);
   expect(hatch.closed).toBe(0);
-  const negativeRow = page.locator(".layer > .row").nth(3);
+  const negativeRow = page.locator(".layer > .row").filter({ has: page.locator(".title", { hasText: /^Negative$/ }) });
   await expect(negativeRow).toContainText("A − B");
   await expect(negativeRow).toContainText("2 islands, 10 holes");
 });

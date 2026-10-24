@@ -465,8 +465,9 @@ impl Default for ExportSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum OptimizerMode {
-    #[default]
     AsGenerated,
+    /// The default for new profiles (owner decision, 2026-10-25).
+    #[default]
     MinimumJump,
     BleedAware,
 }

@@ -35,13 +35,14 @@ test("eyes toggle, a layer eye takes its passes along, solo isolates and show-al
 
   // Alt-click on an eye shows only that item; the toolbar offers to show everything again.
   await layerRows.nth(1).locator(".eye").click({ modifiers: ["Alt"] });
+  // Every other layer is hidden, including the preset's artwork box and keep-clear area.
   expect(await hidden(page)).toEqual({
     sources: ["0:ROUTE_TOOL_PATH", "0:TOP_LAYER"],
-    layers: ["wl-copper"],
+    layers: ["wl-artwork-box", "wl-copper", "wl-keep-clear"],
     passes: ["pass-copper-fill"],
   });
   const showAll = page.locator(".hud").getByRole("button", { name: /show all/ });
-  await expect(showAll).toContainText("4 hidden");
+  await expect(showAll).toContainText("6 hidden");
 
   // Alt-click again on the only visible item restores everything.
   await layerRows.nth(1).locator(".eye").click({ modifiers: ["Alt"] });
@@ -52,7 +53,7 @@ test("eyes toggle, a layer eye takes its passes along, solo isolates and show-al
   await topLayerRow.hover();
   await topLayerRow.getByRole("button", { name: "only", exact: true }).click();
   expect((await hidden(page)).sources).toEqual(["0:ROUTE_TOOL_PATH"]);
-  expect((await hidden(page)).layers).toEqual(["wl-copper", "wl-outline"]);
+  expect((await hidden(page)).layers).toEqual(["wl-artwork-box", "wl-copper", "wl-keep-clear", "wl-outline"]);
   await showAll.click();
   expect(await hidden(page)).toEqual({ sources: [], layers: [], passes: [] });
 

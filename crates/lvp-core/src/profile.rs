@@ -136,6 +136,17 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
             }
         }
     }
+    for id in &profile.optimizer.protected {
+        if profile.layer(id).is_none() {
+            out.push(
+                Diagnostic::warning(
+                    "profile.protected_unknown",
+                    format!("path order protects unknown layer {id}"),
+                )
+                .with_context(id.to_string()),
+            );
+        }
+    }
     for g in &profile.output_groups {
         dup(g.id.as_str(), "output group", &mut out);
         if let Some(w) = g.stroke_width_mm
@@ -652,6 +663,12 @@ pub fn pcb_negative_hatch() -> Profile {
             vec![outline_passthrough()],
         ),
     ];
+    // Exposure lands on the background; the copper must stay unexposed, so jumps avoid it.
+    p.optimizer = OptimizerSettings {
+        mode: OptimizerMode::BleedAware,
+        protected: vec![LayerId::new("wl-copper")],
+        ..OptimizerSettings::default()
+    };
     p
 }
 
@@ -708,6 +725,7 @@ pub fn general_marking() -> Profile {
             )],
         ),
     ];
+    p.optimizer.mode = OptimizerMode::MinimumJump;
     p
 }
 
@@ -749,6 +767,8 @@ pub fn boundary_cutting() -> Profile {
     );
     cut.interpretation = contour_interpretation();
     p.working_layers = vec![cut];
+    // Holes stay before their outline: the trace emits that constraint.
+    p.optimizer.mode = OptimizerMode::MinimumJump;
     p
 }
 
@@ -831,7 +851,33 @@ pub fn pcb_positive_ldi() -> Profile {
             enabled: true,
             reference_only: false,
         },
+        // Keep-clear area for path ordering: the background around the copper inside the
+        // artwork's bounding box. Jump footprints there could expose resist that must stay
+        // unexposed, so bleed-aware ordering keeps jumps over copper where it can.
+        envelope_layer(
+            "wl-artwork-box",
+            "Artwork box",
+            EnvelopeProvider::BoundingBox { margin_mm: 1.0 },
+            vec![Operand::Layer(LayerId::new("wl-copper"))],
+        ),
+        {
+            let mut keep = layer(
+                "wl-keep-clear",
+                "Keep clear (background)",
+                GeometryKind::Region,
+                vec![Operand::Layer(LayerId::new("wl-artwork-box"))],
+                Vec::new(),
+            );
+            keep.operands = vec![Operand::Layer(LayerId::new("wl-copper"))];
+            keep.op = LayerOp::Subtraction;
+            reference(keep)
+        },
     ];
+    p.optimizer = OptimizerSettings {
+        mode: OptimizerMode::BleedAware,
+        protected: vec![LayerId::new("wl-keep-clear")],
+        ..OptimizerSettings::default()
+    };
     p
 }
 
@@ -860,6 +906,26 @@ mod tests {
                 p.name
             );
         }
+        // Path order defaults: bleed-aware for the two LDI presets (each protects what must
+        // stay unexposed), minimum jump for the others.
+        let modes: Vec<(OptimizerMode, Vec<&str>)> = presets
+            .iter()
+            .map(|p| {
+                (
+                    p.optimizer.mode,
+                    p.optimizer.protected.iter().map(|l| l.as_str()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            modes,
+            vec![
+                (OptimizerMode::BleedAware, vec!["wl-keep-clear"]),
+                (OptimizerMode::BleedAware, vec!["wl-copper"]),
+                (OptimizerMode::MinimumJump, vec![]),
+                (OptimizerMode::MinimumJump, vec![]),
+            ]
+        );
         // The default project profile is the positive LDI one.
         assert_eq!(presets[0], pcb_positive_ldi());
         assert!(to_json(&presets[0]).contains("\"kind\": \"contourFill\""));
@@ -906,7 +972,7 @@ mod tests {
         let json = r#"{"schemaVersion": 1, "profileId": "p", "name": "Empty"}"#;
         let p = parse_profile(json).unwrap();
         assert_eq!(p.export.stroke_width_mm, 0.0254);
-        assert_eq!(p.optimizer.mode, OptimizerMode::AsGenerated);
+        assert_eq!(p.optimizer.mode, OptimizerMode::MinimumJump);
         assert!(p.working_layers.is_empty());
     }
 
@@ -941,5 +1007,12 @@ mod tests {
         assert!(codes.contains(&"profile.unknown_layer"));
         assert!(codes.contains(&"profile.color_collision"));
         assert!(codes.contains(&"profile.pitch"));
+        let mut q = pcb_positive_ldi();
+        q.optimizer.protected.push(LayerId::new("ghost"));
+        assert!(
+            validate(&q)
+                .iter()
+                .any(|d| d.code == "profile.protected_unknown")
+        );
     }
 }

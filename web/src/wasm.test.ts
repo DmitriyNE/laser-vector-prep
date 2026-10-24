@@ -61,7 +61,10 @@ describe("lvp-wasm project API", () => {
     // Jumps are planned per output group; the copper group holds only this pass.
     const jumps = wasm.preview_jumps(pass.group)!;
     expect(jumps.closed.length).toBe(pass.paths - 1);
-    expect(wasm.heatmap(pass.group)).toBeUndefined();
+    // The preset plans bleed-aware over its keep-clear background: a heatmap exists.
+    const heat = wasm.heatmap(pass.group)!;
+    expect(heat.counts.length).toBe(heat.width * heat.height);
+    heat.free();
     jumps.free();
 
     const pdf = wasm.export_pdf();

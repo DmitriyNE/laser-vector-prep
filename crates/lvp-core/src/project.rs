@@ -614,7 +614,8 @@ mod tests {
         assert_eq!(e.revision, 1);
         assert!(!e.has_errors, "{:?}", e.diagnostics);
         assert!(e.bindings.iter().all(|b| b.status == "matched"));
-        assert_eq!(e.layers.len(), 2);
+        // Copper, outline, and the artwork box and keep-clear background used for ordering.
+        assert_eq!(e.layers.len(), 4);
         assert_eq!(e.layers[0].outers, 10, "ten copper islands");
         assert_eq!(e.layers[0].holes, 1);
         assert_eq!(e.passes.len(), 2);
@@ -642,7 +643,8 @@ mod tests {
             .unwrap();
         assert_eq!(copper.paths, fill.paths);
         assert_eq!(copper.after.jumps, fill.paths - 1);
-        assert_eq!(copper.mode, OptimizerMode::AsGenerated);
+        assert_eq!(copper.mode, OptimizerMode::BleedAware);
+        assert!(copper.heatmap, "the keep-clear background is protected");
         let layer = p.preview_layer(&LayerId::new("wl-copper")).unwrap();
         assert_eq!(layer.path_count(), 11);
         let src = p.preview_source(0, "ROUTE_TOOL_PATH").unwrap();

@@ -30,6 +30,8 @@ fn minimum_jump_shortens_travel_and_orders_the_export() {
     {
         *pitch_mm = 0.1;
     }
+    // The preset plans bleed-aware; start from the generated order to compare against.
+    profile.optimizer.mode = OptimizerMode::AsGenerated;
     let mut ev = Evaluator::new();
     let generated = ev.evaluate(&profile, &sources);
     let copper = GroupId::new("grp-copper");
