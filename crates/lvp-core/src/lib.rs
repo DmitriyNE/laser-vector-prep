@@ -12,6 +12,7 @@ pub mod eval;
 pub mod export;
 pub mod flatten;
 pub mod geom;
+pub mod gerber;
 pub mod model;
 pub mod patterns;
 pub mod pline;

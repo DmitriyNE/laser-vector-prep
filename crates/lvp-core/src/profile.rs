@@ -535,6 +535,15 @@ fn envelope_layer(
     reference(l)
 }
 
+/// Read closed contours as loops whatever width they were drawn with (Gerber profiles are
+/// thin draws); open paths stay errors.
+fn contour_interpretation() -> Interpretation {
+    Interpretation {
+        loop_rule: LoopRuleCfg::MergeThenNest,
+        stroke_width: StrokeWidth::None,
+    }
+}
+
 fn outline_passthrough() -> Pass {
     pass(
         "pass-outline",
@@ -592,12 +601,16 @@ pub fn pcb_negative_hatch() -> Profile {
             vec![Operand::Source(SourceId::new("src-copper"))],
             Vec::new(),
         )),
-        envelope_layer(
-            "wl-board",
-            "Board interior",
-            EnvelopeProvider::NamedBoundary,
-            vec![Operand::Source(SourceId::new("src-outline"))],
-        ),
+        {
+            let mut board = envelope_layer(
+                "wl-board",
+                "Board interior",
+                EnvelopeProvider::NamedBoundary,
+                vec![Operand::Source(SourceId::new("src-outline"))],
+            );
+            board.interpretation = contour_interpretation();
+            board
+        },
         envelope_layer(
             "wl-clearance",
             "Copper + 50 um clearance",
@@ -686,7 +699,7 @@ pub fn boundary_cutting() -> Profile {
     rules.extend(outline_rules().into_iter().skip(1));
     p.source_bindings = vec![slot("src-cut", "Cut outline", true, rules)];
     p.output_groups = vec![group("grp-cut", "Cut", Rgb::RED)];
-    p.working_layers = vec![layer(
+    let mut cut = layer(
         "wl-cut",
         "Cut",
         GeometryKind::Region,
@@ -705,7 +718,9 @@ pub fn boundary_cutting() -> Profile {
             },
             "grp-cut",
         )],
-    )];
+    );
+    cut.interpretation = contour_interpretation();
+    p.working_layers = vec![cut];
     p
 }
 

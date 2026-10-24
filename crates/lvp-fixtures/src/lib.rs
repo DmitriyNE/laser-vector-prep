@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 
+pub mod gerber;
+
 use lvp_core::dxf::write::{Document, Entity, LwVertex, Placed};
 use lvp_core::geom::Point;
 use lvp_core::units::Unit;
@@ -387,6 +389,7 @@ pub fn manifest(fixtures: &[Fixture]) -> Value {
             json!({
                 "name": f.name,
                 "file": f.file_name(),
+                "format": "dxf",
                 "units": unit_name(d.units),
                 "description": f.description,
                 "bounds_mm": bbox_json(d.bounds(), &to_mm),
@@ -397,12 +400,29 @@ pub fn manifest(fixtures: &[Fixture]) -> Value {
             })
         })
         .collect();
+    let gerber_entries: Vec<Value> = gerber::all()
+        .iter()
+        .map(|g| {
+            json!({
+                "name": g.name,
+                "file": g.file_name(),
+                "format": "gerber",
+                "units": "mm",
+                "description": g.description,
+                "function": g.function,
+                "expect": g.expect,
+                "notes": g.notes,
+            })
+        })
+        .collect();
+    let entries: Vec<Value> = entries.into_iter().chain(gerber_entries).collect();
     json!({
         "generator": format!("lvp-fixtures {} (`just fixtures`)", env!("CARGO_PKG_VERSION")),
         "conventions": [
-            "all *_mm values are millimetres regardless of the file's $INSUNITS",
-            "bounds are of centrelines: polyline constant widths are not included",
-            "entity counts are of DXF entities as written, before any union or block resolution",
+            "all *_mm values are millimetres regardless of the file's units",
+            "DXF bounds are of centrelines: polyline constant widths are not included",
+            "DXF entity counts are of entities as written, before any union or block resolution",
+            "Gerber entries have one layer named after the file; `function` is the X2 TF.FileFunction",
         ],
         "fixtures": entries,
     })
@@ -415,6 +435,7 @@ pub fn render() -> Vec<(String, String)> {
         .iter()
         .map(|f| (f.file_name(), f.document.to_dxf()))
         .collect();
+    files.extend(gerber::all().into_iter().map(|g| (g.file_name(), g.text)));
     let mut manifest =
         serde_json::to_string_pretty(&manifest(&fixtures)).expect("manifest serialises");
     manifest.push('\n');

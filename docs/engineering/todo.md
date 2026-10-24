@@ -63,12 +63,16 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 
 Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF export.
 
-- [ ] Shared source document; file-name glob and layer-function match rules; format
+- [x] Shared source document; file-name glob and layer-function match rules; format
       detection by content
-- [ ] Gerber RS-274X reader: apertures C/R/O/P, macros with variables and expressions,
+- [x] Gerber RS-274X reader: apertures C/R/O/P, macros with variables and expressions,
       D01/D02/D03, G01/G02/G03 with G74/G75, G36/G37 regions, LP polarity compositing in
       source order, SR, AB, LM/LR/LS, X2 attributes (TF.FileFunction → layer function);
       synthetic Gerber fixtures
+- [ ] Gerber: draws with rectangular apertures are approximated by round strokes of the
+      aperture's extent (diagnosed); exact swept rectangles if a real file needs them
+- [ ] Gerber: deprecated image transforms (OF, SF, MI, AS, IR) and IPNEG are diagnosed, not
+      applied
 - [ ] Path optimizer: nearest-endpoint baseline, 2-opt / or-opt moves, open-path reversal,
       seam choice on loops; modes as-generated / minimum jump / bleed-aware with protected
       regions; jump footprint heatmap; inside-before-outside constraint for cutting passes;

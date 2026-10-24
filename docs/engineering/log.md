@@ -3,6 +3,29 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — M3 step 1: Gerber
+
+Shared `source::SourceDocument` for every reader, `read_any` with content-first format
+detection, and two new slot rules: file-name glob and layer function (D23). The Gerber
+reader (D22) is our own: lexer for `*` words and `%…%` blocks, FS/MO, standard apertures,
+macros with a small expression parser, draws (chained into polylines, arcs in both quadrant
+modes, a chain returning to its start becomes a closed contour), regions, SR, AB, LM/LR/LS,
+polarity. Dark-only files pass flashes and draws through as primitives; files with clear
+polarity are composited in source order into one region. Three generated Gerber fixtures
+(copper and profile of the board, plus a features file) are read back against the manifest,
+and the PCB presets bind the X2 pair through `Copper,L1,Top` and `Profile*`.
+
+Learned:
+
+- Re-reading a resolved region's loops with the nonzero rule loses holes: `from_loops`
+  normalises every loop to CCW first. Resolved loops must be re-read with even-odd, which
+  is exact for them; fills now carry outers and holes separately for that reason.
+- A Gerber profile is a thin drawn contour, not a filled area. The presets that need the
+  board interior (named boundary, cutting) read closed contours as loops regardless of the
+  drawn width (`strokeWidth: none`), which also keeps them exact for DXF outlines.
+- The macro comment primitive is `0 text` with no comma after the code; splitting on commas
+  first mis-parsed it.
+
 ## 2026-10-24 — Layers panel compacted
 
 Owner feedback after M2: the Layers panel overflowed its 300 px column and every row had

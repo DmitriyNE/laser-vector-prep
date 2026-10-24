@@ -24,7 +24,12 @@ fn committed_fixtures_match_generator() {
 fn manifest_is_consistent_with_documents() {
     let fixtures = lvp_fixtures::all();
     let manifest = lvp_fixtures::manifest(&fixtures);
-    let entries = manifest["fixtures"].as_array().unwrap();
+    let entries: Vec<&serde_json::Value> = manifest["fixtures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["format"] == "dxf")
+        .collect();
     assert_eq!(entries.len(), fixtures.len());
     for (entry, f) in entries.iter().zip(&fixtures) {
         assert_eq!(entry["name"], f.name);
@@ -51,4 +56,18 @@ fn board_fixture_has_the_documented_copper_extent() {
     assert!((b.max.x - 22.5).abs() < 1e-9 && (b.max.y - 9.3).abs() < 1e-9);
     let o = f.document.layer_bounds(Some("ROUTE_TOOL_PATH")).unwrap();
     assert!((o.width() - 25.0).abs() < 1e-6 && (o.height() - 11.3).abs() < 1e-6);
+}
+
+#[test]
+fn gerber_fixtures_declare_their_function_in_the_file() {
+    for g in lvp_fixtures::gerber::all() {
+        let line = format!("%TF.FileFunction,{}*%", g.function.unwrap());
+        assert!(g.text.contains(&line), "{}: missing {line}", g.name);
+        assert!(
+            g.text.trim_end().ends_with("M02*"),
+            "{}: no end of file",
+            g.name
+        );
+        assert!(g.text.contains("%FSLAX46Y46*%") && g.text.contains("%MOMM*%"));
+    }
 }

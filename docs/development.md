@@ -33,7 +33,7 @@ or prefix each call with `nix develop -c`.
 |---|---|
 | `just build` | One-shot production build: `npm ci`, release wasm + `wasm-opt`, `svelte-check`, Vite build → `web/dist/` |
 | `just dev` | Debug wasm, then Vite dev server with hot reload |
-| `just test` | `cargo test` (unit + property tests, DXF fixtures, export pipeline, fixture staleness), `svelte-check`, `vitest` driving the real wasm through import → evaluate → export |
+| `just test` | `cargo test` (unit + property tests, DXF and Gerber fixtures, presets, export pipeline, fixture staleness), `svelte-check`, `vitest` driving the real wasm through import → evaluate → export |
 | `just e2e` | Browser end-to-end tests of `web/dist` in the locally installed Chrome (run `just build` first; see below) |
 | `just regression` | Fixture-based `#[ignore]`d tests |
 | `just fixtures` | Regenerate `fixtures/` from `crates/lvp-fixtures` |

@@ -74,7 +74,12 @@ fn closed_open_counts(doc: &DxfDocument, layer: &str) -> (usize, usize) {
 #[test]
 fn every_fixture_reads_with_manifest_layers_and_bounds() {
     let m = manifest();
-    for entry in m["fixtures"].as_array().unwrap() {
+    for entry in m["fixtures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["format"] == "dxf")
+    {
         let name = entry["name"].as_str().unwrap();
         let doc = load(entry);
         assert!(

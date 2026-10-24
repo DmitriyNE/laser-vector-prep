@@ -13,8 +13,9 @@
 
   function onPick(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
-    if (input.files?.length) void store.addFiles(input.files);
+    const files = Array.from(input.files ?? []);
     input.value = "";
+    if (files.length) void store.addFiles(files);
   }
 
   function onMap(e: Event, file: string, layer: string) {

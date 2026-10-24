@@ -100,7 +100,9 @@ export class ProjectStore {
   // ---- sources -----------------------------------------------------------------------
 
   async addFiles(files: Iterable<File>) {
-    for (const f of files) {
+    // Snapshot first: a FileList from an <input> is live and empties when the input is
+    // reset, which happened between the awaits below and dropped every file but the first.
+    for (const f of Array.from(files)) {
       try {
         const bytes = new Uint8Array(await f.arrayBuffer());
         const summary = await this.worker.call({ kind: "addSource", name: f.name, bytes });

@@ -1,8 +1,9 @@
 {
   "conventions": [
-    "all *_mm values are millimetres regardless of the file's $INSUNITS",
-    "bounds are of centrelines: polyline constant widths are not included",
-    "entity counts are of DXF entities as written, before any union or block resolution"
+    "all *_mm values are millimetres regardless of the file's units",
+    "DXF bounds are of centrelines: polyline constant widths are not included",
+    "DXF entity counts are of entities as written, before any union or block resolution",
+    "Gerber entries have one layer named after the file; `function` is the X2 TF.FileFunction"
   ],
   "fixtures": [
     {
@@ -34,6 +35,7 @@
         ]
       },
       "file": "dxf/board-islands.dxf",
+      "format": "dxf",
       "layers": {
         "ROUTE_TOOL_PATH": {
           "bounds_mm": [
@@ -84,6 +86,7 @@
         "top_level_regions": 3
       },
       "file": "dxf/nested-holes.dxf",
+      "format": "dxf",
       "layers": {
         "SHAPES": {
           "bounds_mm": [
@@ -126,6 +129,7 @@
         }
       },
       "file": "dxf/open-linework.dxf",
+      "format": "dxf",
       "layers": {
         "FILL": {
           "bounds_mm": [
@@ -179,6 +183,7 @@
         "insunits": 1
       },
       "file": "dxf/units-inch.dxf",
+      "format": "dxf",
       "layers": {
         "PART": {
           "bounds_mm": [
@@ -252,6 +257,7 @@
         "resolved_closed_contours": 8
       },
       "file": "dxf/blocks-insert.dxf",
+      "format": "dxf",
       "layers": {
         "PADS": {
           "bounds_mm": [
@@ -269,6 +275,78 @@
       "notes": [
         "block entities sit on layer 0 and must inherit the INSERT's layer (PADS)",
         "order of operations is scale, then rotate, then translate"
+      ],
+      "units": "mm"
+    },
+    {
+      "description": "Top copper of the board fixture as Gerber X2: flashes (C, R, O, C with hole), traces as draws.",
+      "expect": {
+        "copper_bounds_mm": [
+          2.4,
+          2.0,
+          22.5,
+          9.3
+        ],
+        "copper_holes": 1,
+        "copper_islands": 10,
+        "primitives": 12
+      },
+      "file": "gerber/board-F_Cu.gbr",
+      "format": "gerber",
+      "function": "Copper,L1,Top",
+      "name": "board-F_Cu",
+      "notes": [
+        "geometry matches dxf/board-islands.dxf TOP_LAYER so both import paths must agree",
+        "the annulus is one flash of a C aperture with a hole: one island with one hole"
+      ],
+      "units": "mm"
+    },
+    {
+      "description": "Board outline (25 x 11.3 mm, 1 mm corner radius) drawn with a 0.05 mm aperture.",
+      "expect": {
+        "bounds_mm": [
+          0.0,
+          0.0,
+          25.0,
+          11.3
+        ],
+        "closed": true,
+        "length_mm": 70.88318530717959,
+        "paths": 1,
+        "width_mm": 0.05
+      },
+      "file": "gerber/board-Edge_Cuts.gbr",
+      "format": "gerber",
+      "function": "Profile,NP",
+      "name": "board-Edge_Cuts",
+      "notes": [
+        "a draw chain that returns to its start is one closed path; readers must not leave it open",
+        "as a named-boundary domain the contour's interior is the board, not the 0.05 mm ring"
+      ],
+      "units": "mm"
+    },
+    {
+      "description": "Region with clear/dark compositing, step-and-repeat, thermal and outline macros, obround and polygon apertures, an arc draw, an aperture block with rotation.",
+      "expect": {
+        "area_mm2": 120.67896524221251,
+        "bounds_mm": [
+          0.0,
+          -0.5,
+          82.0,
+          10.0
+        ],
+        "holes": 1,
+        "islands": 18,
+        "thermal_islands": 4
+      },
+      "file": "gerber/features.gbr",
+      "format": "gerber",
+      "function": "Other,Features",
+      "name": "features",
+      "notes": [
+        "all features are disjoint, so the total area is the sum of the analytic areas",
+        "the clear circle is composited in source order: the later dark circle inside it survives",
+        "the thermal area is the annulus minus two 0.5 mm bars (closed-form circle strips)"
       ],
       "units": "mm"
     }

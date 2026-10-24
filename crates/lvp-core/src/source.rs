@@ -201,6 +201,7 @@ pub fn read_any(name: &str, bytes: &[u8], opts: &ReadOptions) -> Result<SourceDo
             format: Some(format),
             message: e.to_string(),
         }),
+        SourceFormat::Gerber => crate::gerber::read_bytes(name, bytes, opts),
         other => Err(ReadError {
             format: Some(other),
             message: format!("{} reading is not implemented yet", format_name(other)),
@@ -298,5 +299,13 @@ mod tests {
         assert!(e.message.contains("unrecognised"));
         let e = read_any("x.svg", b"<svg/>", &ReadOptions::default()).unwrap_err();
         assert_eq!(e.format, Some(SourceFormat::Svg));
+        let d = read_any(
+            "x.gtl",
+            b"%FSLAX24Y24*%%MOMM*%%ADD10C,1*%D10*X0Y0D03*M02*",
+            &ReadOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(d.format, SourceFormat::Gerber);
+        assert_eq!(d.layers[0].name, "x.gtl");
     }
 }
