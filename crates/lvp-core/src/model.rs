@@ -1,0 +1,333 @@
+//! Configuration model: what a profile stores. Pure data with stable ids; serde mirrors
+//! the JSON schema one to one (camelCase). Geometry lives elsewhere; nothing here holds
+//! source drawing bytes.
+
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use crate::region::LoopRule;
+
+/// Current profile schema version. Bump together with a migration in `profile`.
+pub const SCHEMA_VERSION: u32 = 1;
+
+macro_rules! id_type {
+    ($name:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub String);
+
+        impl $name {
+            pub fn new(s: impl Into<String>) -> Self {
+                Self(s.into())
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+    };
+}
+
+id_type!(SourceId, "Stable id of a source-layer slot in a profile.");
+id_type!(LayerId, "Stable id of a working layer.");
+id_type!(PassId, "Stable id of a pattern pass.");
+id_type!(GroupId, "Stable id of an output colour group.");
+
+/// Exact RGB stroke colour of an output group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Rgb(pub u8, pub u8, pub u8);
+
+impl Rgb {
+    pub const BLUE: Rgb = Rgb(0, 0, 255);
+    pub const RED: Rgb = Rgb(255, 0, 0);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceFormat {
+    Dxf,
+    Gerber,
+    Svg,
+    Pdf,
+}
+
+/// Ordered matching rules binding a profile slot to imported source layers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MatchRule {
+    /// Exact source layer name, optionally restricted to one input format.
+    #[serde(rename_all = "camelCase")]
+    LayerName {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<SourceFormat>,
+        name: String,
+    },
+    /// Explicit user mapping to a layer of a specific file (by file name).
+    #[serde(rename_all = "camelCase")]
+    FileLayer { file: String, name: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceBinding {
+    pub id: SourceId,
+    pub name: String,
+    /// A missing required binding blocks every output depending on it.
+    #[serde(default)]
+    pub required: bool,
+    pub rules: Vec<MatchRule>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GeometryKind {
+    /// Filled planar area with holes.
+    Region,
+    /// Centrelines, open or closed; never implicitly an area.
+    Linework,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LayerOp {
+    Union,
+    Intersection,
+    /// First input minus the union of the rest.
+    Subtraction,
+    Xor,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Operand {
+    Source(SourceId),
+    Layer(LayerId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoopRuleCfg {
+    EvenOdd,
+    NonZero,
+    MergeThenNest,
+}
+
+impl From<LoopRuleCfg> for LoopRule {
+    fn from(v: LoopRuleCfg) -> Self {
+        match v {
+            LoopRuleCfg::EvenOdd => LoopRule::EvenOdd,
+            LoopRuleCfg::NonZero => LoopRule::NonZero,
+            LoopRuleCfg::MergeThenNest => LoopRule::MergeThenNest,
+        }
+    }
+}
+
+/// How open source linework contributes to a region layer.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StrokeWidth {
+    /// Open paths are an error in a region layer.
+    None,
+    /// Use the width the source carried (DXF polyline widths); widthless paths are errors.
+    Original,
+    /// Expand every open path with this width in mm.
+    #[serde(rename_all = "camelCase")]
+    Fixed { mm: f64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Interpretation {
+    #[serde(default = "default_loop_rule")]
+    pub loop_rule: LoopRuleCfg,
+    #[serde(default = "default_stroke_width")]
+    pub stroke_width: StrokeWidth,
+}
+
+fn default_loop_rule() -> LoopRuleCfg {
+    LoopRuleCfg::MergeThenNest
+}
+
+fn default_stroke_width() -> StrokeWidth {
+    StrokeWidth::Original
+}
+
+impl Default for Interpretation {
+    fn default() -> Self {
+        Self {
+            loop_rule: default_loop_rule(),
+            stroke_width: default_stroke_width(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Geometric path-generation strategy. Creates geometry, never machine settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Pattern {
+    /// Source centrelines as they are (region layers contribute their boundaries).
+    #[serde(rename_all = "camelCase")]
+    Passthrough {
+        /// Drop vertices that deviate less than this from the path (mm); `None` keeps all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplify_mm: Option<f64>,
+        #[serde(default)]
+        reverse: bool,
+    },
+    /// Iterative inward offsets from the boundary; rings stay closed, collapsed cores get
+    /// an open centreline when `gap_fill` is on.
+    #[serde(rename_all = "camelCase")]
+    ContourFill {
+        /// Centreline distance between rings (mm).
+        pitch_mm: f64,
+        /// Distance of the first ring from the boundary; default `pitch / 2`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        first_offset_mm: Option<f64>,
+        #[serde(default = "default_true")]
+        gap_fill: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pass {
+    pub id: PassId,
+    pub name: String,
+    pub pattern: Pattern,
+    pub group: GroupId,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingLayer {
+    pub id: LayerId,
+    pub name: String,
+    pub kind: GeometryKind,
+    pub inputs: Vec<Operand>,
+    pub op: LayerOp,
+    #[serde(default)]
+    pub interpretation: Interpretation,
+    #[serde(default)]
+    pub passes: Vec<Pass>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Visible and usable as an operand, but never emits marks of its own.
+    #[serde(default)]
+    pub reference_only: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputGroup {
+    pub id: GroupId,
+    pub name: String,
+    pub color: Rgb,
+    /// PDF stroke width override (mm); `None` uses the export default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_width_mm: Option<f64>,
+    #[serde(default = "default_true")]
+    pub export: bool,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSettings {
+    /// Cosmetic PDF stroke width (mm). 0.0254 mm = 1 mil, the validated style.
+    pub stroke_width_mm: f64,
+    /// Page margin around the geometry bounds (mm).
+    pub margin_mm: f64,
+    /// One PDF per output group instead of one colour-separated file.
+    pub separate_files: bool,
+    /// Chordal tolerance when arcs are flattened for export (mm).
+    pub flatten_tolerance_mm: f64,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self {
+            stroke_width_mm: 0.0254,
+            margin_mm: 5.0,
+            separate_files: false,
+            flatten_tolerance_mm: 0.001,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum OptimizerMode {
+    #[default]
+    AsGenerated,
+    MinimumJump,
+    BleedAware,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizerSettings {
+    #[serde(default)]
+    pub mode: OptimizerMode,
+}
+
+/// A geometry-preparation profile: everything needed to turn matching source layers into
+/// output groups on a clean browser. No laser parameters, no drawing data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub schema_version: u32,
+    pub profile_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub source_bindings: Vec<SourceBinding>,
+    #[serde(default)]
+    pub working_layers: Vec<WorkingLayer>,
+    #[serde(default)]
+    pub output_groups: Vec<OutputGroup>,
+    #[serde(default)]
+    pub export: ExportSettings,
+    #[serde(default)]
+    pub optimizer: OptimizerSettings,
+}
+
+impl Profile {
+    pub fn empty(profile_id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            profile_id: profile_id.into(),
+            name: name.into(),
+            source_bindings: Vec::new(),
+            working_layers: Vec::new(),
+            output_groups: Vec::new(),
+            export: ExportSettings::default(),
+            optimizer: OptimizerSettings::default(),
+        }
+    }
+
+    pub fn layer(&self, id: &LayerId) -> Option<&WorkingLayer> {
+        self.working_layers.iter().find(|l| &l.id == id)
+    }
+
+    pub fn group(&self, id: &GroupId) -> Option<&OutputGroup> {
+        self.output_groups.iter().find(|g| &g.id == id)
+    }
+
+    pub fn binding(&self, id: &SourceId) -> Option<&SourceBinding> {
+        self.source_bindings.iter().find(|b| &b.id == id)
+    }
+}

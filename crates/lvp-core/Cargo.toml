@@ -9,7 +9,8 @@ publish.workspace = true
 [dependencies]
 cavalier_contours.workspace = true
 rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-serde_json.workspace = true

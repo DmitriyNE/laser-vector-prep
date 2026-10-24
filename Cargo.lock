@@ -287,6 +287,8 @@ dependencies = [
  "cavalier_contours",
  "proptest",
  "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

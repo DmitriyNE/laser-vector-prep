@@ -8,9 +8,13 @@
 pub mod arc;
 pub mod diag;
 pub mod dxf;
+pub mod eval;
 pub mod flatten;
 pub mod geom;
+pub mod model;
+pub mod patterns;
 pub mod pline;
+pub mod profile;
 pub mod region;
 pub mod units;
 
