@@ -3,6 +3,17 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — Bindings made visible
+
+Owner feedback after the M1 demo: managing layer bindings was unclear. Their model:
+bindings belong to the profile (the slots a profile needs), and imported file layers are
+mapped onto them. The UI now follows that: a "Profile sources" panel lists each slot with
+its rules, status (matched / missing / ambiguous) and a "map imported layer" control;
+each imported layer in the Sources panel has a "→ slot" control (or "+ new slot"); the
+Properties panel edits a slot's name, required flag and ordered rules. Explicit mappings
+are stored as rules: a portable layer-name rule, or a file+layer rule when the same layer
+name exists in several files. Verified in headless Chrome with two fixtures.
+
 ## 2026-10-24 — M1 implementation (vertical slice)
 
 Commit per sub-step, in dependency order:

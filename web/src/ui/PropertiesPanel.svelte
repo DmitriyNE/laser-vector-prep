@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { MatchRule, Operand, StrokeWidth } from "../core/types.js";
+  import type { Operand, StrokeWidth } from "../core/types.js";
   import { hexRgb, rgbHex, type ProjectStore } from "../state/project.svelte.js";
 
   let { store }: { store: ProjectStore } = $props();
@@ -8,6 +8,7 @@
   const layer = $derived(sel.kind === "layer" ? store.layer(sel.id) : undefined);
   const passInfo = $derived(sel.kind === "pass" ? store.pass(sel.id) : undefined);
   const group = $derived(sel.kind === "group" ? store.group(sel.id) : undefined);
+  const binding = $derived(sel.kind === "binding" ? store.profile.sourceBindings.find((b) => b.id === sel.id) : undefined);
   const sourceSel = $derived(sel.kind === "source" ? sel : undefined);
   const sourceFile = $derived(sourceSel ? store.sources.find((s) => s.index === sourceSel.file) : undefined);
   const sourceLayer = $derived(sourceFile && sourceSel ? sourceFile.layers.find((l) => l.name === sourceSel.layer) : undefined);
@@ -45,27 +46,31 @@
     });
   }
 
-  /** Explicit mapping of the selected source layer onto a binding (front of its rules). */
-  function bindTo(bindingId: string) {
-    if (!sourceFile || !sourceLayer) return;
-    store.update((p) => {
-      const b = p.sourceBindings.find((x) => x.id === bindingId);
-      if (!b) return;
-      const rule: MatchRule = { kind: "fileLayer", file: sourceFile.name, name: sourceLayer.name };
-      b.rules = [rule, ...b.rules.filter((r) => JSON.stringify(r) !== JSON.stringify(rule))];
+  function addRule() {
+    if (!binding) return;
+    store.update(() => {
+      binding.rules.push({ kind: "layerName", format: "dxf", name: "" });
     });
   }
 
-  function addBinding() {
-    if (!sourceFile || !sourceLayer) return;
-    store.update((p) => {
-      p.sourceBindings.push({
-        id: `src-${crypto.randomUUID().slice(0, 8)}`,
-        name: sourceLayer.name,
-        required: false,
-        rules: [{ kind: "layerName", format: "dxf", name: sourceLayer.name }],
-      });
+  function setRuleKind(i: number, kind: string) {
+    if (!binding) return;
+    store.update(() => {
+      const r = binding.rules[i];
+      if (!r) return;
+      binding.rules[i] = kind === "fileLayer" ? { kind: "fileLayer", file: "", name: r.name } : { kind: "layerName", format: "dxf", name: r.name };
     });
+  }
+
+  function removeRule(i: number) {
+    if (!binding) return;
+    store.update(() => {
+      binding.rules.splice(i, 1);
+    });
+  }
+
+  function deleteBinding() {
+    if (binding && !store.removeBinding(binding.id)) alert("This slot is still used as an input by a working layer; remove it there first.");
   }
 </script>
 
@@ -165,20 +170,39 @@
     </label>
     <label class="check"><input type="checkbox" bind:checked={group.export} onchange={touch} /> export</label>
     <label class="check"><input type="checkbox" bind:checked={group.visible} onchange={touch} /> visible in preview</label>
+  {:else if binding}
+    <label>Slot name <input bind:value={binding.name} oninput={touch} /></label>
+    <label class="check"><input type="checkbox" bind:checked={binding.required} onchange={touch} /> required (output is blocked while unmapped)</label>
+    <fieldset>
+      <legend>Matching rules (first match wins)</legend>
+      {#each binding.rules as rule, i (i)}
+        <div class="rule">
+          <select value={rule.kind} onchange={(e) => setRuleKind(i, (e.currentTarget as HTMLSelectElement).value)}>
+            <option value="layerName">layer name</option>
+            <option value="fileLayer">file + layer</option>
+          </select>
+          {#if rule.kind === "fileLayer"}
+            <input placeholder="file name" bind:value={rule.file} oninput={touch} />
+          {/if}
+          <input placeholder="layer name" bind:value={rule.name} oninput={touch} />
+          <button title="remove rule" onclick={() => removeRule(i)}>×</button>
+        </div>
+      {/each}
+      <button onclick={addRule}>+ rule</button>
+      <p class="hint">Layer-name rules travel with the profile to new designs; file + layer rules pin one imported file.</p>
+    </fieldset>
+    <p class="hint">Used by: {store.bindingUsers(binding.id).join(", ") || "no working layer"}</p>
+    <button onclick={deleteBinding}>delete slot</button>
   {:else if sourceLayer && sourceFile}
+    {@const mapped = store.bindingOf(sourceFile.name, sourceLayer.name)}
     <p><strong>{sourceLayer.name}</strong> in {sourceFile.name}</p>
     <p class="hint">
       {sourceLayer.closedPaths} closed, {sourceLayer.openPaths} open path(s), {sourceLayer.hatches} hatch(es).
       {#if sourceLayer.boundsMm}Bounds {sourceLayer.boundsMm.map((v) => v.toFixed(3)).join(", ")} mm.{/if}
-      Source layers are immutable; working layers reference them through bindings.
+      Imported layers are immutable; map them onto a profile slot in the Sources list ("→ slot"),
+      and working layers read from the slot.
     </p>
-    <label>Bind to
-      <select onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; if (v) bindTo(v); (e.currentTarget as HTMLSelectElement).value = ""; }}>
-        <option value="">choose a binding…</option>
-        {#each store.profile.sourceBindings as b (b.id)}<option value={b.id}>{b.name}</option>{/each}
-      </select>
-    </label>
-    <button onclick={addBinding}>new binding for this layer name</button>
+    <p class="hint">Mapped to: {mapped ? mapped.name : "nothing yet"}</p>
   {:else}
     <p class="hint">Select a source layer, working layer, pass or output group.</p>
   {/if}
@@ -213,6 +237,25 @@
   .hint {
     font-size: 11px;
     opacity: 0.7;
+  }
+  .rule {
+    display: flex;
+    gap: 0.3rem;
+    align-items: center;
+    margin: 0.2rem 0;
+  }
+  .rule input,
+  .rule select {
+    width: auto;
+    flex: 1;
+    display: inline-block;
+    margin: 0;
+  }
+  .rule button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: inherit;
   }
   code {
     font-size: 11px;

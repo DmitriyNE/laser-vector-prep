@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { ProjectStore } from "./state/project.svelte.js";
+  import BindingsPanel from "./ui/BindingsPanel.svelte";
   import DiagnosticsPanel from "./ui/DiagnosticsPanel.svelte";
   import ExportPanel from "./ui/ExportPanel.svelte";
   import GroupsPanel from "./ui/GroupsPanel.svelte";
@@ -30,6 +31,7 @@
     <ProfilesBar {store} />
     <aside class="left">
       <SourcesPanel {store} />
+      <BindingsPanel {store} />
       <LayersPanel {store} />
     </aside>
     <main>

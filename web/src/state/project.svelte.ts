@@ -5,18 +5,20 @@
 import type {
   EvaluationSummary,
   Diagnostic,
+  MatchRule,
   Preview,
   Profile,
   SourceSummary,
 } from "../core/types.js";
 import { GeometryWorker, WorkerCrashed } from "../worker/client.js";
-import { download } from "../util/download.js";
+import { download, shortId } from "../util/download.js";
 import * as db from "./profileStore.js";
 import type { SavedProfile } from "./profileStore.js";
 
 export type Selection =
   | { kind: "none" }
   | { kind: "source"; file: number; layer: string }
+  | { kind: "binding"; id: string }
   | { kind: "layer"; id: string }
   | { kind: "pass"; id: string }
   | { kind: "group"; id: string };
@@ -304,6 +306,63 @@ export class ProjectStore {
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e);
     }
+  }
+
+  // ---- bindings: the profile's source slots, onto which imported layers are mapped ----
+
+  /** Add a slot; with `layerName` it starts with a portable layer-name rule. */
+  addBinding(name: string, layerName: string | null): string {
+    const id = shortId("src");
+    this.update((p) => {
+      p.sourceBindings.push({
+        id,
+        name,
+        required: false,
+        rules: layerName ? [{ kind: "layerName", format: "dxf", name: layerName }] : [],
+      });
+    });
+    return id;
+  }
+
+  /** Create a slot named after an imported layer and matching it by name. */
+  newBindingFromLayer(layer: string) {
+    const id = this.addBinding(layer, layer);
+    this.selection = { kind: "binding", id };
+  }
+
+  /**
+   * Map an imported layer onto a slot. Stored as a rule in the profile: a portable
+   * layer-name rule, or an explicit file+layer rule when that name exists in several files.
+   */
+  mapToBinding(bindingId: string, file: string, layer: string) {
+    const filesWithName = this.sources.filter((s) => s.layers.some((l) => l.name === layer)).length;
+    const rule: MatchRule =
+      filesWithName > 1 ? { kind: "fileLayer", file, name: layer } : { kind: "layerName", format: "dxf", name: layer };
+    this.update((p) => {
+      const b = p.sourceBindings.find((x) => x.id === bindingId);
+      if (!b) return;
+      b.rules = [rule, ...b.rules.filter((r) => JSON.stringify(r) !== JSON.stringify(rule))];
+    });
+  }
+
+  /** Layers (by name) that use a slot as an input. */
+  bindingUsers(id: string): string[] {
+    return this.profile.workingLayers.filter((l) => l.inputs.some((o) => "source" in o && o.source === id)).map((l) => l.name);
+  }
+
+  /** Remove a slot; refused while a working layer still uses it. */
+  removeBinding(id: string): boolean {
+    if (this.bindingUsers(id).length) return false;
+    this.update((p) => {
+      p.sourceBindings = p.sourceBindings.filter((b) => b.id !== id);
+    });
+    if (this.selection.kind === "binding" && this.selection.id === id) this.selection = { kind: "none" };
+    return true;
+  }
+
+  /** Which slot an imported layer is currently matched to, if any. */
+  bindingOf(file: string, layer: string) {
+    return this.evaluation?.bindings.find((b) => b.status === "matched" && b.file === file && b.layer === layer);
   }
 
   // ---- helpers -----------------------------------------------------------------------

@@ -16,8 +16,10 @@
     input.value = "";
   }
 
-  function bindingFor(file: string, layer: string) {
-    return store.evaluation?.bindings.find((b) => b.status === "matched" && b.file === file && b.layer === layer);
+  function onMap(e: Event, file: string, layer: string) {
+    const v = (e.currentTarget as HTMLSelectElement).value;
+    if (v === "+new") store.newBindingFromLayer(layer);
+    else if (v) store.mapToBinding(v, file, layer);
   }
 
   function size(b: [number, number, number, number] | null) {
@@ -55,7 +57,7 @@
       <ul>
         {#each s.layers.filter((l) => l.closedPaths + l.openPaths + l.hatches > 0) as l (l.name)}
           {@const key = `${s.index}:${l.name}`}
-          {@const b = bindingFor(s.name, l.name)}
+          {@const b = store.bindingOf(s.name, l.name)}
           <li
             class:selected={store.selection.kind === "source" && store.selection.file === s.index && store.selection.layer === l.name}
           >
@@ -69,7 +71,11 @@
               {l.name}
             </button>
             <span class="counts">{l.closedPaths}c {l.openPaths}o{#if l.hatches} {l.hatches}h{/if}</span>
-            {#if b}<span class="bound" title="bound to {b.name}">→ {b.name}</span>{:else}<span class="unbound">unbound</span>{/if}
+            <select class="map" class:unbound={!b} value={b?.id ?? ""} title="profile slot this layer is mapped to" onchange={(e) => onMap(e, s.name, l.name)}>
+              <option value="">{b ? "" : "unmapped"}</option>
+              {#each store.profile.sourceBindings as pb (pb.id)}<option value={pb.id}>→ {pb.name}</option>{/each}
+              <option value="+new">+ new slot "{l.name}"</option>
+            </select>
           </li>
         {/each}
       </ul>
@@ -152,11 +158,14 @@
     font-family: ui-monospace, monospace;
     opacity: 0.7;
   }
-  .bound {
+  .map {
+    font: inherit;
+    font-size: 11px;
+    max-width: 9rem;
     color: #2a8;
   }
-  .unbound {
-    opacity: 0.5;
+  .map.unbound {
+    color: #c80;
   }
   .x {
     background: none;
