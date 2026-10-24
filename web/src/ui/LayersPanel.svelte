@@ -8,6 +8,7 @@
   const summaryOf = (id: string) => store.evaluation?.layers.find((l) => l.id === id);
   const passSummary = (id: string) => store.evaluation?.passes.find((p) => p.id === id);
   const errors = (ds: { severity: string }[] | undefined) => ds?.filter((d) => d.severity === "error").length ?? 0;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   function addLayer(kind: "region" | "envelope" = "region") {
     const id = shortId("wl");
@@ -124,7 +125,37 @@
     if (l.kind === "envelope") return envelopeLabel(l);
     return l.op === "union" ? "union" : l.op === "intersection" ? "A ∩ B" : l.op === "subtraction" ? "A − B" : "A xor B";
   }
+
+  /** Second line of a layer row: kind, operation, flags and who reads it. */
+  function layerDetail(l: WorkingLayer) {
+    const parts = [l.kind, opLabel(l)];
+    if (l.referenceOnly) parts.push("reference");
+    if (!l.enabled) parts.push("disabled");
+    const users = usedBy(l.id);
+    if (users.length) parts.push(`used by ${users.join(", ")}`);
+    return parts.join(" · ");
+  }
+
+  function layerStats(l: WorkingLayer) {
+    const sum = summaryOf(l.id);
+    if (!sum) return "";
+    return l.kind === "linework" ? plural(sum.paths, "path") : `${plural(sum.outers, "island")}, ${plural(sum.holes, "hole")}`;
+  }
+
+  function layerErrors(l: WorkingLayer) {
+    return errors(summaryOf(l.id)?.diagnostics) + (store.evaluation?.diagnostics.filter((d) => d.context === l.id && d.severity === "error").length ?? 0);
+  }
 </script>
+
+{#snippet eye(hidden: boolean, toggle: () => void, what: string)}
+  <button class="eye" class:off={hidden} aria-pressed={!hidden} title={hidden ? `show ${what} in preview` : `hide ${what} in preview`} onclick={toggle}>
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" fill="none" stroke="currentColor" stroke-width="1.3" />
+      <circle cx="8" cy="8" r="2.2" fill="currentColor" />
+      {#if hidden}<path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.3" />{/if}
+    </svg>
+  </button>
+{/snippet}
 
 <section class="panel">
   <h2>Layers <button class="add" onclick={() => addLayer("region")}>+ layer</button> <button class="add" onclick={() => addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button></h2>
@@ -132,51 +163,47 @@
     <p class="hint">No working layers. Add one and pick its sources.</p>
   {/if}
   {#each store.profile.workingLayers as layer, i (layer.id)}
-    {@const sum = summaryOf(layer.id)}
-    {@const errs = errors(sum?.diagnostics) + (store.evaluation?.diagnostics.filter((d) => d.context === layer.id && d.severity === "error").length ?? 0)}
-    <div class="layer" class:selected={store.selection.kind === "layer" && store.selection.id === layer.id}>
+    {@const errs = layerErrors(layer)}
+    {@const hidden = store.hiddenLayers.has(layer.id)}
+    <div class="layer" class:selected={store.selection.kind === "layer" && store.selection.id === layer.id} class:disabled={!layer.enabled}>
       <div class="row">
-        <input type="checkbox" checked={!store.hiddenLayers.has(layer.id)} title="show region in preview"
-          onchange={() => (store.hiddenLayers = store.toggle(store.hiddenLayers, layer.id))} />
-        <input type="checkbox" bind:checked={layer.enabled} title="enabled (outputs marks)" onchange={() => store.update(() => {})} />
-        <button class="name" onclick={() => (store.selection = { kind: "layer", id: layer.id })}>
-          {layer.name}
-          <span class="meta">{layer.kind} · {opLabel(layer)}{layer.referenceOnly ? " · reference" : ""}</span>
+        {@render eye(hidden, () => (store.hiddenLayers = store.toggle(store.hiddenLayers, layer.id)), "region")}
+        <button class="name" title={layer.name} onclick={() => (store.selection = { kind: "layer", id: layer.id })}>
+          <span class="title">{layer.name}</span>
+          <span class="sub" title={layerDetail(layer)}>{layerDetail(layer)}</span>
         </button>
-        {#if sum}
-          <span class="meta">
-            {#if layer.kind === "linework"}{sum.paths} path{sum.paths === 1 ? "" : "s"}{:else}{sum.outers} island{sum.outers === 1 ? "" : "s"}, {sum.holes} hole{sum.holes === 1 ? "" : "s"}{/if}
-          </span>
-        {/if}
-        {#if errs}<span class="err" title="errors">{errs}!</span>{/if}
+        <span class="stats">
+          {#if errs}<span class="err" title="errors">{errs}!</span>{/if}
+          {layerStats(layer)}
+        </span>
         <span class="tools">
           <button onclick={() => move(i, -1)} title="move up">↑</button>
           <button onclick={() => move(i, 1)} title="move down">↓</button>
           <button onclick={() => duplicateLayer(i)} title="duplicate">⧉</button>
-          <button onclick={() => deleteLayer(i)} title="delete">×</button>
+          <button onclick={() => deleteLayer(i)} title="delete layer">×</button>
         </span>
       </div>
-      {#if usedBy(layer.id).length}
-        <div class="meta uses">used as input by {usedBy(layer.id).join(", ")}</div>
-      {/if}
       <ul>
         {#each layer.passes as pass (pass.id)}
           {@const ps = passSummary(pass.id)}
           {@const g = store.group(pass.group)}
-          <li class:selected={store.selection.kind === "pass" && store.selection.id === pass.id}>
-            <input type="checkbox" checked={!store.hiddenPasses.has(pass.id)} title="show paths in preview"
-              onchange={() => (store.hiddenPasses = store.toggle(store.hiddenPasses, pass.id))} />
-            <input type="checkbox" bind:checked={pass.enabled} title="enabled" onchange={() => store.update(() => {})} />
-            <span class="swatch" style:background={g ? rgbCss(g.color) : "transparent"} title={g?.name ?? "no group"}></span>
-            <button class="name" onclick={() => (store.selection = { kind: "pass", id: pass.id })}>
-              {pass.name} <span class="meta">{patternLabel(pass)}</span>
+          {@const passHidden = store.hiddenPasses.has(pass.id)}
+          <li class="row pass" class:selected={store.selection.kind === "pass" && store.selection.id === pass.id} class:disabled={!pass.enabled}>
+            {@render eye(passHidden, () => (store.hiddenPasses = store.toggle(store.hiddenPasses, pass.id)), "paths")}
+            <button class="name" title={pass.name} onclick={() => (store.selection = { kind: "pass", id: pass.id })}>
+              <span class="title"><span class="swatch" style:background={g ? rgbCss(g.color) : "transparent"} title={g?.name ?? "no group"}></span>{pass.name}</span>
+              <span class="sub">{patternLabel(pass)}{pass.enabled ? "" : " · disabled"}</span>
             </button>
-            {#if ps}<span class="meta">{ps.paths} paths, {ps.lengthMm.toFixed(1)} mm</span>{/if}
-            {#if errors(ps?.diagnostics)}<span class="err">!</span>{/if}
-            <button onclick={() => deletePass(layer, pass)} title="delete pass">×</button>
+            <span class="stats two">
+              {#if errors(ps?.diagnostics)}<span class="err" title="errors">!</span>{/if}
+              {#if ps}<span>{plural(ps.paths, "path")}</span><span>{ps.lengthMm.toFixed(ps.lengthMm >= 100 ? 0 : 1)} mm</span>{/if}
+            </span>
+            <span class="tools">
+              <button onclick={() => deletePass(layer, pass)} title="delete pass">×</button>
+            </span>
           </li>
         {/each}
-        <li><button class="add" onclick={() => addPass(layer)}>+ pass</button></li>
+        <li class="addrow"><button class="add" onclick={() => addPass(layer)}>+ pass</button></li>
       </ul>
     </div>
   {/each}
@@ -184,23 +211,44 @@
 
 <style>
   .layer {
-    margin-top: 0.4rem;
-    padding: 0.2rem;
+    margin-top: 0.3rem;
+    padding: 0.15rem 0.2rem;
     border-radius: 4px;
     font-size: 12px;
   }
-  .layer.selected,
+  .layer.selected > .row,
   li.selected {
     background: color-mix(in srgb, #1f6feb 15%, transparent);
+    border-radius: 3px;
   }
-  .row,
-  li {
-    display: flex;
-    gap: 0.35rem;
-    align-items: center;
+  /* eye | name (two lines) | stats over tools */
+  .row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    column-gap: 0.35rem;
+    align-items: start;
+    padding: 0.1rem 0.15rem;
+  }
+  .eye {
+    grid-row: 1 / 3;
+    align-self: center;
+    background: none;
+    border: none;
+    padding: 2px;
+    color: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    opacity: 0.8;
+  }
+  .eye.off {
+    opacity: 0.35;
   }
   .name {
-    flex: 1;
+    grid-column: 2;
+    grid-row: 1 / 3;
+    min-width: 0;
+    display: block;
     text-align: left;
     background: none;
     border: none;
@@ -209,36 +257,106 @@
     font: inherit;
     cursor: pointer;
   }
-  .meta {
-    opacity: 0.65;
+  .title,
+  .sub {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.35;
+  }
+  .sub {
+    opacity: 0.6;
     font-size: 11px;
   }
-  .uses {
-    margin-left: 2.6rem;
+  .stats {
+    grid-column: 3;
+    grid-row: 1;
+    white-space: nowrap;
+    opacity: 0.75;
+    font-size: 11px;
+    line-height: calc(12px * 1.35);
+    text-align: right;
   }
-  .err {
-    color: #d33;
-    font-weight: bold;
+  /* Pass rows: paths over length, delete tool in its own column. */
+  .pass {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
   }
-  .tools button,
-  li > button {
+  .stats.two {
+    grid-row: 1 / 3;
+  }
+  .stats.two > span {
+    display: block;
+    line-height: calc(11px * 1.35 + 0.5px);
+  }
+  .pass > .tools {
+    grid-column: 4;
+    grid-row: 1 / 3;
+    align-self: center;
+  }
+  .tools {
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+    white-space: nowrap;
+    visibility: hidden;
+    line-height: 1;
+  }
+  .row:hover > .tools,
+  .layer.selected > .row > .tools,
+  li.selected > .tools {
+    visibility: visible;
+  }
+  .tools button {
     background: none;
     border: none;
     cursor: pointer;
     color: inherit;
-    padding: 0 2px;
+    padding: 0 3px;
+    font-size: 12px;
+    opacity: 0.7;
+  }
+  .tools button:hover {
+    opacity: 1;
+  }
+  .disabled > .row > .name,
+  li.disabled > .name,
+  .disabled > .row > .stats,
+  li.disabled > .stats {
+    opacity: 0.45;
+  }
+  .err {
+    color: #d33;
+    font-weight: bold;
+    margin-right: 0.3rem;
   }
   ul {
     list-style: none;
-    margin: 0.2rem 0 0 1.2rem;
+    margin: 0 0 0 1.1rem;
     padding: 0;
   }
+  .addrow {
+    padding: 0 0 0 1.5rem;
+  }
+  .addrow .add {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    color: inherit;
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  .addrow .add:hover {
+    opacity: 1;
+  }
   .swatch {
-    width: 10px;
-    height: 10px;
+    width: 9px;
+    height: 9px;
     border-radius: 2px;
     border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
     display: inline-block;
+    vertical-align: baseline;
+    margin-right: 0.3rem;
   }
   .add {
     font-size: 11px;

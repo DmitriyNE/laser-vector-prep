@@ -233,6 +233,7 @@
         geometry its own layer and use it as an input here.
       </p>
     {/if}
+    <label class="check"><input type="checkbox" bind:checked={layer.enabled} onchange={touch} /> enabled (runs its passes; a disabled layer still serves as an input)</label>
     <label class="check"><input type="checkbox" bind:checked={layer.referenceOnly} onchange={touch} /> reference only (never marks)</label>
   {:else if passInfo}
     {@const pass = passInfo.pass}

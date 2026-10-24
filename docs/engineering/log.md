@@ -3,6 +3,16 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-24 — Layers panel compacted
+
+Owner feedback after M2: the Layers panel overflowed its 300 px column and every row had
+two identical checkboxes (preview visibility and enabled). Rows are now a grid: eye toggle,
+two-line name (title plus a muted detail line with kind, operation, flags and "used by",
+ellipsised), stats right-aligned, tools only on hover or selection. The enabled switch moved
+to the Properties panel; disabled rows are dimmed and say so. Same shape for passes, with
+paths over length and the delete tool in its own column. Height for the negative preset
+went from about 700 px to about 400 px.
+
 ## 2026-10-24 — M2: geometry and layers
 
 Commit per sub-step:

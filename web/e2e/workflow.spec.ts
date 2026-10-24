@@ -11,7 +11,7 @@ test("import, evaluate and export a colour-separated PDF", async ({ page }) => {
 
   await importDxf(page, fixture("board-islands.dxf"));
   await expect(page.getByText("2 matched")).toBeVisible();
-  await expect(page.locator(".layer .row").first()).toContainText("10 islands, 1 hole");
+  await expect(page.locator(".layer > .row").first()).toContainText("10 islands, 1 hole");
 
   const ev = await summary(page);
   expect(ev.hasErrors).toBe(false);
@@ -76,5 +76,7 @@ test("two operand groups: envelope minus copper, hatched", async ({ page }) => {
   const hatch = ev.passes.find((p) => p.name === "Hatch")!;
   expect(hatch.paths).toBeGreaterThan(300);
   expect(hatch.closed).toBe(0);
-  await expect(page.locator(".layer .row").nth(3)).toContainText("A − B 2 islands, 10 holes");
+  const negativeRow = page.locator(".layer > .row").nth(3);
+  await expect(negativeRow).toContainText("A − B");
+  await expect(negativeRow).toContainText("2 islands, 10 holes");
 });
