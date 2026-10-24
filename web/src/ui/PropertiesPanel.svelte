@@ -41,9 +41,72 @@
   function setPatternKind(kind: string) {
     if (!passInfo) return;
     store.update(() => {
-      passInfo.pass.pattern =
-        kind === "contourFill" ? { kind: "contourFill", pitchMm: 0.02, firstOffsetMm: null, gapFill: true } : { kind: "passthrough", reverse: false };
+      switch (kind) {
+        case "contourFill":
+          passInfo.pass.pattern = { kind: "contourFill", pitchMm: 0.02, firstOffsetMm: null, gapFill: true };
+          break;
+        case "boundaryTrace":
+          passInfo.pass.pattern = { kind: "boundaryTrace", side: "on", offsetMm: 0, kerfMm: 0, rings: 1, ringSpacingMm: 0.05, reverse: false, innerFirst: true };
+          break;
+        case "hatch":
+          passInfo.pass.pattern = { kind: "hatch", pitchMm: 0.02, angleDeg: 0, phaseMm: 0, serpentine: true, insetMm: 0 };
+          break;
+        case "crossHatch":
+          passInfo.pass.pattern = { kind: "crossHatch", pitchMm: 0.02, anglesDeg: [0, 90], phaseMm: 0, serpentine: true, insetMm: 0 };
+          break;
+        case "boundaryHatch":
+          passInfo.pass.pattern = { kind: "boundaryHatch", shells: 1, shellPitchMm: 0.02, insetMm: 0, pitchMm: 0.02, anglesDeg: [0], phaseMm: 0, serpentine: true };
+          break;
+        default:
+          passInfo.pass.pattern = { kind: "passthrough", reverse: false };
+      }
     });
+  }
+
+  function setKind(kind: string) {
+    if (!layer) return;
+    store.update(() => {
+      layer.kind = kind as "region" | "linework" | "envelope";
+      if (kind === "envelope") {
+        layer.envelope ??= { provider: "boundingBox", marginMm: 0.5 };
+        layer.referenceOnly = true;
+        layer.op = "union";
+        layer.operands = [];
+      } else {
+        layer.envelope = null;
+      }
+    });
+  }
+
+  function setProvider(provider: string) {
+    if (!layer) return;
+    store.update(() => {
+      switch (provider) {
+        case "namedBoundary":
+          layer.envelope = { provider: "namedBoundary" };
+          break;
+        case "boundingCircle":
+          layer.envelope = { provider: "boundingCircle", marginMm: 0.5 };
+          break;
+        case "buffer":
+          layer.envelope = { provider: "buffer", distanceMm: 0.5 };
+          break;
+        case "convexHull":
+          layer.envelope = { provider: "convexHull", distanceMm: 0.5 };
+          break;
+        default:
+          layer.envelope = { provider: "boundingBox", marginMm: 0.5 };
+      }
+    });
+  }
+
+  /** Comma or space separated angle list; invalid entries are dropped. */
+  function parseAngles(text: string): number[] {
+    const out = text
+      .split(/[,\s]+/)
+      .map((t) => Number(t))
+      .filter((n) => Number.isFinite(n));
+    return out.length ? out : [0];
   }
 
   function addRule() {
@@ -94,11 +157,38 @@
   {#if layer}
     <label>Name <input bind:value={layer.name} oninput={touch} /></label>
     <label>Geometry
-      <select bind:value={layer.kind} onchange={touch}>
+      <select value={layer.kind} onchange={(e) => setKind((e.currentTarget as HTMLSelectElement).value)}>
         <option value="region">region (filled area)</option>
         <option value="linework">linework (centrelines)</option>
+        <option value="envelope">envelope (bounded domain around a reference set)</option>
       </select>
     </label>
+    {#if layer.kind === "envelope"}
+      {@const env = layer.envelope ?? { provider: "boundingBox", marginMm: 0.5 }}
+      <label>Domain provider
+        <select value={env.provider} onchange={(e) => setProvider((e.currentTarget as HTMLSelectElement).value)}>
+          <option value="namedBoundary">named boundary (filled interior of the reference)</option>
+          <option value="boundingBox">bounding box + margin</option>
+          <option value="boundingCircle">bounding circle + margin</option>
+          <option value="buffer">buffer (dilate the reference)</option>
+          <option value="convexHull">buffered convex hull</option>
+        </select>
+      </label>
+      {#if env.provider === "boundingBox" || env.provider === "boundingCircle"}
+        <label>Margin (mm) <input type="number" step="0.1" bind:value={env.marginMm} oninput={touch} /></label>
+      {:else if env.provider === "buffer" || env.provider === "convexHull"}
+        <label>Distance (mm) <input type="number" step="0.1" bind:value={env.distanceMm} oninput={touch} /></label>
+      {/if}
+      <fieldset>
+        <legend>Reference set</legend>
+        {@render operandBoxes(layer.inputs)}
+        <p class="hint">
+          The envelope is a region built around everything checked here. Use it as A in a
+          subtraction layer (A − B) to get a negative of B. An empty reference set is an error,
+          never a page-sized plane.
+        </p>
+      </fieldset>
+    {:else}
     <label>Combine
       <select bind:value={layer.op} onchange={touch} disabled={layer.kind === "linework"}>
         <option value="union">A ∪ B (union of everything checked)</option>
@@ -117,6 +207,7 @@
         {@render operandBoxes(layer.operands)}
         {#if layer.operands.length === 0}<p class="hint">Nothing in B yet: the result is {layer.op === "intersection" ? "empty" : "A unchanged"}.</p>{/if}
       </fieldset>
+    {/if}
     {/if}
     {#if layer.kind === "region"}
       <label>Closed loops
@@ -149,6 +240,10 @@
     <label>Pattern
       <select value={pass.pattern.kind} onchange={(e) => setPatternKind((e.currentTarget as HTMLSelectElement).value)}>
         <option value="contourFill">inward contour fill</option>
+        <option value="boundaryTrace">boundary trace / contour only</option>
+        <option value="hatch">parallel hatch</option>
+        <option value="crossHatch">crosshatch (several angles)</option>
+        <option value="boundaryHatch">boundary shells + hatch</option>
         <option value="passthrough">linework passthrough</option>
       </select>
     </label>
@@ -159,6 +254,46 @@
           oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.firstOffsetMm = v === "" ? null : Number(v); }); }} />
       </label>
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.gapFill} onchange={touch} /> centreline gap fill for narrow cores</label>
+    {:else if pass.pattern.kind === "boundaryTrace"}
+      <label>Side
+        <select bind:value={pass.pattern.side} onchange={touch}>
+          <option value="on">on the boundary</option>
+          <option value="inside">inside</option>
+          <option value="outside">outside</option>
+        </select>
+      </label>
+      <label>Offset from boundary (mm) <input type="number" step="0.01" min="0" bind:value={pass.pattern.offsetMm} oninput={touch} /></label>
+      <label>Kerf to compensate (mm, half applied outward) <input type="number" step="0.001" min="0" bind:value={pass.pattern.kerfMm} oninput={touch} /></label>
+      <label>Rings <input type="number" step="1" min="1" bind:value={pass.pattern.rings} oninput={touch} /></label>
+      {#if pass.pattern.rings > 1}
+        <label>Ring spacing (mm) <input type="number" step="0.01" min="0.001" bind:value={pass.pattern.ringSpacingMm} oninput={touch} /></label>
+      {/if}
+      <label class="check"><input type="checkbox" bind:checked={pass.pattern.innerFirst} onchange={touch} /> holes before outer contours (cutting order)</label>
+      <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
+    {:else if pass.pattern.kind === "hatch"}
+      <label>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
+      <label>Angle (°, document coordinates) <input type="number" step="1" bind:value={pass.pattern.angleDeg} oninput={touch} /></label>
+      <label>Phase (mm, global lattice offset) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
+      <label>Inset from boundary (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
+      <label class="check"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine (alternate row direction)</label>
+    {:else if pass.pattern.kind === "crossHatch"}
+      <label>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
+      <label>Angles (°, comma separated)
+        <input value={pass.pattern.anglesDeg.join(", ")} onchange={(e) => { const v = parseAngles((e.currentTarget as HTMLInputElement).value); store.update(() => { if (pass.pattern.kind === "crossHatch") pass.pattern.anglesDeg = v; }); }} />
+      </label>
+      <label>Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
+      <label>Inset from boundary (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
+      <label class="check"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
+    {:else if pass.pattern.kind === "boundaryHatch"}
+      <label>Shells <input type="number" step="1" min="0" bind:value={pass.pattern.shells} oninput={touch} /></label>
+      <label>Shell pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.shellPitchMm} oninput={touch} /></label>
+      <label>Gap between shells and hatch (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
+      <label>Hatch pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
+      <label>Hatch angles (°, comma separated)
+        <input value={pass.pattern.anglesDeg.join(", ")} onchange={(e) => { const v = parseAngles((e.currentTarget as HTMLInputElement).value); store.update(() => { if (pass.pattern.kind === "boundaryHatch") pass.pattern.anglesDeg = v; }); }} />
+      </label>
+      <label>Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
+      <label class="check"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
     {:else}
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
       <label>Simplify (mm, empty = off)

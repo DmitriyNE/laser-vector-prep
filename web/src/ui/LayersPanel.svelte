@@ -9,20 +9,22 @@
   const passSummary = (id: string) => store.evaluation?.passes.find((p) => p.id === id);
   const errors = (ds: { severity: string }[] | undefined) => ds?.filter((d) => d.severity === "error").length ?? 0;
 
-  function addLayer() {
+  function addLayer(kind: "region" | "envelope" = "region") {
     const id = shortId("wl");
     store.update((p) => {
       p.workingLayers.push({
         id,
-        name: `Layer ${p.workingLayers.length + 1}`,
-        kind: "region",
+        name: kind === "envelope" ? `Envelope ${p.workingLayers.length + 1}` : `Layer ${p.workingLayers.length + 1}`,
+        kind,
         inputs: [],
         operands: [],
         op: "union",
+        envelope: kind === "envelope" ? { provider: "boundingBox", marginMm: 0.5 } : null,
         interpretation: { loopRule: "mergeThenNest", strokeWidth: "original" },
         passes: [],
         enabled: true,
-        referenceOnly: false,
+        // Envelopes are domains for other layers; they never mark unless asked explicitly.
+        referenceOnly: kind === "envelope",
       });
     });
     store.selection = { kind: "layer", id };
@@ -78,7 +80,38 @@
   }
 
   function patternLabel(p: Pass) {
-    return p.pattern.kind === "contourFill" ? `contour ${p.pattern.pitchMm} mm${p.pattern.gapFill ? " +gap" : ""}` : "passthrough";
+    const pt = p.pattern;
+    switch (pt.kind) {
+      case "contourFill":
+        return `contour ${pt.pitchMm} mm${pt.gapFill ? " +gap" : ""}`;
+      case "boundaryTrace":
+        return `trace ${pt.side}${pt.offsetMm ? ` ${pt.offsetMm} mm` : ""}${pt.kerfMm ? ` kerf ${pt.kerfMm}` : ""}${pt.rings > 1 ? ` ×${pt.rings}` : ""}`;
+      case "hatch":
+        return `hatch ${pt.pitchMm} mm @ ${pt.angleDeg}°`;
+      case "crossHatch":
+        return `crosshatch ${pt.pitchMm} mm @ ${pt.anglesDeg.join("/")}°`;
+      case "boundaryHatch":
+        return `${pt.shells} shell${pt.shells === 1 ? "" : "s"} + hatch ${pt.pitchMm} mm`;
+      default:
+        return "passthrough";
+    }
+  }
+
+  function envelopeLabel(l: WorkingLayer) {
+    const e = l.envelope;
+    if (!e) return "envelope";
+    switch (e.provider) {
+      case "namedBoundary":
+        return "named boundary";
+      case "boundingBox":
+        return `box +${e.marginMm} mm`;
+      case "boundingCircle":
+        return `circle +${e.marginMm} mm`;
+      case "buffer":
+        return `buffer ${e.distanceMm} mm`;
+      case "convexHull":
+        return `hull +${e.distanceMm} mm`;
+    }
   }
 
   function usedBy(id: string) {
@@ -88,12 +121,13 @@
   }
 
   function opLabel(l: WorkingLayer) {
+    if (l.kind === "envelope") return envelopeLabel(l);
     return l.op === "union" ? "union" : l.op === "intersection" ? "A ∩ B" : l.op === "subtraction" ? "A − B" : "A xor B";
   }
 </script>
 
 <section class="panel">
-  <h2>Layers <button class="add" onclick={addLayer}>+ layer</button></h2>
+  <h2>Layers <button class="add" onclick={() => addLayer("region")}>+ layer</button> <button class="add" onclick={() => addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button></h2>
   {#if store.profile.workingLayers.length === 0}
     <p class="hint">No working layers. Add one and pick its sources.</p>
   {/if}
@@ -111,7 +145,7 @@
         </button>
         {#if sum}
           <span class="meta">
-            {#if layer.kind === "region"}{sum.outers} island{sum.outers === 1 ? "" : "s"}, {sum.holes} hole{sum.holes === 1 ? "" : "s"}{:else}{sum.paths} path{sum.paths === 1 ? "" : "s"}{/if}
+            {#if layer.kind === "linework"}{sum.paths} path{sum.paths === 1 ? "" : "s"}{:else}{sum.outers} island{sum.outers === 1 ? "" : "s"}, {sum.holes} hole{sum.holes === 1 ? "" : "s"}{/if}
           </span>
         {/if}
         {#if errs}<span class="err" title="errors">{errs}!</span>{/if}

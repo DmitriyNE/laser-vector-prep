@@ -33,7 +33,16 @@ export interface SourceSummary {
   diagnostics: Diagnostic[];
 }
 
-export type GeometryKind = "region" | "linework";
+export type GeometryKind = "region" | "linework" | "envelope";
+
+export type EnvelopeProvider =
+  | { provider: "namedBoundary" }
+  | { provider: "boundingBox"; marginMm: number }
+  | { provider: "boundingCircle"; marginMm: number }
+  | { provider: "buffer"; distanceMm: number }
+  | { provider: "convexHull"; distanceMm: number };
+
+export type OffsetSide = "inside" | "on" | "outside";
 export type LayerOp = "union" | "intersection" | "subtraction" | "xor";
 export type LoopRule = "evenOdd" | "nonZero" | "mergeThenNest";
 export type StrokeWidth = "none" | "original" | { fixed: { mm: number } };
@@ -53,7 +62,29 @@ export interface SourceBinding {
 
 export type Pattern =
   | { kind: "passthrough"; simplifyMm?: number | null; reverse: boolean }
-  | { kind: "contourFill"; pitchMm: number; firstOffsetMm?: number | null; gapFill: boolean };
+  | { kind: "contourFill"; pitchMm: number; firstOffsetMm?: number | null; gapFill: boolean }
+  | {
+      kind: "boundaryTrace";
+      side: OffsetSide;
+      offsetMm: number;
+      kerfMm: number;
+      rings: number;
+      ringSpacingMm: number;
+      reverse: boolean;
+      innerFirst: boolean;
+    }
+  | { kind: "hatch"; pitchMm: number; angleDeg: number; phaseMm: number; serpentine: boolean; insetMm: number }
+  | { kind: "crossHatch"; pitchMm: number; anglesDeg: number[]; phaseMm: number; serpentine: boolean; insetMm: number }
+  | {
+      kind: "boundaryHatch";
+      shells: number;
+      shellPitchMm: number;
+      insetMm: number;
+      pitchMm: number;
+      anglesDeg: number[];
+      phaseMm: number;
+      serpentine: boolean;
+    };
 
 export interface Pass {
   id: string;
@@ -72,6 +103,8 @@ export interface WorkingLayer {
   /** Group B, combined by union; right-hand side of `op`. Unused for union. */
   operands: Operand[];
   op: LayerOp;
+  /** Required when kind is "envelope". */
+  envelope?: EnvelopeProvider | null;
   interpretation: { loopRule: LoopRule; strokeWidth: StrokeWidth };
   passes: Pass[];
   enabled: boolean;
