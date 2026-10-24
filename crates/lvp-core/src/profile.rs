@@ -391,9 +391,273 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
     out
 }
 
-/// Read-only presets shipped with the app. Users duplicate them to edit.
+/// Read-only presets shipped with the app (spec §9). Users duplicate them to edit. The
+/// first one is the default profile of a fresh project.
 pub fn builtin_presets() -> Vec<Profile> {
-    vec![pcb_positive_ldi()]
+    vec![
+        pcb_positive_ldi(),
+        pcb_negative_hatch(),
+        general_marking(),
+        boundary_cutting(),
+    ]
+}
+
+fn dxf_layer(name: &str) -> MatchRule {
+    MatchRule::LayerName {
+        format: Some(SourceFormat::Dxf),
+        name: name.into(),
+    }
+}
+
+fn slot(id: &str, name: &str, required: bool, rules: Vec<MatchRule>) -> SourceBinding {
+    SourceBinding {
+        id: SourceId::new(id),
+        name: name.into(),
+        required,
+        rules,
+    }
+}
+
+fn group(id: &str, name: &str, color: Rgb) -> OutputGroup {
+    OutputGroup {
+        id: GroupId::new(id),
+        name: name.into(),
+        color,
+        stroke_width_mm: None,
+        export: true,
+        visible: true,
+    }
+}
+
+fn pass(id: &str, name: &str, pattern: Pattern, group: &str) -> Pass {
+    Pass {
+        id: PassId::new(id),
+        name: name.into(),
+        pattern,
+        group: GroupId::new(group),
+        enabled: true,
+    }
+}
+
+/// A layer with one operand group, no envelope and the default interpretation.
+fn layer(
+    id: &str,
+    name: &str,
+    kind: GeometryKind,
+    inputs: Vec<Operand>,
+    passes: Vec<Pass>,
+) -> WorkingLayer {
+    WorkingLayer {
+        id: LayerId::new(id),
+        name: name.into(),
+        kind,
+        inputs,
+        operands: Vec::new(),
+        op: LayerOp::Union,
+        envelope: None,
+        interpretation: Interpretation::default(),
+        passes,
+        enabled: true,
+        reference_only: false,
+    }
+}
+
+fn reference(mut l: WorkingLayer) -> WorkingLayer {
+    l.reference_only = true;
+    l
+}
+
+fn envelope_layer(
+    id: &str,
+    name: &str,
+    provider: EnvelopeProvider,
+    inputs: Vec<Operand>,
+) -> WorkingLayer {
+    let mut l = layer(id, name, GeometryKind::Envelope, inputs, Vec::new());
+    l.envelope = Some(provider);
+    reference(l)
+}
+
+fn outline_passthrough() -> Pass {
+    pass(
+        "pass-outline",
+        "Outline passthrough",
+        Pattern::Passthrough {
+            simplify_mm: None,
+            reverse: false,
+        },
+        "grp-outline",
+    )
+}
+
+/// The background around the copper exposed instead of the copper (negative process):
+/// board interior (named boundary from the mechanical outline) minus the copper grown by a
+/// clearance, hatched at 45 degrees; outline passed through in red.
+pub fn pcb_negative_hatch() -> Profile {
+    let mut p = Profile::empty(
+        "builtin-pcb-negative-hatch",
+        "PCB negative (background hatch)",
+    );
+    p.source_bindings = vec![
+        slot("src-copper", "Copper", true, vec![dxf_layer("TOP_LAYER")]),
+        // Required here: it is the domain of the inversion.
+        slot(
+            "src-outline",
+            "Board outline",
+            true,
+            vec![dxf_layer("ROUTE_TOOL_PATH")],
+        ),
+    ];
+    p.output_groups = vec![
+        group("grp-background", "Background", Rgb::BLUE),
+        group("grp-outline", "Outline", Rgb::RED),
+    ];
+    let mut background = layer(
+        "wl-background",
+        "Background",
+        GeometryKind::Region,
+        vec![Operand::Layer(LayerId::new("wl-board"))],
+        vec![pass(
+            "pass-background-hatch",
+            "Hatch 20 um at 45 deg",
+            Pattern::Hatch {
+                pitch_mm: 0.02,
+                angle_deg: 45.0,
+                phase_mm: 0.0,
+                serpentine: true,
+                inset_mm: 0.0,
+            },
+            "grp-background",
+        )],
+    );
+    background.operands = vec![Operand::Layer(LayerId::new("wl-clearance"))];
+    background.op = LayerOp::Subtraction;
+    p.working_layers = vec![
+        reference(layer(
+            "wl-copper",
+            "Copper",
+            GeometryKind::Region,
+            vec![Operand::Source(SourceId::new("src-copper"))],
+            Vec::new(),
+        )),
+        envelope_layer(
+            "wl-board",
+            "Board interior",
+            EnvelopeProvider::NamedBoundary,
+            vec![Operand::Source(SourceId::new("src-outline"))],
+        ),
+        envelope_layer(
+            "wl-clearance",
+            "Copper + 50 um clearance",
+            EnvelopeProvider::Buffer { distance_mm: 0.05 },
+            vec![Operand::Layer(LayerId::new("wl-copper"))],
+        ),
+        background,
+        layer(
+            "wl-outline",
+            "Outline",
+            GeometryKind::Linework,
+            vec![Operand::Source(SourceId::new("src-outline"))],
+            vec![outline_passthrough()],
+        ),
+    ];
+    p
+}
+
+/// Engraving-style marking: linework passed through as drawn, closed shapes filled with
+/// one perimeter shell and a 45 degree hatch.
+pub fn general_marking() -> Profile {
+    let mut p = Profile::empty(
+        "builtin-general-marking",
+        "General marking (lines + hatched fill)",
+    );
+    p.source_bindings = vec![
+        slot("src-marks", "Marks", true, vec![dxf_layer("MARK")]),
+        slot("src-fill", "Fill", false, vec![dxf_layer("FILL")]),
+    ];
+    p.output_groups = vec![
+        group("grp-marks", "Marks", Rgb::BLACK),
+        group("grp-fill", "Fill", Rgb::BLUE),
+    ];
+    p.working_layers = vec![
+        layer(
+            "wl-marks",
+            "Marks",
+            GeometryKind::Linework,
+            vec![Operand::Source(SourceId::new("src-marks"))],
+            vec![pass(
+                "pass-marks",
+                "Marks passthrough",
+                Pattern::Passthrough {
+                    simplify_mm: None,
+                    reverse: false,
+                },
+                "grp-marks",
+            )],
+        ),
+        layer(
+            "wl-fill",
+            "Fill",
+            GeometryKind::Region,
+            vec![Operand::Source(SourceId::new("src-fill"))],
+            vec![pass(
+                "pass-fill",
+                "Shell + hatch 50 um",
+                Pattern::BoundaryHatch {
+                    shells: 1,
+                    shell_pitch_mm: 0.05,
+                    inset_mm: 0.025,
+                    pitch_mm: 0.05,
+                    angles_deg: vec![45.0],
+                    phase_mm: 0.0,
+                    serpentine: true,
+                },
+                "grp-fill",
+            )],
+        ),
+    ];
+    p
+}
+
+/// Cutting along a closed outline: one trace on the boundary, inner cut-outs before the
+/// outer contour. Kerf compensation is left at zero for the user to enter.
+pub fn boundary_cutting() -> Profile {
+    let mut p = Profile::empty(
+        "builtin-boundary-cutting",
+        "Boundary cutting (contour trace)",
+    );
+    p.source_bindings = vec![slot(
+        "src-cut",
+        "Cut outline",
+        true,
+        vec![
+            dxf_layer("ROUTE_TOOL_PATH"),
+            dxf_layer("CUT"),
+            dxf_layer("OUTLINE"),
+        ],
+    )];
+    p.output_groups = vec![group("grp-cut", "Cut", Rgb::RED)];
+    p.working_layers = vec![layer(
+        "wl-cut",
+        "Cut",
+        GeometryKind::Region,
+        vec![Operand::Source(SourceId::new("src-cut"))],
+        vec![pass(
+            "pass-cut",
+            "Boundary trace, holes first",
+            Pattern::BoundaryTrace {
+                side: OffsetSide::On,
+                offset_mm: 0.0,
+                kerf_mm: 0.0,
+                rings: 1,
+                ring_spacing_mm: 0.0,
+                reverse: false,
+                inner_first: true,
+            },
+            "grp-cut",
+        )],
+    )];
+    p
 }
 
 /// Copper exposed with inward contours (blue), mechanical outline passed through (red):
@@ -497,14 +761,28 @@ mod tests {
     use crate::diag::Diagnostics;
 
     #[test]
-    fn preset_roundtrips_and_validates() {
-        let p = pcb_positive_ldi();
-        assert!(validate(&p).is_empty(), "{:?}", validate(&p));
-        let json = to_json(&p);
-        let back = parse_profile(&json).unwrap();
-        assert_eq!(back, p);
-        assert!(json.contains("\"schemaVersion\": 1"));
-        assert!(json.contains("\"kind\": \"contourFill\""));
+    fn presets_roundtrip_and_validate() {
+        let presets = builtin_presets();
+        assert_eq!(presets.len(), 4);
+        let ids: HashSet<&str> = presets.iter().map(|p| p.profile_id.as_str()).collect();
+        assert_eq!(ids.len(), presets.len(), "preset ids must be unique");
+        for p in &presets {
+            assert!(validate(p).is_empty(), "{}: {:?}", p.name, validate(p));
+            let json = to_json(p);
+            let back = parse_profile(&json).unwrap();
+            assert_eq!(&back, p, "{}", p.name);
+            assert!(json.contains("\"schemaVersion\": 1"));
+            assert!(
+                p.working_layers
+                    .iter()
+                    .any(|l| !l.reference_only && !l.passes.is_empty()),
+                "{} produces no output",
+                p.name
+            );
+        }
+        // The default project profile is the positive LDI one.
+        assert_eq!(presets[0], pcb_positive_ldi());
+        assert!(to_json(&presets[0]).contains("\"kind\": \"contourFill\""));
     }
 
     #[test]

@@ -49,6 +49,8 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 impl Rgb {
     pub const BLUE: Rgb = Rgb(0, 0, 255);
     pub const RED: Rgb = Rgb(255, 0, 0);
+    pub const BLACK: Rgb = Rgb(0, 0, 0);
+    pub const GREEN: Rgb = Rgb(0, 160, 0);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

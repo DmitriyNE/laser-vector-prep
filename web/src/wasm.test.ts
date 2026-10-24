@@ -22,8 +22,13 @@ describe("lvp-wasm project API", () => {
   it("reports the core version and ships presets", () => {
     expect(wasm.core_version()).toMatch(/^\d+\.\d+\.\d+/);
     const presets = JSON.parse(wasm.builtin_presets_json()) as Profile[];
-    expect(presets.length).toBeGreaterThan(0);
-    expect(presets[0]!.schemaVersion).toBe(1);
+    expect(presets.map((p) => p.profileId)).toEqual([
+      "builtin-pcb-positive-ldi",
+      "builtin-pcb-negative-hatch",
+      "builtin-general-marking",
+      "builtin-boundary-cutting",
+    ]);
+    expect(presets.every((p) => p.schemaVersion === 1)).toBe(true);
     expect(presets[0]!.workingLayers[0]!.passes[0]!.pattern.kind).toBe("contourFill");
   });
 
