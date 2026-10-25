@@ -87,6 +87,10 @@ fuzz-seeds target:
       *) echo "unknown fuzz target {{target}}" >&2; exit 1 ;;
     esac
 
+# Regenerate docs/profile-schema.json from the profile types (a test fails while it is stale).
+schema:
+    UPDATE_PROFILE_SCHEMA=1 cargo test -p lvp-core --test profile_schema
+
 # Regenerate fixtures/ from the deterministic generator (a test fails if they are stale).
 fixtures:
     cargo run -p lvp-fixtures

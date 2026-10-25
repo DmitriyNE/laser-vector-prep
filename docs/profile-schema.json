@@ -1,0 +1,1046 @@
+{
+  "$defs": {
+    "EnvelopeProvider": {
+      "description": "How an envelope layer turns its reference set (group A) into a bounded region.",
+      "oneOf": [
+        {
+          "description": "The filled interior of the reference region itself (holes included): a named\nboundary such as a mechanical outline.",
+          "properties": {
+            "provider": {
+              "const": "namedBoundary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Axis-aligned bounding box of the reference set, grown by a signed margin.",
+          "properties": {
+            "marginMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "provider": {
+              "const": "boundingBox",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "marginMm"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Smallest enclosing circle of the reference set, grown by a radial margin.",
+          "properties": {
+            "marginMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "provider": {
+              "const": "boundingCircle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "marginMm"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`buffer(reference_region, distance)` with the given corner joins (round by default).",
+          "properties": {
+            "distanceMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "join": {
+              "$ref": "#/$defs/JoinStyle"
+            },
+            "provider": {
+              "const": "buffer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "distanceMm"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`buffer(convexHull(reference), distance)` with the given corner joins.",
+          "properties": {
+            "distanceMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "join": {
+              "$ref": "#/$defs/JoinStyle"
+            },
+            "provider": {
+              "const": "convexHull",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "distanceMm"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExportSettings": {
+      "properties": {
+        "flattenToleranceMm": {
+          "description": "Largest deviation of the Bézier curves the PDF export writes for arcs (mm). DXF and\nSVG exports write arcs exactly. (The name is kept for profile compatibility.)",
+          "format": "double",
+          "type": "number"
+        },
+        "marginMm": {
+          "description": "Page margin around the geometry bounds (mm).",
+          "format": "double",
+          "type": "number"
+        },
+        "separateFiles": {
+          "description": "One PDF per output group instead of one colour-separated file.",
+          "type": "boolean"
+        },
+        "strokeWidthMm": {
+          "description": "Cosmetic PDF stroke width (mm). 0.0254 mm = 1 mil, the validated style.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "strokeWidthMm",
+        "marginMm",
+        "separateFiles",
+        "flattenToleranceMm"
+      ],
+      "type": "object"
+    },
+    "GeometryKind": {
+      "oneOf": [
+        {
+          "const": "region",
+          "description": "Filled planar area with holes.",
+          "type": "string"
+        },
+        {
+          "const": "linework",
+          "description": "Centrelines, open or closed; never implicitly an area.",
+          "type": "string"
+        },
+        {
+          "const": "envelope",
+          "description": "A bounded domain derived from a reference set by an [`EnvelopeProvider`]; a region\nmeant to be subtracted from (negative artwork) or clipped against. Reference-only\nby default: it never marks unless a pass is added deliberately.",
+          "type": "string"
+        }
+      ]
+    },
+    "GroupId": {
+      "description": "Stable id of an output colour group.",
+      "type": "string"
+    },
+    "Interpretation": {
+      "properties": {
+        "loopRule": {
+          "$ref": "#/$defs/LoopRuleCfg",
+          "default": "mergeThenNest"
+        },
+        "strokeWidth": {
+          "$ref": "#/$defs/StrokeWidth",
+          "default": "original"
+        }
+      },
+      "type": "object"
+    },
+    "JoinStyle": {
+      "description": "How an offset turns a corner it moves away from: an exact arc around the corner (round),\nthe two offset edges extended until they meet (miter, bevelled when the tip would lie\nfarther than `limit` × distance from the corner), or a straight chord (bevel).",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "round",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "miter",
+              "type": "string"
+            },
+            "limit": {
+              "default": 4.0,
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "bevel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LayerId": {
+      "description": "Stable id of a working layer.",
+      "type": "string"
+    },
+    "LayerOp": {
+      "description": "How a layer combines its two operand groups: `union(inputs) op union(operands)`.\nFor `Union` both groups are simply merged.",
+      "enum": [
+        "union",
+        "intersection",
+        "subtraction",
+        "xor"
+      ],
+      "type": "string"
+    },
+    "LoopRuleCfg": {
+      "enum": [
+        "evenOdd",
+        "nonZero",
+        "mergeThenNest"
+      ],
+      "type": "string"
+    },
+    "MatchRule": {
+      "description": "Ordered matching rules binding a profile slot to imported source layers.",
+      "oneOf": [
+        {
+          "description": "Exact source layer name, optionally restricted to one input format.",
+          "properties": {
+            "format": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceFormat"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "layerName",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Explicit user mapping to a layer of a specific file (by file name).",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "fileLayer",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "file",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Case-insensitive glob (`*`, `?`) on the file name, optionally restricted to one\nformat; meant for one-layer-per-file formats such as Gerber (`*.gtl`, `*-F_Cu.gbr`).\nMatches every non-empty layer of the file, so it is ambiguous on multi-layer files.",
+          "properties": {
+            "format": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceFormat"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "fileName",
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "pattern"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Case-insensitive glob on the layer's declared function (Gerber X2 `TF.FileFunction`\nsuch as `Copper,L1,Top`, IPC-2581 `layerFunction`), independent of names.",
+          "properties": {
+            "kind": {
+              "const": "function",
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "pattern"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OffsetSide": {
+      "description": "Which side of the boundary a trace runs on.",
+      "enum": [
+        "inside",
+        "on",
+        "outside"
+      ],
+      "type": "string"
+    },
+    "Operand": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/SourceId"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "layer": {
+              "$ref": "#/$defs/LayerId"
+            }
+          },
+          "required": [
+            "layer"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OptimizerMode": {
+      "oneOf": [
+        {
+          "enum": [
+            "asGenerated",
+            "bleedAware"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "minimumJump",
+          "description": "The default for new profiles (owner decision, 2026-10-25).",
+          "type": "string"
+        }
+      ]
+    },
+    "OptimizerSettings": {
+      "description": "Path-order planning within each output group (spec §7). Everything here is geometric\nprediction under the stated assumption of straight beam-off jumps between emitted path\nendpoints; nothing is a machine setting or a calibrated dose.",
+      "properties": {
+        "bleedWeight": {
+          "default": 1.0,
+          "description": "Weight of the bleed penalty (squared footprint overlap over protected regions, in\nmm) relative to jump length (mm) in `bleedAware` mode.",
+          "format": "double",
+          "type": "number"
+        },
+        "cellMm": {
+          "default": 0.05,
+          "description": "Raster cell size for the footprint model (mm); coarsened automatically for very\nlarge groups.",
+          "format": "double",
+          "type": "number"
+        },
+        "endMm": {
+          "description": "Assumed position the beam returns to after the last path, if known.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "footprintMm": {
+          "default": 0.1,
+          "description": "Assumed width of a jump's influence footprint (mm): the geometric surrogate used for\nthe bleed penalty and the heatmap.",
+          "format": "double",
+          "type": "number"
+        },
+        "maxSweeps": {
+          "default": 20,
+          "description": "Upper bound on local-improvement sweeps (determinism and bounded time).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/OptimizerMode",
+          "default": "minimumJump"
+        },
+        "protected": {
+          "default": [],
+          "description": "Working layers whose regions are protected (keep-clear): the bleed penalty and the\nheatmap are evaluated over their union. Empty means no protected region.",
+          "items": {
+            "$ref": "#/$defs/LayerId"
+          },
+          "type": "array"
+        },
+        "startMm": {
+          "description": "Assumed position of the beam before the first path, if the user knows it. Never\ninvented.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "OutputGroup": {
+      "properties": {
+        "auditWidthMm": {
+          "description": "Effective marking width (mm) the coverage audit assumes each path sweeps: a\ngeometric surrogate set by the user, not an exposure model. Absent turns the audit\noff for the group's passes. Schema v2.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "color": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "export": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/GroupId"
+        },
+        "name": {
+          "type": "string"
+        },
+        "orderMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OptimizerMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-group path-order mode; absent follows the profile's optimizer mode."
+        },
+        "strokeWidthMm": {
+          "description": "PDF stroke width override (mm); absent uses the export default.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "visible": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "color"
+      ],
+      "type": "object"
+    },
+    "Pass": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "group": {
+          "$ref": "#/$defs/GroupId"
+        },
+        "id": {
+          "$ref": "#/$defs/PassId"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pattern": {
+          "$ref": "#/$defs/Pattern"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "pattern",
+        "group"
+      ],
+      "type": "object"
+    },
+    "PassId": {
+      "description": "Stable id of a pattern pass.",
+      "type": "string"
+    },
+    "Pattern": {
+      "description": "Geometric path-generation strategy. Creates geometry, never machine settings.",
+      "oneOf": [
+        {
+          "description": "Source centrelines as they are (region layers contribute their boundaries).",
+          "properties": {
+            "kind": {
+              "const": "passthrough",
+              "type": "string"
+            },
+            "reverse": {
+              "default": false,
+              "type": "boolean"
+            },
+            "simplifyMm": {
+              "description": "Drop vertices that deviate less than this from the path (mm); absent keeps all.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Iterative inward offsets from the boundary; rings stay closed, collapsed cores get\nan open centreline when `gap_fill` is on.",
+          "properties": {
+            "endSpacingMm": {
+              "description": "How far beyond the innermost ring the centreline gap fill starts: the swept\nhalf-width credited to the last ring. Default `pitch / 2`. Larger values keep the\ngap-fill centrelines farther from the last ring (less double exposure); smaller\nvalues fill narrower cores.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "firstOffsetMm": {
+              "description": "Distance of the first ring from the boundary; default `pitch / 2`.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "gapFill": {
+              "default": true,
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "contourFill",
+              "type": "string"
+            },
+            "pitchMm": {
+              "description": "Centreline distance between rings (mm).",
+              "format": "double",
+              "type": "number"
+            },
+            "simplifyMm": {
+              "description": "Simplifying tolerance for the rings' straight runs (mm, Douglas-Peucker; arcs are\nkept exactly); absent keeps every vertex. Clamped to a quarter of the pitch.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "pitchMm"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Trace the region boundary (outers and holes) at a geometric offset, optionally as\nseveral rings. Kerf compensation is a user-entered distance, applied outward from the\nfilled area (outers grow, holes shrink), never assumed.",
+          "properties": {
+            "innerFirst": {
+              "default": true,
+              "description": "Emit holes before the outer contour that contains them (cutting order).",
+              "type": "boolean"
+            },
+            "join": {
+              "$ref": "#/$defs/JoinStyle",
+              "description": "Corner joins of the offset rings (round, miter, bevel)."
+            },
+            "kerfMm": {
+              "default": 0.0,
+              "description": "Beam/kerf width to compensate (mm); half of it is applied outward.",
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "boundaryTrace",
+              "type": "string"
+            },
+            "offsetMm": {
+              "default": 0.0,
+              "description": "Distance from the boundary in the direction of `side` (mm).",
+              "format": "double",
+              "type": "number"
+            },
+            "reverse": {
+              "default": false,
+              "description": "Reverse every path's direction.",
+              "type": "boolean"
+            },
+            "ringSpacingMm": {
+              "default": 0.0,
+              "format": "double",
+              "type": "number"
+            },
+            "rings": {
+              "default": 1,
+              "description": "Number of rings; rings after the first step further in the direction of `side`\n(inward for `on`).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "side": {
+              "$ref": "#/$defs/OffsetSide",
+              "default": "on"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Equally spaced parallel scanlines clipped to the region and its holes.",
+          "properties": {
+            "angleDeg": {
+              "default": 0.0,
+              "description": "Measured in document coordinates (degrees, counter-clockwise from +x).",
+              "format": "double",
+              "type": "number"
+            },
+            "insetMm": {
+              "default": 0.0,
+              "description": "Shrink the region by this much before hatching (edge coverage control).",
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "hatch",
+              "type": "string"
+            },
+            "phaseMm": {
+              "default": 0.0,
+              "description": "Lines lie at `phase + k * pitch` across the rotated frame: a global lattice, so\nadjacent layers with the same parameters stay aligned.",
+              "format": "double",
+              "type": "number"
+            },
+            "pitchMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "serpentine": {
+              "default": true,
+              "description": "Alternate row direction (bidirectional) instead of unidirectional.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "pitchMm"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Independent hatches at several angles.",
+          "properties": {
+            "anglesDeg": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "insetMm": {
+              "default": 0.0,
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "crossHatch",
+              "type": "string"
+            },
+            "phaseMm": {
+              "default": 0.0,
+              "format": "double",
+              "type": "number"
+            },
+            "pitchMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "serpentine": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "pitchMm",
+            "anglesDeg"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Perimeter shells followed by a hatch of the remaining interior.",
+          "properties": {
+            "anglesDeg": {
+              "default": [
+                0.0
+              ],
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "insetMm": {
+              "default": 0.0,
+              "description": "Gap between the innermost shell and the hatch area (mm).",
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "boundaryHatch",
+              "type": "string"
+            },
+            "phaseMm": {
+              "default": 0.0,
+              "format": "double",
+              "type": "number"
+            },
+            "pitchMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "serpentine": {
+              "default": true,
+              "type": "boolean"
+            },
+            "shellPitchMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "shells": {
+              "default": 1,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "shellPitchMm",
+            "pitchMm"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Rgb": {
+      "description": "Exact RGB stroke colour of an output group.",
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "SourceBinding": {
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SourceId"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "A missing required binding blocks every output depending on it.",
+          "type": "boolean"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/MatchRule"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "rules"
+      ],
+      "type": "object"
+    },
+    "SourceFormat": {
+      "enum": [
+        "dxf",
+        "gerber",
+        "svg",
+        "pdf",
+        "gds",
+        "ipc2581"
+      ],
+      "type": "string"
+    },
+    "SourceId": {
+      "description": "Stable id of a source-layer slot in a profile.",
+      "type": "string"
+    },
+    "StrokeWidth": {
+      "description": "How open source linework contributes to a region layer.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Open paths are an error in a region layer.",
+          "type": "string"
+        },
+        {
+          "const": "original",
+          "description": "Use the width the source carried (DXF polyline widths); widthless paths are errors.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Expand every open path with this width in mm.",
+          "properties": {
+            "fixed": {
+              "properties": {
+                "mm": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "mm"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "fixed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkingLayer": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "envelope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvelopeProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required when `kind` is `Envelope`; ignored otherwise."
+        },
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "inputs": {
+          "description": "Group A, combined by union.",
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "type": "array"
+        },
+        "interpretation": {
+          "$ref": "#/$defs/Interpretation",
+          "default": {
+            "loopRule": "mergeThenNest",
+            "strokeWidth": "original"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/GeometryKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/LayerOp"
+        },
+        "operands": {
+          "default": [],
+          "description": "Group B, combined by union; the right-hand side of `op`. Unused for `Union`.",
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "type": "array"
+        },
+        "passes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Pass"
+          },
+          "type": "array"
+        },
+        "referenceOnly": {
+          "default": false,
+          "description": "Visible and usable as an operand, but never emits marks of its own.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "inputs",
+        "op"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Profile schema version 2. Older versions are migrated on import; newer ones are rejected. Lengths are millimetres, angles degrees.",
+  "properties": {
+    "export": {
+      "$ref": "#/$defs/ExportSettings",
+      "default": {
+        "flattenToleranceMm": 0.001,
+        "marginMm": 5.0,
+        "separateFiles": false,
+        "strokeWidthMm": 0.0254
+      }
+    },
+    "name": {
+      "type": "string"
+    },
+    "optimizer": {
+      "$ref": "#/$defs/OptimizerSettings",
+      "default": {
+        "bleedWeight": 1.0,
+        "cellMm": 0.05,
+        "footprintMm": 0.1,
+        "maxSweeps": 20,
+        "mode": "minimumJump",
+        "protected": []
+      }
+    },
+    "outputGroups": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/OutputGroup"
+      },
+      "type": "array"
+    },
+    "profileId": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sourceBindings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SourceBinding"
+      },
+      "type": "array"
+    },
+    "workingLayers": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkingLayer"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "profileId",
+    "name"
+  ],
+  "title": "Laser Vector Prep profile",
+  "type": "object"
+}

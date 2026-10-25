@@ -12,6 +12,7 @@ cavalier_contours.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 usvg.workspace = true
 lopdf.workspace = true
 
@@ -24,3 +25,4 @@ getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 proptest.workspace = true
+jsonschema.workspace = true

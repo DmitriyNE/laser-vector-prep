@@ -37,6 +37,7 @@ or prefix each call with `nix develop -c`.
 | `just e2e` | Browser end-to-end tests of `web/dist` in the locally installed Chrome (run `just build` first; see below) |
 | `just regression` | Fixture-based `#[ignore]`d tests |
 | `just fixtures` | Regenerate `fixtures/` from `crates/lvp-fixtures` |
+| `just schema` | Regenerate `docs/profile-schema.json` from the profile types (`just test` fails while it is stale) |
 | `just lint` | `rustfmt --check` and `clippy -D warnings` for host and wasm targets |
 | `just wasm [release]` | Rebuild only the wasm + JS glue into `web/src/wasm/` (run after Rust changes while `just dev` is up) |
 | `just fuzz <target> [seconds]` | Coverage-guided fuzzing of one reader or the whole pipeline (see Fuzzing below); `just fuzz-all` runs every target |

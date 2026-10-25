@@ -99,6 +99,27 @@ pub fn parse_profile(json: &str) -> Result<Profile, ProfileError> {
     serde_json::from_value(value).map_err(|e| ProfileError::Shape(e.to_string()))
 }
 
+/// JSON Schema (draft 2020-12) of the profile format, generated from the serde types so it
+/// cannot drift from what [`parse_profile`] accepts; doc comments become descriptions. The
+/// published copy is `docs/profile-schema.json` (a test keeps it current).
+pub fn json_schema() -> String {
+    let mut schema =
+        serde_json::to_value(schemars::schema_for!(Profile)).expect("schema serialises");
+    let obj = schema.as_object_mut().expect("a schema object");
+    obj.insert("title".into(), "Laser Vector Prep profile".into());
+    obj.insert(
+        "description".into(),
+        format!(
+            "Profile schema version {SCHEMA_VERSION}. Older versions are migrated on import; \
+             newer ones are rejected. Lengths are millimetres, angles degrees."
+        )
+        .into(),
+    );
+    let mut s = serde_json::to_string_pretty(&schema).expect("schema serialises");
+    s.push('\n');
+    s
+}
+
 pub fn to_json(profile: &Profile) -> String {
     let mut s = serde_json::to_string_pretty(profile).expect("profile serialises");
     s.push('\n');

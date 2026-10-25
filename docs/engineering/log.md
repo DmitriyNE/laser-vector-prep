@@ -3,6 +3,14 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: profile JSON Schema
+
+`docs/profile-schema.json` is generated from the serde types with schemars (doc comments
+become descriptions) and checked by `just test`: it must equal the generated one, accept
+every preset and the saved v1 profiles, and reject a few malformed documents
+(jsonschema, test-only). `just schema` regenerates it. The doc comments that said
+"`None`" now say "absent", which reads right in the schema too.
+
 ## 2026-10-25 — M4: coverage audit and schema v2
 
 Fills are audited against a per-group assumed marking width (D32): missed area, spill and

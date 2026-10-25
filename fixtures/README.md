@@ -31,3 +31,10 @@ reports no errors and its independent reading matches the manifest. Gerber files
 
 Known-good export outputs (PDF/SVG/DXF) will be added here once the exporters exist.
 Fixtures are test data only and are never bundled into the shipped site.
+
+Two directories are not generated:
+
+- `profiles/` holds the four built-in presets exactly as the deployed v1 app wrote them
+  (2026-10-25). They test the v1 → v2 migration and the published profile schema.
+- `fuzz/` holds inputs that once crashed, hung or exhausted memory in a fuzz target; see
+  [`fuzz/README.md`](fuzz/README.md).

@@ -128,7 +128,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] Re-check the live site's first visit in Firefox after deploying (14.6 s at kickoff)
 - [x] Coverage audit (spec §10): spill, missed area, short segments against a per-group
       effective marking width; schema v2 with the first migration (D32)
-- [ ] JSON Schema of the profile format generated from the serde types, with a staleness test
+- [x] JSON Schema of the profile format generated from the serde types (schemars), with a
+      staleness test and validation of the presets (`docs/profile-schema.json`)
 - [ ] Preview precision far from the origin
 - [ ] `just package` builds a versioned tarball of the site; `nix build` package
 - [ ] Later: publish GitHub Releases (deferred by the owner)

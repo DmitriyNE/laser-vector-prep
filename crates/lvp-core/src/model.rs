@@ -4,6 +4,7 @@
 
 use std::fmt;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::region::LoopRule;
@@ -15,7 +16,9 @@ pub const SCHEMA_VERSION: u32 = 2;
 macro_rules! id_type {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(
+            Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+        )]
         #[serde(transparent)]
         pub struct $name(pub String);
 
@@ -43,7 +46,7 @@ id_type!(PassId, "Stable id of a pattern pass.");
 id_type!(GroupId, "Stable id of an output colour group.");
 
 /// Exact RGB stroke colour of an output group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
@@ -53,7 +56,7 @@ impl Rgb {
     pub const GREEN: Rgb = Rgb(0, 160, 0);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum SourceFormat {
     Dxf,
@@ -66,7 +69,7 @@ pub enum SourceFormat {
 }
 
 /// Ordered matching rules binding a profile slot to imported source layers.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MatchRule {
     /// Exact source layer name, optionally restricted to one input format.
@@ -94,7 +97,7 @@ pub enum MatchRule {
     Function { pattern: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceBinding {
     pub id: SourceId,
@@ -105,7 +108,7 @@ pub struct SourceBinding {
     pub rules: Vec<MatchRule>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum GeometryKind {
     /// Filled planar area with holes.
@@ -119,7 +122,7 @@ pub enum GeometryKind {
 }
 
 /// How an envelope layer turns its reference set (group A) into a bounded region.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "provider", rename_all = "camelCase")]
 pub enum EnvelopeProvider {
     /// The filled interior of the reference region itself (holes included): a named
@@ -150,7 +153,7 @@ pub enum EnvelopeProvider {
 /// How an offset turns a corner it moves away from: an exact arc around the corner (round),
 /// the two offset edges extended until they meet (miter, bevelled when the tip would lie
 /// farther than `limit` × distance from the corner), or a straight chord (bevel).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum JoinStyle {
     #[default]
@@ -174,7 +177,7 @@ impl JoinStyle {
 
 /// How a layer combines its two operand groups: `union(inputs) op union(operands)`.
 /// For `Union` both groups are simply merged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum LayerOp {
     Union,
@@ -183,14 +186,14 @@ pub enum LayerOp {
     Xor,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Operand {
     Source(SourceId),
     Layer(LayerId),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum LoopRuleCfg {
     EvenOdd,
@@ -209,7 +212,7 @@ impl From<LoopRuleCfg> for LoopRule {
 }
 
 /// How open source linework contributes to a region layer.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StrokeWidth {
     /// Open paths are an error in a region layer.
@@ -221,7 +224,7 @@ pub enum StrokeWidth {
     Fixed { mm: f64 },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Interpretation {
     #[serde(default = "default_loop_rule")]
@@ -252,13 +255,13 @@ fn default_true() -> bool {
 }
 
 /// Geometric path-generation strategy. Creates geometry, never machine settings.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Pattern {
     /// Source centrelines as they are (region layers contribute their boundaries).
     #[serde(rename_all = "camelCase")]
     Passthrough {
-        /// Drop vertices that deviate less than this from the path (mm); `None` keeps all.
+        /// Drop vertices that deviate less than this from the path (mm); absent keeps all.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         simplify_mm: Option<f64>,
         #[serde(default)]
@@ -282,7 +285,7 @@ pub enum Pattern {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         end_spacing_mm: Option<f64>,
         /// Simplifying tolerance for the rings' straight runs (mm, Douglas-Peucker; arcs are
-        /// kept exactly); `None` keeps every vertex. Clamped to a quarter of the pitch.
+        /// kept exactly); absent keeps every vertex. Clamped to a quarter of the pitch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         simplify_mm: Option<f64>,
     },
@@ -373,7 +376,7 @@ fn default_angles() -> Vec<f64> {
 }
 
 /// Which side of the boundary a trace runs on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum OffsetSide {
     Inside,
@@ -382,7 +385,7 @@ pub enum OffsetSide {
     Outside,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Pass {
     pub id: PassId,
@@ -393,7 +396,7 @@ pub struct Pass {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkingLayer {
     pub id: LayerId,
@@ -419,30 +422,30 @@ pub struct WorkingLayer {
     pub reference_only: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputGroup {
     pub id: GroupId,
     pub name: String,
     pub color: Rgb,
-    /// PDF stroke width override (mm); `None` uses the export default.
+    /// PDF stroke width override (mm); absent uses the export default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke_width_mm: Option<f64>,
     #[serde(default = "default_true")]
     pub export: bool,
     #[serde(default = "default_true")]
     pub visible: bool,
-    /// Per-group path-order mode; `None` follows the profile's optimizer mode.
+    /// Per-group path-order mode; absent follows the profile's optimizer mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_mode: Option<OptimizerMode>,
     /// Effective marking width (mm) the coverage audit assumes each path sweeps: a
-    /// geometric surrogate set by the user, not an exposure model. `None` turns the audit
+    /// geometric surrogate set by the user, not an exposure model. Absent turns the audit
     /// off for the group's passes. Schema v2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_width_mm: Option<f64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportSettings {
     /// Cosmetic PDF stroke width (mm). 0.0254 mm = 1 mil, the validated style.
@@ -467,7 +470,7 @@ impl Default for ExportSettings {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum OptimizerMode {
     AsGenerated,
@@ -480,7 +483,7 @@ pub enum OptimizerMode {
 /// Path-order planning within each output group (spec §7). Everything here is geometric
 /// prediction under the stated assumption of straight beam-off jumps between emitted path
 /// endpoints; nothing is a machine setting or a calibrated dose.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerSettings {
     #[serde(default)]
@@ -546,7 +549,7 @@ impl Default for OptimizerSettings {
 
 /// A geometry-preparation profile: everything needed to turn matching source layers into
 /// output groups on a clean browser. No laser parameters, no drawing data.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub schema_version: u32,

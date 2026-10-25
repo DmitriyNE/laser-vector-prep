@@ -15,6 +15,8 @@ leaves the browser.
 - License: Apache-2.0 ([`LICENSE`](LICENSE))
 - Requirements: [`docs/spec.md`](docs/spec.md)
 - Supported file formats: [`docs/formats.md`](docs/formats.md)
+- Profile format: [`docs/profile-schema.json`](docs/profile-schema.json) (JSON Schema, generated
+  from the code)
 - Building and running: [`docs/development.md`](docs/development.md)
 - Engineering log, todo, decisions, defects: [`docs/engineering/`](docs/engineering/)
 
