@@ -132,7 +132,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       staleness test and validation of the presets (`docs/profile-schema.json`)
 - [x] Preview precision far from the origin: buffers carry their own `f64` origin and `f32`
       offsets
-- [ ] `just package` builds a versioned tarball of the site; `nix build` package
+- [x] `just package` builds a versioned, reproducible tarball of the site
+- [ ] `nix build` package of the static site
 - [ ] Later: publish GitHub Releases (deferred by the owner)
 - [ ] Deployment documentation (headers or service worker, sub-paths, offline)
 - [x] CI on GitHub Actions and deployment to GitHub Pages (D27)

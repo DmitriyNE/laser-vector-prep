@@ -49,6 +49,7 @@
               cargo-fuzz # `just fuzz` (libFuzzer targets in fuzz/)
               nodejs_24
               just
+              git # `just package` names the tarball after the commit
             ];
 
             RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";

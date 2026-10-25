@@ -41,6 +41,7 @@ or prefix each call with `nix develop -c`.
 | `just lint` | `rustfmt --check` and `clippy -D warnings` for host and wasm targets |
 | `just wasm [release]` | Rebuild only the wasm + JS glue into `web/src/wasm/` (run after Rust changes while `just dev` is up) |
 | `just fuzz <target> [seconds]` | Coverage-guided fuzzing of one reader or the whole pipeline (see Fuzzing below); `just fuzz-all` runs every target |
+| `just package` | Build, then write `dist/laser-vector-prep-<version>+<commit>.tar.gz` (the static site, licence and deployment notes) and its SHA-256; byte-for-byte reproducible from the same commit |
 | `just preview` | Build, then serve `web/dist` locally |
 | `just clean` | Remove build outputs |
 

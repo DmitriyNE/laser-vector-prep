@@ -126,6 +126,27 @@ check-wasm-bindgen:
 deps:
     cd web && if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then npm ci; fi
 
+# Versioned tarball of the static site in dist/: laser-vector-prep-<version>+<commit>.tar.gz
+# and its SHA-256. Deterministic (sorted entries, commit time, no owners), so the same
+# commit always gives the same bytes. Unpack it on any static host (docs/deployment.md).
+package: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(awk -F'"' '/^\[workspace.package\]/{p=1} p && /^version/{print $2; exit}' Cargo.toml)"
+    commit="$(git rev-parse --short HEAD)"
+    if [ -n "$(git status --porcelain)" ]; then commit="$commit-dirty"; fi
+    name="laser-vector-prep-$version+$commit"
+    stage="$(mktemp -d)"
+    trap 'rm -rf "$stage"' EXIT
+    cp -R web/dist "$stage/$name"
+    cp LICENSE "$stage/$name/"
+    if [ -f docs/deployment.md ]; then cp docs/deployment.md "$stage/$name/DEPLOY.md"; fi
+    mkdir -p dist
+    tar --sort=name --mtime="@$(git log -1 --format=%ct)" --owner=0 --group=0 --numeric-owner \
+        -C "$stage" -cf - "$name" | gzip -9n > "dist/$name.tar.gz"
+    (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+    echo "dist/$name.tar.gz"
+
 # Serve the production build locally (checks the service-worker path, not just the dev server headers).
 preview: build
     cd web && npm run preview

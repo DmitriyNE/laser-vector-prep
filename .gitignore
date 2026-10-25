@@ -10,6 +10,9 @@
 /web/test-results
 /web/playwright-report
 
+# `just package` output
+/dist
+
 # Nix / direnv
 /result
 /.direnv
