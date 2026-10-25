@@ -343,6 +343,12 @@
     draw();
   }
 
+  /** Zoom about the centre of the view, by Svelte Flow's step (the graph's controls). */
+  function zoomBy(factor: number) {
+    ppm = Math.min(Math.max(ppm * factor, 0.01), 1e5);
+    draw();
+  }
+
   function onPointerDown(e: PointerEvent) {
     dragging = { x: e.clientX, y: e.clientY, cx, cy };
     canvas.setPointerCapture(e.pointerId);
@@ -521,7 +527,6 @@
     ondblclick={fit}
   ></canvas>
   <div class="hud">
-    <button onclick={fit} title="Fit (double-click)">fit</button>
     <label><input type="checkbox" bind:checked={store.showSources} /> sources</label>
     <label><input type="checkbox" bind:checked={store.showLayers} /> regions</label>
     <label title="hypothetical straight beam-off jumps of the planned order; never exported"><input type="checkbox" bind:checked={store.showJumps} /> jumps</label>
@@ -533,6 +538,22 @@
       · {ppm.toFixed(1)} px/mm
     </span>
     <BusyIndicator {store} />
+  </div>
+  <!-- Zoom controls as in the graph tab (Svelte Flow's Controls, with its icons). -->
+  <div class="controls" role="group" aria-label="Zoom controls">
+    <button title="Zoom In" aria-label="Zoom In" onclick={() => zoomBy(1.2)}>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M32 18.133H18.133V32h-4.266V18.133H0v-4.266h13.867V0h4.266v13.867H32z" /></svg>
+    </button>
+    <button title="Zoom Out" aria-label="Zoom Out" onclick={() => zoomBy(1 / 1.2)}>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 5"><path d="M0 0h32v4.2H0z" /></svg>
+    </button>
+    <button title="Fit View (double-click)" aria-label="Fit View" onclick={fit}>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 30"
+        ><path
+          d="M3.692 4.63c0-.53.4-.938.939-.938h5.215V0H4.708C2.13 0 0 2.054 0 4.63v5.216h3.692V4.631zM27.354 0h-5.2v3.692h5.17c.53 0 .984.4.984.939v5.215H32V4.631A4.624 4.624 0 0027.354 0zm.954 24.83c0 .532-.4.94-.939.94h-5.215v3.768h5.215c2.577 0 4.631-2.13 4.631-4.707v-5.139h-3.692v5.139zm-23.677.94c-.531 0-.939-.4-.939-.94v-5.138H0v5.139c0 2.577 2.13 4.707 4.708 4.707h5.138V25.77H4.631z"
+        /></svg
+      >
+    </button>
   </div>
   <canvas
     class="minimap"
@@ -575,7 +596,8 @@
     font-family: ui-monospace, monospace;
     opacity: 0.8;
   }
-  /* Size, place and colours of Svelte Flow's minimap in the graph tab. */
+  /* Size, place and colours of Svelte Flow's minimap in the graph tab (both get the
+     controls' shadow, so the edge shows on the preview's grey too). */
   .minimap {
     position: absolute;
     right: 15px;
@@ -583,14 +605,57 @@
     width: 200px;
     height: 150px;
     background: #fff;
+    box-shadow: 0 0 2px 1px rgba(0, 0, 0, 0.08);
     cursor: grab;
   }
   .minimap.empty {
     display: none;
   }
+  /* Svelte Flow's Controls: a column of 26 px buttons with 12 px icons. */
+  .controls {
+    position: absolute;
+    left: 15px;
+    bottom: 15px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 0 2px 1px rgba(0, 0, 0, 0.08);
+  }
+  .controls button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-sizing: border-box;
+    width: 26px;
+    height: 26px;
+    padding: 4px;
+    border: none;
+    border-bottom: 1px solid #eee;
+    background: #fefefe;
+    color: inherit;
+    cursor: pointer;
+    user-select: none;
+  }
+  .controls button:hover {
+    background: #f4f4f4;
+  }
+  .controls svg {
+    width: 100%;
+    max-width: 12px;
+    max-height: 12px;
+    fill: currentColor;
+  }
   @media (prefers-color-scheme: dark) {
     .minimap {
       background: #141414;
+    }
+    .controls button {
+      background: #2b2b2b;
+      border-bottom-color: #5b5b5b;
+      color: #f8f8f8;
+    }
+    .controls button:hover {
+      background: #3e3e3e;
+      color: #fff;
     }
   }
 </style>

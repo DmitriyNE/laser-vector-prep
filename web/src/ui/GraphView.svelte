@@ -228,6 +228,10 @@
   .graph :global(.edge-b path) {
     stroke: #8a5cd0;
   }
+  /* The same edge as the preview's minimap. */
+  .graph :global(.svelte-flow__minimap) {
+    box-shadow: 0 0 2px 1px rgba(0, 0, 0, 0.08);
+  }
   .graph :global(.svelte-flow__edge.selected path) {
     stroke-width: 3;
   }

@@ -45,6 +45,9 @@ and colours as Svelte Flow's (light and dark), the drawing with everything outsi
 masked, drag to pan (pressing outside the view jumps there) and wheel to zoom. The drawing
 is rendered into it once per fetch; panning only redraws the mask, since redrawing a large
 panel on every move would not keep up.
+It also has the graph's zoom controls (+, −, fit) in the same corner with the same icons
+and colours; the fit button moved there from the preview's toolbar. Both minimaps carry the
+controls' faint shadow, because on the preview's grey background the mask hid the edge.
 
 ## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
 

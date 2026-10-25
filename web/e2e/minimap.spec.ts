@@ -46,3 +46,22 @@ test("the preview's minimap shows the drawing and pans and zooms the view", asyn
   await page.mouse.wheel(0, -300);
   await expect.poll(async () => (await centre(page)).ppm).toBeGreaterThan(panned.ppm * 1.2);
 });
+
+test("the preview's zoom controls zoom about the centre and fit the drawing", async ({ page }) => {
+  await page.goto(url);
+  await waitForApp(page);
+  await importDxf(page, [fixture("gerber/board-F_Cu.gbr"), fixture("gerber/board-Edge_Cuts.gbr")]);
+  const controls = page.locator(".preview .controls");
+  const fitted = await centre(page);
+  await controls.getByRole("button", { name: "Zoom In" }).click();
+  const zoomed = await centre(page);
+  expect(zoomed.ppm / fitted.ppm).toBeCloseTo(1.2, 1);
+  // About the centre: the point under it stays put.
+  expect(Math.abs(zoomed.x - fitted.x)).toBeLessThan(0.05);
+  expect(Math.abs(zoomed.y - fitted.y)).toBeLessThan(0.05);
+  await controls.getByRole("button", { name: "Zoom Out" }).click();
+  await controls.getByRole("button", { name: "Zoom Out" }).click();
+  expect((await centre(page)).ppm).toBeLessThan(fitted.ppm);
+  await controls.getByRole("button", { name: "Fit View" }).click();
+  expect((await centre(page)).ppm).toBeCloseTo(fitted.ppm, 1);
+});
