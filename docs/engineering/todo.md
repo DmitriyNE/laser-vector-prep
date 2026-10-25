@@ -118,8 +118,9 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       8×8 panel (22 k paths) in 0.8 s natively and 2.6 s in Chrome
 - [ ] Still sequential on large inputs: layer compositing, the order statistics' coverage
       raster, and bleed-aware improvement (about 2 s of the 4.6 s for the 8×8 panel)
-- [ ] Cooperative cancellation and progress (shared-memory flag, rayon stops between
-      chunks); a new edit cancels the running evaluation; Cancel button (spec §12 #19)
+- [x] Cooperative cancellation and progress through a control block in shared wasm
+      memory; a new edit cancels the running evaluation; Cancel button and progress bar
+      (spec §12 #19)
 - [ ] Firefox: Playwright Firefox from nixpkgs, e2e suite on Chrome and Firefox locally and
       in CI; fix the extra service-worker reload with headers and the slow start
 - [ ] Coverage audit (spec §10): spill, missed area, short segments against a per-group

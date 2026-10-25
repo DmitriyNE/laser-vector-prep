@@ -1,10 +1,11 @@
 import init, * as wasm from "../wasm/lvp_wasm.js";
 import type { Heatmap, Preview } from "../core/types.js";
-import type { Payload, Request, Response } from "./protocol.js";
+import { CANCELLED, type Payload, type Request, type Response } from "./protocol.js";
 
 // Shared-memory wasm: instantiate, then start the rayon pool (one Web Worker per thread).
+let memory: WebAssembly.Memory;
 const ready = (async () => {
-  await init();
+  memory = (await init()).memory;
   await wasm.initThreadPool(navigator.hardwareConcurrency);
   wasm.enable_parallelism();
 })();
@@ -22,12 +23,17 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       return { result: wasm.core_version(), transfer: [] };
     case "threads":
       return { result: wasm.thread_count(), transfer: [] };
+    case "control": {
+      const buffer = memory.buffer;
+      if (!(buffer instanceof SharedArrayBuffer)) throw new Error("wasm memory is not shared");
+      return { result: { buffer, offset: wasm.control_block() }, transfer: [] };
+    }
     case "presets":
       return { result: JSON.parse(wasm.builtin_presets_json()), transfer: [] };
     case "addSource":
-      return { result: JSON.parse(wasm.add_source(req.name, req.bytes)), transfer: [] };
+      return { result: JSON.parse(wasm.add_source(req.name, req.bytes, req.epoch)), transfer: [] };
     case "replaceSource":
-      return { result: JSON.parse(wasm.replace_source(req.index, req.bytes)), transfer: [] };
+      return { result: JSON.parse(wasm.replace_source(req.index, req.bytes, req.epoch)), transfer: [] };
     case "acceptedExtensions":
       return { result: JSON.parse(wasm.accepted_extensions_json()), transfer: [] };
     case "removeSource":
@@ -43,7 +49,7 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
     case "validateProfile":
       return { result: JSON.parse(wasm.validate_profile_json(JSON.stringify(req.profile))), transfer: [] };
     case "evaluate":
-      return { result: JSON.parse(wasm.evaluate()), transfer: [] };
+      return { result: JSON.parse(wasm.evaluate(req.epoch)), transfer: [] };
     case "previewPass":
       return preview(wasm.preview_pass(req.id));
     case "previewLayer":
@@ -92,9 +98,10 @@ self.onmessage = async (ev: MessageEvent<Request>) => {
   } catch (e) {
     // Full detail (including wasm stack frames) stays in the worker console. A wasm trap
     // (RuntimeError) leaves the instance in an unknown state: tell the client to replace it.
-    console.error(`geometry worker: ${payload.kind} failed`, e);
+    const error = e instanceof Error ? e.message : String(e);
+    if (!CANCELLED.includes(error)) console.error(`geometry worker: ${payload.kind} failed`, e);
     const fatal = e instanceof WebAssembly.RuntimeError;
-    const res: Response = { rid, ok: false, error: e instanceof Error ? e.message : String(e), fatal };
+    const res: Response = { rid, ok: false, error, fatal };
     self.postMessage(res);
   }
 };

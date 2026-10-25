@@ -66,19 +66,39 @@ pub fn builtin_presets_json() -> Result<String, JsError> {
     json(&profile::builtin_presets())
 }
 
-/// Import a file of any supported format (detected from content and name); returns its
-/// `SourceSummary` as JSON.
+/// Address of the cancellation and progress block in this module's (shared) memory: four
+/// `u32`s, `[cancel, running, done, total]` (see `lvp_core::cancel`). The page writes an
+/// epoch to `cancel` to stop that computation, queued or running.
 #[wasm_bindgen]
-pub fn add_source(name: &str, bytes: &[u8]) -> Result<String, JsError> {
-    with(|p| p.add_source(name, bytes).map_err(js).and_then(|s| json(&s)))
+pub fn control_block() -> usize {
+    std::ptr::from_ref(&lvp_core::cancel::CONTROL) as usize
+}
+
+/// Run `f` as the cancellable computation `epoch`.
+fn cancellable<R>(epoch: u32, f: impl FnOnce() -> R) -> R {
+    lvp_core::cancel::begin(epoch);
+    let r = f();
+    lvp_core::cancel::end();
+    r
+}
+
+/// Import a file of any supported format (detected from content and name) as the
+/// cancellable computation `epoch`; returns its `SourceSummary` as JSON.
+#[wasm_bindgen]
+pub fn add_source(name: &str, bytes: &[u8], epoch: u32) -> Result<String, JsError> {
+    cancellable(epoch, || {
+        with(|p| p.add_source(name, bytes).map_err(js).and_then(|s| json(&s)))
+    })
 }
 
 #[wasm_bindgen]
-pub fn replace_source(index: usize, bytes: &[u8]) -> Result<String, JsError> {
-    with(|p| {
-        p.replace_source(index, bytes)
-            .map_err(js)
-            .and_then(|s| json(&s))
+pub fn replace_source(index: usize, bytes: &[u8], epoch: u32) -> Result<String, JsError> {
+    cancellable(epoch, || {
+        with(|p| {
+            p.replace_source(index, bytes)
+                .map_err(js)
+                .and_then(|s| json(&s))
+        })
     })
 }
 
@@ -121,10 +141,13 @@ pub fn validate_profile_json(json_text: &str) -> Result<String, JsError> {
     json(&diags)
 }
 
-/// Evaluate with the current profile and sources; returns the `EvaluationSummary`.
+/// Evaluate with the current profile and sources as the cancellable computation `epoch`;
+/// returns the `EvaluationSummary`, or the error "cancelled".
 #[wasm_bindgen]
-pub fn evaluate() -> Result<String, JsError> {
-    with(|p| json(&p.evaluate()))
+pub fn evaluate(epoch: u32) -> Result<String, JsError> {
+    cancellable(epoch, || {
+        with(|p| p.try_evaluate().map_err(js).and_then(|s| json(&s)))
+    })
 }
 
 #[wasm_bindgen]

@@ -199,7 +199,10 @@ pub struct Project {
     pub profile: Profile,
     read_options: ReadOptions,
     evaluator: Evaluator,
-    last: Option<Evaluation>,
+    /// The newest completed evaluation and the profile it was made from. A newer profile
+    /// whose evaluation was cancelled does not replace it, so summaries, previews and
+    /// exports always describe the same result.
+    last: Option<(Evaluation, Profile)>,
     revision: u64,
 }
 
@@ -348,20 +351,26 @@ impl Project {
     /// Re-evaluate with the current profile and sources. Cached layers and passes whose
     /// inputs did not change are reused.
     pub fn evaluate(&mut self) -> EvaluationSummary {
-        let ev = self.evaluator.evaluate(&self.profile, &self.sources);
+        self.try_evaluate()
+            .expect("nothing is cancelled outside a cancellable computation")
+    }
+
+    /// [`Project::evaluate`] that the host may cancel ([`crate::cancel`]). A cancelled run
+    /// leaves the previous evaluation in place, so previews and exports still match it.
+    pub fn try_evaluate(&mut self) -> Result<EvaluationSummary, crate::cancel::Cancelled> {
+        let ev = self.evaluator.try_evaluate(&self.profile, &self.sources)?;
         self.revision += 1;
-        self.last = Some(ev);
-        self.summary().expect("just evaluated")
+        self.last = Some((ev, self.profile.clone()));
+        Ok(self.summary().expect("just evaluated"))
     }
 
     pub fn evaluation(&self) -> Option<&Evaluation> {
-        self.last.as_ref()
+        self.last.as_ref().map(|(ev, _)| ev)
     }
 
     pub fn summary(&self) -> Option<EvaluationSummary> {
-        let ev = self.last.as_ref()?;
-        let bindings = self
-            .profile
+        let (ev, profile) = self.last.as_ref()?;
+        let bindings = profile
             .source_bindings
             .iter()
             .map(|b| {
@@ -398,8 +407,7 @@ impl Project {
                 }
             })
             .collect();
-        let layers = self
-            .profile
+        let layers = profile
             .working_layers
             .iter()
             .filter_map(|l| {
@@ -441,13 +449,12 @@ impl Project {
             .passes
             .iter()
             .map(|(id, pr)| {
-                let name = self
-                    .profile
+                let name = profile
                     .layer(&pr.layer)
                     .and_then(|l| l.passes.iter().find(|p| &p.id == id))
                     .map(|p| p.name.clone())
                     .unwrap_or_default();
-                let exported = self.profile.group(&pr.group).is_some_and(|g| g.export);
+                let exported = profile.group(&pr.group).is_some_and(|g| g.export);
                 if exported
                     && let Some(b) = pr
                         .paths
@@ -475,7 +482,7 @@ impl Project {
             .groups
             .iter()
             .filter_map(|(id, plan)| {
-                let g = self.profile.group(id)?;
+                let g = profile.group(id)?;
                 Some(GroupSummary {
                     id: id.clone(),
                     name: g.name.clone(),
@@ -514,7 +521,7 @@ impl Project {
     }
 
     pub fn preview_layer(&self, id: &LayerId) -> Option<PreviewBuffer> {
-        let r = self.last.as_ref()?.layers.get(id)?;
+        let r = self.last.as_ref()?.0.layers.get(id)?;
         Some(match &r.geometry {
             Geometry::Region(reg) => PreviewBuffer::from_plines(reg.loops.iter()),
             Geometry::Linework(ps) => PreviewBuffer::from_plines(ps.iter()),
@@ -522,20 +529,20 @@ impl Project {
     }
 
     pub fn preview_pass(&self, id: &PassId) -> Option<PreviewBuffer> {
-        let pr = self.last.as_ref()?.pass(id)?;
+        let pr = self.last.as_ref()?.0.pass(id)?;
         Some(PreviewBuffer::from_plines(pr.paths.iter()))
     }
 
     /// Hypothetical straight beam-off jumps of a group's planned order (preview only).
     pub fn preview_jumps(&self, group: &GroupId) -> Option<PreviewBuffer> {
-        let ev = self.last.as_ref()?;
+        let (ev, profile) = self.last.as_ref()?;
         let plan = ev.group_plan(group)?;
         let paths = ev.pass_paths();
         let mut b = PreviewBuffer {
             starts: vec![0],
             ..Default::default()
         };
-        for (from, to) in order::jumps(plan, &paths, &self.profile.optimizer) {
+        for (from, to) in order::jumps(plan, &paths, &profile.optimizer) {
             b.coords
                 .extend([from.x as f32, from.y as f32, to.x as f32, to.y as f32]);
             b.bulges.extend([0.0, 0.0]);
@@ -547,27 +554,27 @@ impl Project {
 
     /// Jump footprint coverage over the protected regions, for the preview overlay.
     pub fn heatmap(&self, group: &GroupId) -> Option<&Heatmap> {
-        self.last.as_ref()?.group_plan(group)?.heatmap.as_ref()
+        self.last.as_ref()?.0.group_plan(group)?.heatmap.as_ref()
     }
 
     pub fn export_pdf(&self) -> Result<Vec<u8>, ExportError> {
-        let ev = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
-        export::export_pdf(&self.profile, ev).map(|(bytes, _)| bytes)
+        let (ev, profile) = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
+        export::export_pdf(profile, ev).map(|(bytes, _)| bytes)
     }
 
     pub fn export_svg(&self) -> Result<Vec<u8>, ExportError> {
-        let ev = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
-        export::export_svg(&self.profile, ev).map(|(bytes, _)| bytes)
+        let (ev, profile) = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
+        export::export_svg(profile, ev).map(|(bytes, _)| bytes)
     }
 
     pub fn export_dxf(&self) -> Result<Vec<u8>, ExportError> {
-        let ev = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
-        export::export_dxf(&self.profile, ev).map(|(bytes, _)| bytes)
+        let (ev, profile) = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
+        export::export_dxf(profile, ev).map(|(bytes, _)| bytes)
     }
 
     pub fn export_pdf_per_group(&self) -> Result<Vec<GroupFile>, ExportError> {
-        let ev = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
-        export::export_pdf_per_group(&self.profile, ev).map(|(files, _)| files)
+        let (ev, profile) = self.last.as_ref().ok_or(ExportError::NothingToExport)?;
+        export::export_pdf_per_group(profile, ev).map(|(files, _)| files)
     }
 }
 

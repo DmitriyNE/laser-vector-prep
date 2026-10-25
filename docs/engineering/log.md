@@ -3,6 +3,20 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: cancellation and progress
+
+The worker cannot read messages while a wasm call runs, but the page can write into the
+module's shared memory: `lvp_core::cancel` keeps a small control block there, and every
+import or evaluation runs under an epoch the page can cancel, queued or running. The
+store now keeps at most one evaluation in flight; an edit cancels it and re-evaluates
+instead of queueing behind it. A progress bar and a Cancel button appear after 300 ms.
+
+Writing the tests found two gaps: a cancel during the copper compositing of a 2×2 panel
+took 17 s to take effect in a debug build until the boolean itself checked for it, and
+summaries and exports read the *current* profile, so after a cancelled run they would
+have mixed the new profile's group colours with the old paths. The project now keeps the
+profile each evaluation was made from.
+
 ## 2026-10-25 — M4: large inputs
 
 Contour fill offset the whole layer at every ring depth, so every island was processed

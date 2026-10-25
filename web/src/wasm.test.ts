@@ -5,6 +5,8 @@ import type { EvaluationSummary, Profile, SourceSummary } from "./core/types.js"
 
 type Wasm = typeof import("./wasm/lvp_wasm.js");
 let wasm: Wasm;
+let memory: WebAssembly.Memory;
+let epoch = 0;
 
 // Requires `just wasm` to have generated src/wasm (the justfile `test` recipe does this).
 beforeAll(async () => {
@@ -13,7 +15,7 @@ beforeAll(async () => {
   (globalThis as { self?: EventTarget }).self ??= new EventTarget();
   wasm = await import("./wasm/lvp_wasm.js");
   const bytes = await readFile(new URL("./wasm/lvp_wasm_bg.wasm", import.meta.url));
-  await wasm.default({ module_or_path: bytes });
+  memory = (await wasm.default({ module_or_path: bytes })).memory;
 });
 
 const fixture = () => readFile(new URL("../../fixtures/dxf/board-islands.dxf", import.meta.url));
@@ -33,7 +35,7 @@ describe("lvp-wasm project API", () => {
   });
 
   it("imports the board fixture, evaluates and exports a PDF", async () => {
-    const summary = JSON.parse(wasm.add_source("board-islands.dxf", new Uint8Array(await fixture()))) as SourceSummary;
+    const summary = JSON.parse(wasm.add_source("board-islands.dxf", new Uint8Array(await fixture()), ++epoch)) as SourceSummary;
     expect(summary.units).toBe("Millimetre");
     expect(summary.layers.map((l) => l.name)).toContain("TOP_LAYER");
 
@@ -43,7 +45,7 @@ describe("lvp-wasm project API", () => {
     if (pattern.kind === "contourFill") pattern.pitchMm = 0.2;
     wasm.set_profile_json(JSON.stringify(profile));
 
-    const ev = JSON.parse(wasm.evaluate()) as EvaluationSummary;
+    const ev = JSON.parse(wasm.evaluate(++epoch)) as EvaluationSummary;
     expect(ev.hasErrors).toBe(false);
     expect(ev.bindings.every((b) => b.status === "matched")).toBe(true);
     expect(ev.layers[0]!.outers).toBe(10);
@@ -84,7 +86,7 @@ describe("lvp-wasm project API", () => {
     profile.optimizer.mode = "bleedAware";
     profile.optimizer.protected = ["wl-copper"];
     wasm.set_profile_json(JSON.stringify(profile));
-    const ev = JSON.parse(wasm.evaluate()) as EvaluationSummary;
+    const ev = JSON.parse(wasm.evaluate(++epoch)) as EvaluationSummary;
     expect(ev.hasErrors).toBe(false);
     const copper = ev.groups.find((g) => g.id === "grp-copper")!;
     expect(copper.mode).toBe("bleedAware");
@@ -92,8 +94,25 @@ describe("lvp-wasm project API", () => {
     expect(copper.heatmap).toBe(true);
   }); // the 20 um fill is the case that reproduced the trap (see testTimeout in vite.config.ts)
 
+  it("cancels through the shared control block and keeps the previous evaluation", () => {
+    // What the page does: write the epoch to cancel into the block in wasm memory.
+    const control = new Uint32Array(memory.buffer, wasm.control_block(), 4);
+    const before = wasm.summary_json();
+    expect(before).toBeTruthy();
+    const cancelled = ++epoch;
+    Atomics.store(control, 0, cancelled);
+    expect(() => wasm.evaluate(cancelled)).toThrow(/^cancelled$/);
+    expect(wasm.summary_json()).toBe(before);
+    expect(Atomics.load(control, 1)).toBe(0); // idle again
+    // The next epoch is not affected, and reports full progress.
+    const ev = JSON.parse(wasm.evaluate(++epoch)) as EvaluationSummary;
+    expect(ev.hasErrors).toBe(false);
+    expect(Atomics.load(control, 3)).toBeGreaterThan(0);
+    expect(Atomics.load(control, 2)).toBe(Atomics.load(control, 3));
+  });
+
   it("rejects bad input as exceptions and keeps state", () => {
-    expect(() => wasm.add_source("x.dxf", new Uint8Array([1, 2, 3]))).toThrow();
+    expect(() => wasm.add_source("x.dxf", new Uint8Array([1, 2, 3]), ++epoch)).toThrow();
     const before = wasm.profile_json();
     expect(() => wasm.set_profile_json('{"schemaVersion": 99}')).toThrow(/newer/);
     expect(wasm.profile_json()).toBe(before);

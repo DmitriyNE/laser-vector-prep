@@ -677,7 +677,12 @@ fn construct(nodes: &[Node], precedence: &[(usize, usize)], start: Option<Point>
     });
     let mut first = start.is_none();
     while seq.order.len() < n {
-        let pick = if first {
+        // Cancelled (the result is discarded) or cyclic constraints: the rest follows in
+        // generated order, so the sequence stays a permutation.
+        let stop = seq.order.len() % 1024 == 0 && crate::cancel::cancelled();
+        let pick = if stop {
+            None
+        } else if first {
             first = false;
             // The first generated path that is available.
             (0..n).find(|&i| remaining_preds[i] == 0)
@@ -685,12 +690,11 @@ fn construct(nodes: &[Node], precedence: &[(usize, usize)], start: Option<Point>
             grid.nearest(current).map(|(i, _, _)| i)
         };
         let Some(i) = pick else {
-            // Cyclic constraints: append the rest in generated order.
-            for j in 0..n {
-                if !seq.order.contains(&j) {
-                    seq.order.push(j);
-                }
+            let mut placed = vec![false; n];
+            for &j in &seq.order {
+                placed[j] = true;
             }
+            seq.order.extend((0..n).filter(|&j| !placed[j]));
             break;
         };
         let (_, rev, seam) = nodes[i].nearest_entry(current);
@@ -913,6 +917,9 @@ fn improve(seq: &mut Seq, obj: &mut Objective<'_>, precedence: &[(usize, usize)]
 
     let mut pos: Vec<usize> = vec![0; nodes.len()];
     for sweep in 0..max_sweeps {
+        if crate::cancel::cancelled() {
+            return;
+        }
         let mut improved = false;
         for (k, &n) in seq.order.iter().enumerate() {
             pos[n] = k;

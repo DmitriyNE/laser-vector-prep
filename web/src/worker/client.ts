@@ -1,4 +1,4 @@
-import { transferables, type Payload, type Request, type Response, type ResultOf } from "./protocol.js";
+import { CANCELLED, transferables, type Payload, type Request, type Response, type ResultOf } from "./protocol.js";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -8,6 +8,21 @@ export class WorkerCrashed extends Error {
     super(`geometry worker crashed and was restarted: ${message}`);
     this.name = "WorkerCrashed";
   }
+}
+
+/** The page cancelled the computation (see `GeometryWorker.cancel`). */
+export class Cancelled extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "Cancelled";
+  }
+}
+
+/** Progress of the worker's running computation, in thousandths of a step. */
+export interface Progress {
+  running: boolean;
+  done: number;
+  total: number;
 }
 
 /**
@@ -25,6 +40,9 @@ export class GeometryWorker {
   #worker: Worker | null = null;
   #pending = new Map<number, Pending>();
   #nextId = 1;
+  /** `[cancel, running, done, total]` in the worker's shared wasm memory. */
+  #control: Uint32Array | null = null;
+  #epoch = 0;
   onCrash: ((message: string) => void) | null = null;
 
   #spawn(): Worker {
@@ -35,6 +53,7 @@ export class GeometryWorker {
         const msg = res.error;
         worker.terminate();
         this.#worker = null;
+        this.#control = null;
         this.#failAll(new WorkerCrashed(msg));
         this.onCrash?.(msg);
         return;
@@ -43,13 +62,40 @@ export class GeometryWorker {
       if (!p) return; // stale or cancelled
       this.#pending.delete(res.rid);
       if (res.ok) p.resolve(res.result);
-      else p.reject(new Error(res.error));
+      else p.reject(CANCELLED.includes(res.error) ? new Cancelled(res.error) : new Error(res.error));
     };
     worker.onerror = (ev) => {
       this.#failAll(new Error(ev.message || "geometry worker crashed"));
     };
     this.#worker = worker;
+    this.#control = null;
+    // First request on the new worker: where its cancellation and progress block lives.
+    this.call({ kind: "control" })
+      .then((c) => {
+        if (this.#worker === worker) this.#control = new Uint32Array(c.buffer, c.offset, 4);
+      })
+      .catch(() => {});
     return worker;
+  }
+
+  /** A fresh epoch for a cancellable request (`evaluate`, `addSource`, `replaceSource`). */
+  nextEpoch(): number {
+    return ++this.#epoch;
+  }
+
+  /**
+   * Stop the computation with this epoch, whether it is running or still queued; it fails
+   * with `Cancelled`. Works while the worker is busy: the flag lives in shared memory.
+   */
+  cancel(epoch: number) {
+    if (this.#control) Atomics.store(this.#control, 0, epoch);
+  }
+
+  /** Progress of the running computation, or `null` before the worker is up. */
+  progress(): Progress | null {
+    const c = this.#control;
+    if (!c) return null;
+    return { running: Atomics.load(c, 1) !== 0, done: Atomics.load(c, 2), total: Atomics.load(c, 3) };
   }
 
   #failAll(err: Error) {
@@ -71,12 +117,14 @@ export class GeometryWorker {
   restart() {
     this.#worker?.terminate();
     this.#worker = null;
+    this.#control = null;
     this.#failAll(new Error("cancelled"));
   }
 
   dispose() {
     this.#worker?.terminate();
     this.#worker = null;
+    this.#control = null;
     this.#failAll(new Error("disposed"));
   }
 }

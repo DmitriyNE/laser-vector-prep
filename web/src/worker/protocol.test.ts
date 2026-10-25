@@ -11,8 +11,8 @@ describe("worker protocol", () => {
 
   it("transfers file bytes and nothing else", () => {
     const bytes = new Uint8Array([1, 2, 3]);
-    expect(transferables({ kind: "addSource", name: "a.dxf", bytes })).toEqual([bytes.buffer]);
-    expect(transferables({ kind: "evaluate" })).toEqual([]);
+    expect(transferables({ kind: "addSource", name: "a.dxf", bytes, epoch: 1 })).toEqual([bytes.buffer]);
+    expect(transferables({ kind: "evaluate", epoch: 2 })).toEqual([]);
     expect(transferables({ kind: "previewPass", id: "p" })).toEqual([]);
   });
 });

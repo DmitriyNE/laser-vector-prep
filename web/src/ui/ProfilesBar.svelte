@@ -108,6 +108,7 @@
   </span>
   {#if message}<span class="msg">{message} <button onclick={() => (message = null)}>×</button></span>{/if}
   {#if store.error}<span class="err">{store.error}</span>{/if}
+  {#if store.notice}<span class="msg">{store.notice}</span>{/if}
 </div>
 
 <style>

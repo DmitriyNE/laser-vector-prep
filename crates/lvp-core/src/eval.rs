@@ -7,6 +7,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use cavalier_contours::polyline::PlineSource;
 
+use crate::cancel::{self, Cancelled};
 use crate::diag::{Diagnostic, Severity};
 use crate::geom::{self, BBox, Point};
 use crate::model::*;
@@ -293,7 +294,21 @@ impl Evaluator {
         self.plan_cache.clear();
     }
 
+    /// Evaluate outside a cancellable computation (tests, tools): never cancelled.
     pub fn evaluate(&mut self, profile: &Profile, sources: &Sources) -> Evaluation {
+        self.try_evaluate(profile, sources)
+            .expect("nothing is cancelled outside a cancellable computation")
+    }
+
+    /// Evaluate, stopping early if the host cancels ([`crate::cancel`]). Results computed
+    /// before the stop stay cached; a partial one is never cached.
+    pub fn try_evaluate(
+        &mut self,
+        profile: &Profile,
+        sources: &Sources,
+    ) -> Result<Evaluation, Cancelled> {
+        // Cancelled while still queued: do nothing, even if everything is cached.
+        cancel::check()?;
         let mut ev = Evaluation {
             diagnostics: profile::validate(profile),
             ..Default::default()
@@ -336,6 +351,13 @@ impl Evaluator {
                     .with_context(id.to_string()),
             );
         }
+        let passes = profile
+            .working_layers
+            .iter()
+            .filter(|l| l.enabled && !l.reference_only)
+            .map(|l| l.passes.iter().filter(|p| p.enabled).count())
+            .sum::<usize>();
+        cancel::steps((order.len() + passes + profile.output_groups.len()) as u32);
 
         for id in &order {
             let layer = profile.layer(id).expect("ordered layer exists");
@@ -352,10 +374,14 @@ impl Evaluator {
                         cached: true,
                     },
                 );
+                cancel::next_step();
                 continue;
             }
+            cancel::check()?;
             let (geometry, diagnostics) =
                 compute_layer(layer, profile, sources, &bindings, &ev.layers);
+            cancel::check()?;
+            cancel::next_step();
             self.layer_cache
                 .insert(id.clone(), (fp, geometry.clone(), diagnostics.clone()));
             ev.layers.insert(
@@ -388,7 +414,9 @@ impl Evaluator {
                         (paths.clone(), diags.clone(), prec.clone(), true)
                     }
                     _ => {
+                        cancel::check()?;
                         let out = patterns::generate(&pass.pattern, &lr.geometry);
+                        cancel::check()?;
                         self.pass_cache.insert(
                             pass.id.clone(),
                             (
@@ -401,6 +429,7 @@ impl Evaluator {
                         (out.paths, out.diagnostics, out.precedence, false)
                     }
                 };
+                cancel::next_step();
                 ev.passes.push((
                     pass.id.clone(),
                     PassResult {
@@ -416,13 +445,13 @@ impl Evaluator {
         }
         ev.bindings = bindings;
         ev.unbound_layers = unbound;
-        self.plan_groups(profile, &mut ev);
-        ev
+        self.plan_groups(profile, &mut ev)?;
+        Ok(ev)
     }
 
     /// Plan the path order of every output group (spec §7), cached per group on the
     /// geometry of its passes, the settings and the protected regions.
-    fn plan_groups(&mut self, profile: &Profile, ev: &mut Evaluation) {
+    fn plan_groups(&mut self, profile: &Profile, ev: &mut Evaluation) -> Result<(), Cancelled> {
         let settings = &profile.optimizer;
         // Protected region: union of the configured layers' regions, with a fingerprint.
         let mut protected: Option<Region> = None;
@@ -466,14 +495,18 @@ impl Evaluator {
             let plan = match self.plan_cache.get(&group.id) {
                 Some((cfp, plan)) if *cfp == fp => plan.clone(),
                 _ => {
+                    cancel::check()?;
                     let plan = order::plan(&passes, mode, settings, protected.as_ref());
+                    cancel::check()?;
                     self.plan_cache.insert(group.id.clone(), (fp, plan.clone()));
                     plan
                 }
             };
+            cancel::next_step();
             plans.push((group.id.clone(), plan));
         }
         ev.groups = plans;
+        Ok(())
     }
 
     fn layer_fingerprint(

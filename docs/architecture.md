@@ -80,9 +80,9 @@ failures. The rayon pool is started by the host (`initThreadPool`) once per work
 |---|---|
 | `src/worker/protocol.ts` | Message kinds and result types; `transferables()` lists buffers to move. |
 | `src/worker/geometry.worker.ts` | Instantiates the wasm, starts the pool, dispatches requests. |
-| `src/worker/client.ts` | Promise façade with request ids; stale responses are dropped; `latestOnly` for previews. |
+| `src/worker/client.ts` | Promise façade with request ids; stale responses are dropped; `latestOnly` for previews. Holds a view of the worker's cancellation and progress block (below). |
 | `src/core/types.ts` | TypeScript mirror of the serde types. |
-| `src/state/project.svelte.ts` | `ProjectStore`: UI state, editable profile, debounced evaluation that only accepts the newest result, profile persistence, export. |
+| `src/state/project.svelte.ts` | `ProjectStore`: UI state, editable profile, debounced evaluation with at most one run in flight (a newer edit cancels it), cancel, profile persistence, export. |
 | `src/state/profileStore.ts` | IndexedDB for named profiles and the last-used profile; no drawing bytes. |
 | `src/ui/*.svelte` | Panels from the spec: sources, layers, properties, output groups, profiles bar, export, diagnostics, canvas preview. |
 | `sw/coi-serviceworker.js` | Vendored coi-serviceworker, extended to precache the bundle for offline use; emitted by the Vite build with the asset manifest. The page half reloads once the registration is active. |
@@ -92,7 +92,23 @@ failures. The rayon pool is started by the host (`initThreadPool`) once per work
 
 1. A panel mutates `store.profile` through `store.update(...)`; the store marks it dirty
    and debounces.
-2. `evaluate()` posts the whole profile snapshot, then an `evaluate` request. The reply
-   carries an `EvaluationSummary`; a reply for a superseded request is ignored.
+2. `evaluate()` posts the whole profile snapshot, then an `evaluate` request carrying a
+   fresh epoch. The reply carries an `EvaluationSummary`. If another edit arrives while it
+   runs, the store cancels that epoch and evaluates the newest profile once the worker has
+   stopped; a superseded reply is never shown.
 3. The preview re-fetches only the buffers for visible items at the new revision.
+
+### Cancellation and progress
+
+The worker is busy inside a synchronous wasm call while it imports or evaluates, so it
+cannot receive a message. Instead `lvp_core::cancel` keeps a four-word block
+(`[cancel, running, done, total]`) in the module's shared memory; the worker hands its
+address to the client (`control` request), which maps it onto the same
+`SharedArrayBuffer`. Each cancellable request (`evaluate`, `addSource`, `replaceSource`)
+runs under an epoch; writing that epoch to `cancel` stops it, queued or running. The core
+checks between layers, passes and groups, between rings of a fill, inside booleans, in the
+path optimizer's sweeps and in the readers' work budget; a stopped run caches nothing
+partial and leaves the previous evaluation (and the profile it was made from) in place for
+previews and exports. `done` and `total` count thousandths of a step and drive the
+progress bar next to the Cancel button.
 4. Export asks the worker for PDF bytes; the browser downloads them. Nothing is uploaded.

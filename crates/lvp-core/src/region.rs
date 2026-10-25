@@ -555,6 +555,10 @@ fn resolve(
     // 1. Intersections -> split points per loop, including where a loop crosses itself.
     let mut splits: Vec<Vec<(usize, Vector2<f64>)>> = vec![Vec::new(); loops.len()];
     for i in 0..loops.len() {
+        // A cancelled computation discards its result (see `crate::cancel`).
+        if i % 256 == 0 && crate::cancel::cancelled() {
+            return Err(Vec::new());
+        }
         let own = &mut splits[i];
         loops[i]
             .pline
@@ -617,7 +621,10 @@ fn resolve(
         )
     };
     let mut kept: Vec<Pline> = Vec::new();
-    for mut s in slices {
+    for (k, mut s) in slices.into_iter().enumerate() {
+        if k % 1024 == 0 && crate::cancel::cancelled() {
+            return Err(Vec::new());
+        }
         let Some((mid, n)) = midpoint_and_left_normal(&s) else {
             continue;
         };

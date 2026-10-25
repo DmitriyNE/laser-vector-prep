@@ -11,7 +11,7 @@ import type {
   SourceSummary,
   Heatmap,
 } from "../core/types.js";
-import { GeometryWorker, WorkerCrashed } from "../worker/client.js";
+import { Cancelled, GeometryWorker, WorkerCrashed, type Progress } from "../worker/client.js";
 import { download, shortId } from "../util/download.js";
 import * as db from "./profileStore.js";
 import type { SavedProfile } from "./profileStore.js";
@@ -33,6 +33,8 @@ export class ProjectStore {
   coreVersion = $state("…");
   threads: number | null = $state(null);
   error: string | null = $state(null);
+  /** Neutral status, such as a cancelled computation. */
+  notice: string | null = $state(null);
 
   sources: SourceSummary[] = $state([]);
   presets: Profile[] = $state([]);
@@ -57,6 +59,7 @@ export class ProjectStore {
 
   evaluation: EvaluationSummary | null = $state(null);
   evaluating = $state(false);
+  importing = $state(false);
   /** Bumps whenever preview geometry may have changed. */
   previewRevision = $state(0);
 
@@ -69,7 +72,13 @@ export class ProjectStore {
   showSources = $state(true);
   showLayers = $state(true);
 
-  #evalToken = 0;
+  /** The evaluation loop while it runs; callers awaiting `evaluate()` share it. */
+  #evalLoop: Promise<void> | null = null;
+  /** Another evaluation is wanted after the one in flight (which is being cancelled). */
+  #evalAgain = false;
+  /** Epochs of the evaluation and import in flight (0: none), for `cancel()`. */
+  #evalEpoch = 0;
+  #importEpoch = 0;
   #debounce: ReturnType<typeof setTimeout> | undefined;
   /** Imported files, kept (in memory only) so sources can be re-imported after a crash. */
   #files: File[] = [];
@@ -103,15 +112,28 @@ export class ProjectStore {
   async addFiles(files: Iterable<File>) {
     // Snapshot first: a FileList from an <input> is live and empties when the input is
     // reset, which happened between the awaits below and dropped every file but the first.
-    for (const f of Array.from(files)) {
-      try {
-        const bytes = new Uint8Array(await f.arrayBuffer());
-        const summary = await this.worker.call({ kind: "addSource", name: f.name, bytes });
-        this.sources = [...this.sources, summary];
-        this.#files.push(f);
-      } catch (e) {
-        this.error = `${f.name}: ${e instanceof Error ? e.message : String(e)}`;
+    this.importing = true;
+    this.notice = null;
+    try {
+      for (const f of Array.from(files)) {
+        const epoch = this.worker.nextEpoch();
+        this.#importEpoch = epoch;
+        try {
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          const summary = await this.worker.call({ kind: "addSource", name: f.name, bytes, epoch });
+          this.sources = [...this.sources, summary];
+          this.#files.push(f);
+        } catch (e) {
+          if (e instanceof Cancelled) {
+            this.notice = `Import of ${f.name} cancelled.`;
+            break;
+          }
+          this.error = `${f.name}: ${e instanceof Error ? e.message : String(e)}`;
+        }
       }
+    } finally {
+      this.#importEpoch = 0;
+      this.importing = false;
     }
     await this.evaluate();
   }
@@ -134,7 +156,8 @@ export class ProjectStore {
     for (const f of files) {
       try {
         const bytes = new Uint8Array(await f.arrayBuffer());
-        this.sources = [...this.sources, await this.worker.call({ kind: "addSource", name: f.name, bytes })];
+        const epoch = this.worker.nextEpoch();
+        this.sources = [...this.sources, await this.worker.call({ kind: "addSource", name: f.name, bytes, epoch })];
         this.#files.push(f);
       } catch {
         // keep going; the diagnostics panel shows what is missing
@@ -157,23 +180,65 @@ export class ProjectStore {
     this.#debounce = setTimeout(() => void this.evaluate(), 150);
   }
 
-  async evaluate() {
-    const token = ++this.#evalToken;
+  /**
+   * Evaluate the current profile. At most one evaluation is in flight: a call while one runs
+   * cancels it and evaluates again once it has stopped, so an edit never waits for a stale
+   * result and a superseded result is never shown. Resolves when the newest profile has
+   * been evaluated (or the run was cancelled).
+   */
+  evaluate(): Promise<void> {
+    if (this.#evalLoop) {
+      this.#evalAgain = true;
+      if (this.#evalEpoch) this.worker.cancel(this.#evalEpoch);
+      return this.#evalLoop;
+    }
+    this.#evalLoop = this.#evaluations().finally(() => {
+      this.#evalLoop = null;
+    });
+    return this.#evalLoop;
+  }
+
+  async #evaluations() {
     this.evaluating = true;
     try {
-      await this.worker.call({ kind: "setProfile", profile: $state.snapshot(this.profile) });
-      const ev = await this.worker.call({ kind: "evaluate" });
-      if (token !== this.#evalToken) return; // superseded
-      this.evaluation = ev;
-      this.previewRevision++;
-      this.error = null;
-    } catch (e) {
-      if (token === this.#evalToken && !(e instanceof WorkerCrashed)) {
-        this.error = e instanceof Error ? e.message : String(e);
-      }
+      do {
+        this.#evalAgain = false;
+        const epoch = this.worker.nextEpoch();
+        this.#evalEpoch = epoch;
+        try {
+          await this.worker.call({ kind: "setProfile", profile: $state.snapshot(this.profile) });
+          const ev = await this.worker.call({ kind: "evaluate", epoch });
+          if (this.#evalAgain) continue; // superseded while it ran
+          this.evaluation = ev;
+          this.previewRevision++;
+          this.error = null;
+          this.notice = null;
+        } catch (e) {
+          if (e instanceof Cancelled) {
+            if (!this.#evalAgain) this.notice = "Evaluation cancelled; the preview shows the previous result.";
+          } else if (!this.#evalAgain && !(e instanceof WorkerCrashed)) {
+            this.error = e instanceof Error ? e.message : String(e);
+          }
+        } finally {
+          this.#evalEpoch = 0;
+        }
+      } while (this.#evalAgain);
     } finally {
-      if (token === this.#evalToken) this.evaluating = false;
+      this.evaluating = false;
     }
+  }
+
+  /** Stop the running import or evaluation; the previous result stays. */
+  cancel() {
+    this.#evalAgain = false;
+    clearTimeout(this.#debounce);
+    if (this.#evalEpoch) this.worker.cancel(this.#evalEpoch);
+    if (this.#importEpoch) this.worker.cancel(this.#importEpoch);
+  }
+
+  /** Progress of the worker's running computation (polled by the UI while busy). */
+  progress(): Progress | null {
+    return this.worker.progress();
   }
 
   preview(kind: "pass" | "layer", id: string): Promise<Preview | null> {

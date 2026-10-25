@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Heatmap, Preview } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
+  import BusyIndicator from "./BusyIndicator.svelte";
 
   let { store }: { store: ProjectStore } = $props();
 
@@ -351,8 +352,8 @@
     <span class="coords">
       {#if cursorMm}{cursorMm[0].toFixed(3)}, {cursorMm[1].toFixed(3)} mm{/if}
       · {ppm.toFixed(1)} px/mm
-      {#if store.evaluating}· evaluating…{/if}
     </span>
+    <BusyIndicator {store} />
   </div>
 </div>
 

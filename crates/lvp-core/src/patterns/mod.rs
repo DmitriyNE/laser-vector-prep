@@ -260,6 +260,9 @@ fn fill_island(
     };
     let mut depth = first;
     loop {
+        if crate::cancel::cancelled() {
+            return fill;
+        }
         let ring = region.offset(-depth);
         if ring.is_empty() || fill.rings >= MAX_RINGS {
             break;
@@ -360,8 +363,14 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
     // Islands are filled independently (in parallel where a thread pool exists): every
     // offset then only sees one island's loops, so the work grows linearly with their
     // number instead of offsetting the whole layer at every depth.
-    let fills = crate::par::map(region.islands(), |island| {
-        fill_island(&island, pitch_mm, first, end_spacing, simplify, gap_fill)
+    let islands = region.islands();
+    let count = islands.len().max(1) as f64;
+    let filled = std::sync::atomic::AtomicUsize::new(0);
+    let fills = crate::par::map(islands, |island| {
+        let fill = fill_island(&island, pitch_mm, first, end_spacing, simplify, gap_fill);
+        let n = filled.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        crate::cancel::step(n as f64 / count);
+        fill
     });
     let mut skipped = 0;
     for f in fills {

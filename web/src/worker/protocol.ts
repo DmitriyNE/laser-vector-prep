@@ -7,15 +7,16 @@ export type Payload =
   | { kind: "version" }
   | { kind: "threads" }
   | { kind: "presets" }
-  | { kind: "addSource"; name: string; bytes: Uint8Array }
-  | { kind: "replaceSource"; index: number; bytes: Uint8Array }
+  | { kind: "control" }
+  | { kind: "addSource"; name: string; bytes: Uint8Array; epoch: number }
+  | { kind: "replaceSource"; index: number; bytes: Uint8Array; epoch: number }
   | { kind: "acceptedExtensions" }
   | { kind: "removeSource"; index: number }
   | { kind: "sources" }
   | { kind: "setProfile"; profile: Profile }
   | { kind: "getProfile" }
   | { kind: "validateProfile"; profile: Profile }
-  | { kind: "evaluate" }
+  | { kind: "evaluate"; epoch: number }
   | { kind: "previewPass"; id: string }
   | { kind: "previewLayer"; id: string }
   | { kind: "previewSource"; file: number; layer: string }
@@ -28,8 +29,19 @@ export type Payload =
 
 export type Kind = Payload["kind"];
 
+/** The worker's cancellation and progress block (see `lvp_core::cancel`). */
+export interface ControlBlock {
+  buffer: SharedArrayBuffer;
+  offset: number;
+}
+
+/** Error message of a computation the page cancelled. */
+export const CANCELLED = ["cancelled", "import cancelled"];
+
 export type ResultOf<K extends Kind> = K extends "version"
   ? string
+  : K extends "control"
+    ? ControlBlock
   : K extends "threads"
     ? number
     : K extends "presets"

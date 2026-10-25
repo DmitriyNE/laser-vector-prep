@@ -32,6 +32,9 @@ impl Default for ReadOptions {
     }
 }
 
+/// Message of an import stopped by the host.
+pub const CANCELLED: &str = "import cancelled";
+
 /// Default work limit of one import. A unit is roughly 24 bytes of geometry (one vertex);
 /// ten million is about 240 MB, a quarter of the 1 GiB the browser's geometry worker can
 /// address, leaving room for the evaluation that copies it.
@@ -40,28 +43,46 @@ pub const MAX_IMPORT_WORK: u64 = 10_000_000;
 /// Work counter for one import. Readers charge every vertex they emit (including each copy
 /// made by block references, arrays, step-and-repeat and form XObjects), a primitive's
 /// allocation overhead, and each instance or operator they interpret, so a small file that
-/// expands exponentially is refused instead of exhausting memory or time.
+/// expands exponentially is refused instead of exhausting memory or time. It is also where
+/// an import notices that the host cancelled it ([`crate::cancel`]).
 #[derive(Debug)]
 pub struct Budget {
     left: u64,
     exhausted: bool,
+    cancelled: bool,
+    since_check: u64,
 }
 
 impl Budget {
     /// Allocation overhead of one primitive, in units.
     pub const PRIMITIVE: u64 = 6;
 
+    /// Units between checks for cancellation.
+    const CHECK_EVERY: u64 = 1 << 16;
+
     pub fn new(limit: u64) -> Self {
         Self {
             left: limit,
             exhausted: false,
+            cancelled: false,
+            since_check: 0,
         }
     }
 
-    /// Charge `n` units. Returns false once the budget is spent, and keeps returning false.
+    /// Charge `n` units. Returns false once the budget is spent (or the import was
+    /// cancelled), and keeps returning false.
     pub fn spend(&mut self, n: u64) -> bool {
         if self.exhausted {
             return false;
+        }
+        self.since_check += n;
+        if self.since_check >= Self::CHECK_EVERY {
+            self.since_check = 0;
+            if crate::cancel::cancelled() {
+                self.cancelled = true;
+                self.exhausted = true;
+                return false;
+            }
         }
         match self.left.checked_sub(n) {
             Some(left) => {
@@ -91,8 +112,14 @@ impl Budget {
         self.exhausted
     }
 
-    /// The import error for a file that ran out of budget.
+    /// The import error for a file that ran out of budget (or whose import was cancelled).
     pub fn error(&self, format: SourceFormat) -> ReadError {
+        if self.cancelled {
+            return ReadError {
+                format: Some(format),
+                message: CANCELLED.into(),
+            };
+        }
         ReadError {
             format: Some(format),
             message: "the file expands to more geometry than the browser can hold (nested blocks, arrays, repeats or forms multiply it past about 10 million vertices); import refused".into(),
@@ -283,6 +310,13 @@ pub fn read_as(
     opts: &ReadOptions,
 ) -> Result<SourceDocument, ReadError> {
     let mut doc = read_unchecked(format, name, bytes, opts)?;
+    // Geometry steps inside a reader stop early when cancelled; never keep what they left.
+    if crate::cancel::cancelled() {
+        return Err(ReadError {
+            format: Some(format),
+            message: CANCELLED.into(),
+        });
+    }
     drop_out_of_range(&mut doc);
     Ok(doc)
 }
