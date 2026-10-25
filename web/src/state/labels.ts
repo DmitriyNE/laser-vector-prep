@@ -1,6 +1,6 @@
 // Short labels for profile objects, shared by the layer list and the graph view.
 
-import type { Pass, WorkingLayer } from "../core/types.js";
+import type { MatchRule, Pass, WorkingLayer } from "../core/types.js";
 
 export function patternLabel(p: Pass): string {
   const pt = p.pattern;
@@ -43,3 +43,16 @@ export function opLabel(l: WorkingLayer): string {
 }
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+export function ruleText(r: MatchRule): string {
+  switch (r.kind) {
+    case "layerName":
+      return `name "${r.name}"${r.format ? ` (${r.format})` : ""}`;
+    case "fileLayer":
+      return `${r.file} : ${r.name}`;
+    case "fileName":
+      return `file ${r.pattern}${r.format ? ` (${r.format})` : ""}`;
+    case "function":
+      return `function ${r.pattern}`;
+  }
+}

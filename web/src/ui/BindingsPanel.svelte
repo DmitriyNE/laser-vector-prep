@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { MatchRule } from "../core/types.js";
+  import { ruleText } from "../state/labels.js";
   import type { ProjectStore } from "../state/project.svelte.js";
 
   let { store }: { store: ProjectStore } = $props();
@@ -18,18 +18,6 @@
     if (file && layer) store.mapToBinding(bindingId, file, layer);
   }
 
-  function ruleText(r: MatchRule): string {
-    switch (r.kind) {
-      case "layerName":
-        return `name "${r.name}"${r.format ? ` (${r.format})` : ""}`;
-      case "fileLayer":
-        return `${r.file} : ${r.name}`;
-      case "fileName":
-        return `file ${r.pattern}${r.format ? ` (${r.format})` : ""}`;
-      case "function":
-        return `function ${r.pattern}`;
-    }
-  }
 </script>
 
 <section class="panel">

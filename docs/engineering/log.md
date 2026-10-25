@@ -29,6 +29,17 @@ groups panel refuses to delete a group a pass marks in. Every profile edit is un
 in one field extends the step. The first version merged any edits less than half a second
 apart, which the browser test caught by undoing four quick graph edits in one step.
 
+First use by the owner: connecting by dragging was not discoverable (the handles were 3 px
+at the fitted zoom) and no edge could visibly be removed (only a selected operand edge
+with Delete). Handles are now larger with a ring while hovered, connections snap within
+36 px, the toolbar says how to connect and remove, and removable edges carry a × in their
+middle: an operand input, and a mapping, whose × removes every rule of the slot that
+matches the layer (patterns too, which needs the core's matching in the page; the toolbar
+names the rules removed). Clicking any other edge says how to change it. A redraw after
+an edit or evaluation used to re-select the store's selection on the canvas, so Delete on
+a freshly selected edge also deleted the layer selected before; the canvas now keeps its
+own selection until the selection changes elsewhere.
+
 ## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
 
 Layers, passes, audits and plans now run concurrently and the optimiser's scans use the

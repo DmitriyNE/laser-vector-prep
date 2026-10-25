@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvaluationSummary, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
-import { buildGraph, connectionEdit, dependencies, edgeRemoval, layout, nodeId, nodeRemoval, rowHandle, structureKey } from "./graph.js";
+import { buildGraph, connectionEdit, dependencies, edgeHint, edgeRemoval, globMatch, layout, nodeId, nodeRemoval, rowHandle, structureKey } from "./graph.js";
 
 function layer(id: string, extra: Partial<WorkingLayer>): WorkingLayer {
   return {
@@ -196,14 +196,41 @@ describe("editing on the graph", () => {
     const { nodes, edges } = buildGraph(profile, sources, evaluation);
     const data = (id: string) => nodes.find((n) => n.id === id)!.data;
     const b = edges.find((e) => e.kind === "b")!;
-    expect(edgeRemoval(b)).toEqual({ kind: "operand", from: { layer: "wl-cu" }, layer: "wl-neg", group: "b" });
-    expect(edgeRemoval(edges.find((e) => e.kind === "pass")!)).toBeNull();
-    expect(edgeRemoval(edges.find((e) => e.kind === "map")!)).toBeNull();
+    expect(edgeRemoval(b, profile, sources)).toEqual({ kind: "operand", from: { layer: "wl-cu" }, layer: "wl-neg", group: "b" });
+    expect(edgeRemoval(edges.find((e) => e.kind === "pass")!, profile, sources)).toBeNull();
+    expect(edgeHint(edges.find((e) => e.kind === "group")!)).toMatch(/drag from the pass/);
+    // The copper slot has no rules (it was matched in an older evaluation): nothing to remove.
+    expect(edgeRemoval(edges.find((e) => e.kind === "map")!, profile, sources)).toBeNull();
     expect(nodeRemoval(profile, data("slot:src-cu"))).toBeNull();
     expect(nodeRemoval(profile, data("slot:src-spare"))).toEqual({ kind: "slot", id: "src-spare" });
     expect(nodeRemoval(profile, data("group:g-a"))).toBeNull();
     expect(nodeRemoval(profile, data("group:g-unused"))).toEqual({ kind: "group", id: "g-unused" });
     expect(nodeRemoval(profile, data("layer:wl-box"))).toEqual({ kind: "layer", id: "wl-box" });
     expect(nodeRemoval(profile, data("file:0"))).toEqual({ kind: "file", index: 0 });
+  });
+});
+
+describe("unmapping on the graph", () => {
+  it("matches globs as the core does", () => {
+    expect(globMatch("*-F_Cu.gbr", "board-f_cu.GBR")).toBe(true);
+    expect(globMatch("copper,*,top", "Copper,L1,Top")).toBe(true);
+    expect(globMatch("b?ard*", "board.dxf")).toBe(true);
+    expect(globMatch("*.gko", "board.gm1")).toBe(false);
+    expect(globMatch("", "")).toBe(true);
+    expect(globMatch("a*", "")).toBe(false);
+  });
+
+  it("removes every rule of the slot that matches the layer", () => {
+    const mapped: Profile = structuredClone(profile);
+    mapped.sourceBindings[0]!.rules = [
+      { kind: "fileName", format: null, pattern: "*.dxf" },
+      { kind: "layerName", format: "dxf", name: "COPPER" },
+      { kind: "fileLayer", file: "board.dxf", name: "COPPER" },
+      { kind: "layerName", format: "gerber", name: "COPPER" },
+    ];
+    const { edges } = buildGraph(mapped, sources, evaluation);
+    const map = edges.find((e) => e.kind === "map")!;
+    // The pattern matches the file; the gerber-only name does not match a DXF.
+    expect(edgeRemoval(map, mapped, sources)).toEqual({ kind: "unmap", slot: "src-cu", rules: [0, 1, 2] });
   });
 });

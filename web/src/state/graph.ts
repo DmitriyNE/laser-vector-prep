@@ -3,7 +3,7 @@
 // sources and the latest evaluation (no Svelte, no DOM), laid out by dagre.
 
 import { Graph, layout as dagreLayout } from "@dagrejs/dagre";
-import type { EvaluationSummary, GeometryKind, Operand, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
+import type { EvaluationSummary, GeometryKind, MatchRule, Operand, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
 import { opLabel, patternLabel, plural } from "./labels.js";
 
 /** Worst diagnostic of a node; `idle` when it has no result (not evaluated, or blocked). */
@@ -415,15 +415,100 @@ export function connectionEdit(
 /** Something deleted on the graph. */
 export type Removal =
   | { kind: "operand"; from: Operand; layer: string; group: "a" | "b" }
+  | { kind: "unmap"; slot: string; rules: number[] }
   | { kind: "layer" | "pass" | "slot" | "group"; id: string }
   | { kind: "file"; index: number };
 
-/** What deleting an edge removes: an operand edge removes the input; nothing else can go. */
-export function edgeRemoval(e: GraphEdge): Removal | null {
-  if (e.kind !== "a" && e.kind !== "b") return null;
-  const from = operandOf(e.source);
-  const layer = parseNodeId(e.target);
-  return from && layer ? { kind: "operand", from, layer: layer.key, group: e.kind } : null;
+/** The imported layer a mapping edge starts at. */
+function mappedLayer(e: GraphEdge, sources: SourceSummary[]) {
+  const file = sources.find((s) => nodeId.file(s.index) === e.source);
+  const name = e.sourceHandle.startsWith("row:") ? e.sourceHandle.slice(4) : null;
+  return file && name ? { file, layer: file.layers.find((l) => l.name === name), name } : null;
+}
+
+/** `pattern` matches `text`: `*` any run, `?` one character, case-insensitive (the core's
+ * `source::glob_match`). */
+export function globMatch(pattern: string, text: string): boolean {
+  const p = [...pattern.toLowerCase()];
+  const t = [...text.toLowerCase()];
+  let [pi, ti] = [0, 0];
+  let star: [number, number] | null = null;
+  while (ti < t.length) {
+    if (pi < p.length && (p[pi] === "?" || p[pi] === t[ti])) {
+      pi++;
+      ti++;
+    } else if (pi < p.length && p[pi] === "*") {
+      star = [pi, ti];
+      pi++;
+    } else if (star) {
+      pi = star[0] + 1;
+      ti = star[1] + 1;
+      star = [star[0], star[1] + 1];
+    } else {
+      return false;
+    }
+  }
+  while (pi < p.length && p[pi] === "*") pi++;
+  return pi === p.length;
+}
+
+/** Whether a slot's rule matches an imported layer, as the core decides it
+ * (`eval::resolve_bindings`). */
+export function ruleMatches(r: MatchRule, file: SourceSummary, layer: string): boolean {
+  const l = file.layers.find((x) => x.name === layer);
+  if (!l) return false;
+  const format = (f: string | null | undefined) => !f || f === file.format;
+  switch (r.kind) {
+    case "layerName":
+      return format(r.format) && r.name === layer;
+    case "fileLayer":
+      return r.file === file.name && r.name === layer;
+    case "fileName":
+      return format(r.format) && l.closedPaths + l.openPaths + l.hatches > 0 && globMatch(r.pattern, file.name);
+    case "function":
+      return l.function !== null && globMatch(r.pattern, l.function);
+  }
+}
+
+/** Rules of a slot that match an imported layer: without them the slot cannot take it. */
+export function rulesMatching(profile: Profile, slot: string, file: SourceSummary, layer: string): number[] {
+  const rules = profile.sourceBindings.find((b) => b.id === slot)?.rules ?? [];
+  return rules.flatMap((r, i) => (ruleMatches(r, file, layer) ? [i] : []));
+}
+
+/** What removing an edge removes: an operand edge the input, a mapping every rule of the
+ * slot that matches the layer (patterns too, so the slot really lets go of it). Other edges
+ * cannot go; `edgeHint` says how to change them. */
+export function edgeRemoval(e: GraphEdge, profile: Profile, sources: SourceSummary[]): Removal | null {
+  if (e.kind === "a" || e.kind === "b") {
+    const from = operandOf(e.source);
+    const layer = parseNodeId(e.target);
+    return from && layer ? { kind: "operand", from, layer: layer.key, group: e.kind } : null;
+  }
+  if (e.kind === "map") {
+    const m = mappedLayer(e, sources);
+    const slot = parseNodeId(e.target)?.key;
+    if (!m || !slot) return null;
+    const rules = rulesMatching(profile, slot, m.file, m.name);
+    return rules.length ? { kind: "unmap", slot, rules } : null;
+  }
+  return null;
+}
+
+/** How an edge can be changed, for an edge that cannot simply be removed. */
+export function edgeHint(e: GraphEdge): string {
+  switch (e.kind) {
+    case "map":
+      return "drag another imported layer onto the slot to map that one instead";
+    case "candidate":
+      return "one of several layers this slot matches: drag the one you want onto the slot";
+    case "pass":
+      return "a pass belongs to its layer: drag from another layer to move it, or delete the pass";
+    case "group":
+      return "a pass always marks in one group: drag from the pass to another group";
+    default:
+      return "click × to remove this input";
+  }
 }
 
 /** What deleting a node removes. Slots and groups still in use stay (their users would be

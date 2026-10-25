@@ -714,6 +714,12 @@ export class ProjectStore {
         });
         break;
       }
+      case "unmap":
+        this.update((p) => {
+          const b = p.sourceBindings.find((x) => x.id === r.slot);
+          if (b) b.rules = b.rules.filter((_, i) => !r.rules.includes(i));
+        });
+        break;
       case "layer":
         this.deleteLayer(r.id);
         break;
