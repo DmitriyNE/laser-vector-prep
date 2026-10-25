@@ -97,7 +97,7 @@ first. Uploads stopped after exactly 200 cache entries in the first minute of ea
 which matches a per-repository rate limit, so the second run rebuilt 172 derivations.
 Most of the closure comes from cache.nixos.org anyway; what costs time is the cargo build,
 which CI already caches in `target/`, and the site derivation, which changes with every
-commit.
+commit. The owner had it removed again; its cache entries expire unused.
 
 ## 2026-10-25 — M4: packaging and deployment
 

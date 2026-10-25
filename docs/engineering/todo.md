@@ -145,12 +145,12 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] CI on GitHub Actions and deployment to GitHub Pages (D27)
 - [x] Bundle size: decided to leave it (D29)
 - [x] Cache the Nix store in CI if fetching the dev shell becomes the slow step (33 s today);
-      Magic Nix Cache since D33, no measurable gain so far (see log)
+      tried with Magic Nix Cache (D33), no measurable gain, removed
 - [ ] UI polish pass (spec M4): postponed by the owner (D33)
 
 ## After M4 (D33)
 
-- [x] Nix store cache in CI (Magic Nix Cache); no measurable speed-up yet (see log)
+- [x] Nix store cache in CI (Magic Nix Cache); no measurable speed-up, removed (see log)
 - [x] Booleans resolve near-coincident edges and arcs; no saved fuzz input or randomized
       near-coincident case leaves a chain open (D34; vertex-to-edge snapping was dropped)
 - [x] Parallel evaluation: independent layers, passes and groups; coverage raster;

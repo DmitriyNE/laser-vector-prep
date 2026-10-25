@@ -446,6 +446,7 @@ Owner's follow-ups to M4:
 
 - **CI caches the Nix store** with Magic Nix Cache (DeterminateSystems), a binary cache on
   the repository's GitHub Actions cache: free, no account or secrets, per store path.
+  (Removed again by the owner once measured: no gain, see the log.)
 - **Booleans must resolve near-coincident boundaries** (the case D30 only reports): snap
   vertices onto nearby edges of other loops and make nearly identical segments identical,
   so such boundaries become exact overlaps. (Done differently: D34.)
