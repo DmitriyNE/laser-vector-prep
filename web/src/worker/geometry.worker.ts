@@ -6,6 +6,7 @@ import type { Payload, Request, Response } from "./protocol.js";
 const ready = (async () => {
   await init();
   await wasm.initThreadPool(navigator.hardwareConcurrency);
+  wasm.enable_parallelism();
 })();
 
 function preview(p: wasm.Preview | undefined): { result: Preview | null; transfer: Transferable[] } {

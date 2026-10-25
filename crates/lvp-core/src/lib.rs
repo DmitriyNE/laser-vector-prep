@@ -18,6 +18,7 @@ pub mod gerber;
 pub mod ipc;
 pub mod model;
 pub mod order;
+pub mod par;
 pub mod patterns;
 pub mod pdf;
 pub mod pline;

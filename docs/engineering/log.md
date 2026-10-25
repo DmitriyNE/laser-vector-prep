@@ -3,6 +3,18 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: large inputs
+
+Contour fill offset the whole layer at every ring depth, so every island was processed
+until the deepest one collapsed and the kernel related all loops to each other. Islands
+are now filled one by one, in parallel through `par::map`, which uses rayon natively and
+in the browser once the worker has started the pool (`enable_parallelism`); the Node-side
+wasm tests stay sequential. Output is identical either way (tested), only the
+as-generated path order is now island by island. Measured on panels of the Gerber board
+at 20 µm (native, 10 threads): 4×8 boards 1.1 → 0.5 s, 8×8 boards 0.8 s; in Chrome the
+8×8 panel evaluates in 2.6 s with minimum jump and 4.6 s bleed-aware. The kickoff figure
+of 4–6 s for the 4×8 panel was measured while a wasm build ran alongside.
+
 ## 2026-10-25 — M4: fuzzing
 
 cargo-fuzz targets for the six readers and the import → evaluate → export pipeline, with

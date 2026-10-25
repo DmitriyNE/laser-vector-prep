@@ -236,6 +236,71 @@ fn passthrough(geometry: &Geometry, simplify_mm: Option<f64>, reverse: bool) -> 
     out
 }
 
+struct IslandFill {
+    paths: Vec<Pline>,
+    rings: usize,
+    gap_fills: usize,
+    skipped: usize,
+}
+
+/// Rings of one island from depth `first` inward, then the gap-fill centrelines.
+fn fill_island(
+    region: &Region,
+    pitch_mm: f64,
+    first: f64,
+    end_spacing: f64,
+    simplify: Option<f64>,
+    gap_fill: bool,
+) -> IslandFill {
+    let mut fill = IslandFill {
+        paths: Vec::new(),
+        rings: 0,
+        gap_fills: 0,
+        skipped: 0,
+    };
+    let mut depth = first;
+    loop {
+        let ring = region.offset(-depth);
+        if ring.is_empty() || fill.rings >= MAX_RINGS {
+            break;
+        }
+        fill.rings += ring.loops.len();
+        match simplify {
+            Some(t) => fill
+                .paths
+                .extend(ring.loops.iter().map(|l| crate::pline::simplify(l, t))),
+            None => fill.paths.extend(ring.loops),
+        }
+        depth += pitch_mm;
+    }
+    if gap_fill {
+        // Rings sit at depths first, first + pitch, ...; each sweeps ±pitch/2. The cores they
+        // miss are the region deeper than the last ring plus the end spacing (pitch/2 by
+        // default), which an offset gives directly (and exactly, for offset-based rings)
+        // without stroking thousands of ring segments.
+        let covered_depth = if fill.rings == 0 {
+            (first - end_spacing).max(0.0)
+        } else {
+            depth - pitch_mm + end_spacing
+        };
+        let gaps = region.offset(-covered_depth);
+        if !gaps.is_empty() {
+            let (lines, skipped) = gapfill::centrelines(
+                &gaps,
+                &gapfill::GapFillOptions {
+                    assumed_width_mm: pitch_mm,
+                    flatten_tolerance_mm: (pitch_mm * 0.01).max(1e-5),
+                    min_length_mm: pitch_mm / 2.0,
+                },
+            );
+            fill.gap_fills = lines.len();
+            fill.paths.extend(lines);
+            fill.skipped = skipped;
+        }
+    }
+    fill
+}
+
 /// Contour fill parameters (see [`Pattern::ContourFill`]).
 #[derive(Clone, Copy, Debug)]
 pub struct ContourParams {
@@ -292,54 +357,24 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
         t.min(pitch_mm / 4.0)
     });
     let first = first_offset_mm.unwrap_or(pitch_mm / 2.0);
-    let mut depth = first;
-    let mut rings = 0usize;
-    loop {
-        let ring = region.offset(-depth);
-        if ring.is_empty() || rings >= MAX_RINGS {
-            break;
-        }
-        rings += ring.loops.len();
-        match simplify {
-            Some(t) => out
-                .paths
-                .extend(ring.loops.iter().map(|l| crate::pline::simplify(l, t))),
-            None => out.paths.extend(ring.loops),
-        }
-        depth += pitch_mm;
+    // Islands are filled independently (in parallel where a thread pool exists): every
+    // offset then only sees one island's loops, so the work grows linearly with their
+    // number instead of offsetting the whole layer at every depth.
+    let fills = crate::par::map(region.islands(), |island| {
+        fill_island(&island, pitch_mm, first, end_spacing, simplify, gap_fill)
+    });
+    let mut skipped = 0;
+    for f in fills {
+        out.paths.extend(f.paths);
+        out.stats.rings += f.rings;
+        out.stats.gap_fills += f.gap_fills;
+        skipped += f.skipped;
     }
-    out.stats.rings = rings;
-    if gap_fill {
-        // Rings sit at depths first, first + pitch, ...; each sweeps ±pitch/2. The cores they
-        // miss are the region deeper than the last ring plus the end spacing (pitch/2 by
-        // default), which an offset gives directly (and exactly, for offset-based rings)
-        // without stroking thousands of ring segments.
-        let covered_depth = if rings == 0 {
-            (first - end_spacing).max(0.0)
-        } else {
-            depth - pitch_mm + end_spacing
-        };
-        let gaps = region.offset(-covered_depth);
-        if !gaps.is_empty() {
-            let (lines, skipped) = gapfill::centrelines(
-                &gaps,
-                &gapfill::GapFillOptions {
-                    assumed_width_mm: pitch_mm,
-                    flatten_tolerance_mm: (pitch_mm * 0.01).max(1e-5),
-                    min_length_mm: pitch_mm / 2.0,
-                },
-            );
-            out.stats.gap_fills = lines.len();
-            out.paths.extend(lines);
-            if skipped > 0 {
-                out.diagnostics.push(Diagnostic::warning(
-                    "pattern.gap_fill_skipped",
-                    format!(
-                        "{skipped} uncovered sliver(s) were too thin or degenerate for a centreline"
-                    ),
-                ));
-            }
-        }
+    if skipped > 0 {
+        out.diagnostics.push(Diagnostic::warning(
+            "pattern.gap_fill_skipped",
+            format!("{skipped} uncovered sliver(s) were too thin or degenerate for a centreline"),
+        ));
     }
     out
 }
@@ -418,6 +453,51 @@ mod tests {
                 .iter()
                 .any(|a| (a + std::f64::consts::PI * 3.5 * 3.5).abs() < 1e-9)
         );
+    }
+
+    #[test]
+    fn islands_fill_identically_in_parallel_and_in_sequence() {
+        // A grid of islands with holes: the per-island parallel fill must give exactly the
+        // paths (and order) of the sequential one, as runs must be deterministic.
+        let loops = (0..4).flat_map(|i| {
+            (0..3).flat_map(move |j| {
+                let (x, y) = (i as f64 * 12.0, j as f64 * 12.0);
+                [
+                    rect(Point::new(x, y), Point::new(x + 10.0, y + 8.0)),
+                    circle(Point::new(x + 5.0, y + 4.0), 1.5),
+                ]
+            })
+        });
+        let region = Region::from_loops(loops, LoopRule::EvenOdd);
+        assert_eq!(region.islands().len(), 12);
+        let pattern = Pattern::ContourFill {
+            pitch_mm: 0.25,
+            first_offset_mm: None,
+            gap_fill: true,
+            end_spacing_mm: None,
+            simplify_mm: None,
+        };
+        let geometry = Geometry::Region(region);
+        let was = crate::par::enabled();
+        crate::par::enable(false);
+        let sequential = generate(&pattern, &geometry);
+        crate::par::enable(true);
+        let parallel = generate(&pattern, &geometry);
+        crate::par::enable(was);
+        let bits = |o: &PatternOutput| -> Vec<Vec<[u64; 3]>> {
+            o.paths
+                .iter()
+                .map(|p| {
+                    p.vertex_data
+                        .iter()
+                        .map(|v| [v.x.to_bits(), v.y.to_bits(), v.bulge.to_bits()])
+                        .collect()
+                })
+                .collect()
+        };
+        assert!(!sequential.paths.is_empty());
+        assert_eq!(bits(&sequential), bits(&parallel));
+        assert_eq!(sequential.stats.rings, parallel.stats.rings);
     }
 
     #[test]

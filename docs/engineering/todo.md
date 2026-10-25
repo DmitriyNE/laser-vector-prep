@@ -113,8 +113,11 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Expansion budget across readers (D31)
 - [ ] Booleans: near-coincident edges and arcs whose vertices do not line up can still
       leave a boundary chain open; reported as a warning (`Region::incomplete`), not fixed
-- [ ] Large inputs: a 4×8 panel of the board takes 4–6 s to evaluate natively against
-      20 ms for one board; profile and fix the superlinear stage
+- [x] Large inputs: contour fill now fills islands independently and in parallel
+      (`par::map`); a 4×8 panel of the board evaluates in 0.5 s natively (was 1.1 s), an
+      8×8 panel (22 k paths) in 0.8 s natively and 2.6 s in Chrome
+- [ ] Still sequential on large inputs: layer compositing, the order statistics' coverage
+      raster, and bleed-aware improvement (about 2 s of the 4.6 s for the 8×8 panel)
 - [ ] Cooperative cancellation and progress (shared-memory flag, rayon stops between
       chunks); a new edit cancels the running evaluation; Cancel button (spec §12 #19)
 - [ ] Firefox: Playwright Firefox from nixpkgs, e2e suite on Chrome and Firefox locally and

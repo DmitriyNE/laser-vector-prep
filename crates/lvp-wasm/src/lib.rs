@@ -54,6 +54,12 @@ pub fn thread_count() -> usize {
     rayon::current_num_threads()
 }
 
+/// Called once the rayon pool is running: geometry may now fan out to it.
+#[wasm_bindgen]
+pub fn enable_parallelism() {
+    lvp_core::par::enable(true);
+}
+
 /// Built-in read-only presets as a JSON array of profiles.
 #[wasm_bindgen]
 pub fn builtin_presets_json() -> Result<String, JsError> {
