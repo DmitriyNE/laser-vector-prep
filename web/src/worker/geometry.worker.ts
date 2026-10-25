@@ -12,7 +12,7 @@ const ready = (async () => {
 
 function preview(p: wasm.Preview | undefined): { result: Preview | null; transfer: Transferable[] } {
   if (!p) return { result: null, transfer: [] };
-  const out: Preview = { coords: p.coords, bulges: p.bulges, starts: p.starts, closed: p.closed };
+  const out: Preview = { originX: p.origin_x, originY: p.origin_y, coords: p.coords, bulges: p.bulges, starts: p.starts, closed: p.closed };
   p.free();
   return { result: out, transfer: [out.coords.buffer, out.bulges.buffer, out.starts.buffer, out.closed.buffer] };
 }

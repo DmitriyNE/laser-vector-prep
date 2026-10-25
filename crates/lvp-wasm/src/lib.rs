@@ -163,6 +163,17 @@ pub struct Preview {
 
 #[wasm_bindgen]
 impl Preview {
+    /// Lower-left corner (mm) the coordinates are relative to.
+    #[wasm_bindgen(getter)]
+    pub fn origin_x(&self) -> f64 {
+        self.inner.origin[0]
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn origin_y(&self) -> f64 {
+        self.inner.origin[1]
+    }
+
     #[wasm_bindgen(getter)]
     pub fn coords(&self) -> Vec<f32> {
         self.inner.coords.clone()

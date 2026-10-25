@@ -180,7 +180,10 @@
       ctx.strokeStyle = it.color;
       ctx.lineWidth = selected ? it.width + 1.5 : it.width;
       ctx.setLineDash(it.dash);
-      const { coords, bulges, starts, closed } = it.preview;
+      const { originX: ox, originY: oy, coords, bulges, starts, closed } = it.preview;
+      // Offsets from the buffer's origin, added back in double precision.
+      const x = (k: number) => ox + coords[2 * k]!;
+      const y = (k: number) => oy + coords[2 * k + 1]!;
       if (it.fill) {
         // A region: all loops in one path, filled even-odd so holes stay open.
         ctx.beginPath();
@@ -188,12 +191,12 @@
           const a = starts[i]!;
           const b = starts[i + 1]!;
           if (b - a < 2) continue;
-          const [x0, y0] = toScreen(coords[2 * a]!, coords[2 * a + 1]!, w, h);
+          const [x0, y0] = toScreen(x(a), y(a), w, h);
           ctx.moveTo(x0, y0);
           for (let s = 0; s < b - a; s++) {
             const k = a + s;
             const n = s + 1 < b - a ? k + 1 : a;
-            segment(ctx, coords[2 * k]!, coords[2 * k + 1]!, coords[2 * n]!, coords[2 * n + 1]!, bulges[k]!, w, h);
+            segment(ctx, x(k), y(k), x(n), y(n), bulges[k]!, w, h);
           }
           ctx.closePath();
         }
@@ -208,13 +211,13 @@
         if (b - a < 2) continue;
         const isClosed = closed[i] === 1;
         ctx.beginPath();
-        const [x0, y0] = toScreen(coords[2 * a]!, coords[2 * a + 1]!, w, h);
+        const [x0, y0] = toScreen(x(a), y(a), w, h);
         ctx.moveTo(x0, y0);
         const segments = isClosed ? b - a : b - a - 1;
         for (let s = 0; s < segments; s++) {
           const k = a + s;
           const n = s + 1 < b - a ? k + 1 : a; // the closing segment returns to the start
-          segment(ctx, coords[2 * k]!, coords[2 * k + 1]!, coords[2 * n]!, coords[2 * n + 1]!, bulges[k]!, w, h);
+          segment(ctx, x(k), y(k), x(n), y(n), bulges[k]!, w, h);
         }
         if (isClosed) ctx.closePath();
         ctx.stroke();

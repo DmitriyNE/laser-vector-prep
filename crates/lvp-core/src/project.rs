@@ -165,30 +165,50 @@ pub struct EvaluationSummary {
 /// Polylines for drawing, arcs unflattened: path `i` has vertices
 /// `starts[i] .. starts[i+1]`, vertex `k` at `coords[2k], coords[2k+1]` with `bulges[k]` the
 /// bulge (`tan(sweep / 4)`) of the segment leaving it (for a closed path, the last vertex's
-/// bulge closes it). `starts` has one more entry than there are paths. Coordinates are mm,
-/// `f32` (preview is never the authoritative geometry).
+/// bulge closes it). `starts` has one more entry than there are paths. Coordinates are mm
+/// relative to `origin` (the buffer's lower-left corner), as `f32`: offsets within a
+/// drawing stay precise to far below a micrometre wherever it sits, which absolute `f32`
+/// coordinates do not (8 µm steps at 100 m). The preview is never the authoritative
+/// geometry.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreviewBuffer {
+    pub origin: [f64; 2],
     pub coords: Vec<f32>,
     pub bulges: Vec<f32>,
     pub starts: Vec<u32>,
     pub closed: Vec<u8>,
 }
 
+/// Smallest x and y of the points (0, 0 when there are none).
+fn lower_left(points: impl Iterator<Item = (f64, f64)>) -> [f64; 2] {
+    points
+        .fold(None, |acc: Option<[f64; 2]>, (x, y)| {
+            Some(acc.map_or([x, y], |[ax, ay]| [ax.min(x), ay.min(y)]))
+        })
+        .unwrap_or([0.0, 0.0])
+}
+
 impl PreviewBuffer {
     pub fn from_plines<'a, I: IntoIterator<Item = &'a Pline>>(plines: I) -> Self {
+        let plines: Vec<&Pline> = plines
+            .into_iter()
+            .filter(|p| p.vertex_count() >= 2)
+            .collect();
+        let origin = lower_left(
+            plines
+                .iter()
+                .flat_map(|p| p.iter_vertexes().map(|v| (v.x, v.y))),
+        );
         let mut b = PreviewBuffer {
+            origin,
             starts: vec![0],
             ..Default::default()
         };
         for p in plines {
             let n = p.vertex_count();
-            if n < 2 {
-                continue;
-            }
             for (i, v) in p.iter_vertexes().enumerate() {
-                b.coords.push(v.x as f32);
-                b.coords.push(v.y as f32);
+                b.coords.push((v.x - origin[0]) as f32);
+                b.coords.push((v.y - origin[1]) as f32);
                 // An open path's last vertex has no outgoing segment.
                 let bulge = if !p.is_closed() && i + 1 == n {
                     0.0
@@ -566,13 +586,21 @@ impl Project {
         let (ev, profile) = self.last.as_ref()?;
         let plan = ev.group_plan(group)?;
         let paths = ev.pass_paths();
+        let jumps = order::jumps(plan, &paths, &profile.optimizer);
+        let origin = lower_left(jumps.iter().flat_map(|(a, b)| [(a.x, a.y), (b.x, b.y)]));
         let mut b = PreviewBuffer {
+            origin,
             starts: vec![0],
             ..Default::default()
         };
-        for (from, to) in order::jumps(plan, &paths, &profile.optimizer) {
-            b.coords
-                .extend([from.x as f32, from.y as f32, to.x as f32, to.y as f32]);
+        let local = |v: f64, o: f64| (v - o) as f32;
+        for (from, to) in jumps {
+            b.coords.extend([
+                local(from.x, origin[0]),
+                local(from.y, origin[1]),
+                local(to.x, origin[0]),
+                local(to.y, origin[1]),
+            ]);
             b.bulges.extend([0.0, 0.0]);
             b.starts.push((b.coords.len() / 2) as u32);
             b.closed.push(0);
@@ -609,6 +637,26 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_buffers_stay_precise_far_from_the_origin() {
+        // A 20 µm square 500 m from the origin: absolute f32 coordinates would be off by
+        // up to 16 µm there; offsets from the buffer's own origin are not.
+        let (x0, y0) = (500_000.123_456, -250_000.654_321);
+        let sq = pline::from_points(
+            [(0.0, 0.0), (0.02, 0.0), (0.02, 0.02), (0.0, 0.02)]
+                .map(|(dx, dy)| crate::geom::Point::new(x0 + dx, y0 + dy)),
+            true,
+        );
+        let b = PreviewBuffer::from_plines([&sq]);
+        assert_eq!(b.origin, [x0, y0]);
+        for (k, v) in sq.iter_vertexes().enumerate() {
+            let x = b.origin[0] + f64::from(b.coords[2 * k]);
+            let y = b.origin[1] + f64::from(b.coords[2 * k + 1]);
+            assert!((x - v.x).abs() < 1e-9 && (y - v.y).abs() < 1e-9, "{x}, {y}");
+        }
+        assert_eq!(PreviewBuffer::from_plines([]).origin, [0.0, 0.0]);
+    }
 
     fn board() -> Vec<u8> {
         std::fs::read(concat!(

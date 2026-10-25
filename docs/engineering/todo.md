@@ -130,7 +130,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       effective marking width; schema v2 with the first migration (D32)
 - [x] JSON Schema of the profile format generated from the serde types (schemars), with a
       staleness test and validation of the presets (`docs/profile-schema.json`)
-- [ ] Preview precision far from the origin
+- [x] Preview precision far from the origin: buffers carry their own `f64` origin and `f32`
+      offsets
 - [ ] `just package` builds a versioned tarball of the site; `nix build` package
 - [ ] Later: publish GitHub Releases (deferred by the owner)
 - [ ] Deployment documentation (headers or service worker, sub-paths, offline)

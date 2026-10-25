@@ -264,10 +264,13 @@ export interface Heatmap {
 
 /**
  * Polylines with unflattened arcs: path i has vertices starts[i] .. starts[i+1]; vertex k is
- * (coords[2k], coords[2k+1]) and bulges[k] is tan(sweep/4) of the segment leaving it (a
- * closed path's last vertex closes it). Millimetres, y up.
+ * (originX + coords[2k], originY + coords[2k+1]) and bulges[k] is tan(sweep/4) of the
+ * segment leaving it (a closed path's last vertex closes it). Millimetres, y up. The f32
+ * coordinates are offsets from the buffer's own origin so they stay precise far from (0, 0).
  */
 export interface Preview {
+  originX: number;
+  originY: number;
   coords: Float32Array;
   bulges: Float32Array;
   starts: Uint32Array;

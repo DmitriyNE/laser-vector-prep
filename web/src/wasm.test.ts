@@ -63,6 +63,10 @@ describe("lvp-wasm project API", () => {
     const preview = wasm.preview_pass(pass.id)!;
     expect(preview.starts.length).toBe(pass.paths + 1);
     expect(preview.coords.length).toBe(preview.starts[pass.paths]! * 2);
+    // Coordinates are offsets from the buffer's lower-left corner (precision far from 0, 0).
+    const xs = preview.coords.filter((_, i) => i % 2 === 0);
+    expect(Math.min(...xs)).toBeCloseTo(0, 6);
+    expect(preview.origin_x).toBeGreaterThan(0);
     expect(preview.bulges.length).toBe(preview.starts[pass.paths]!);
     expect(preview.closed.length).toBe(pass.paths);
     // Contour rings around round pads keep their arcs.

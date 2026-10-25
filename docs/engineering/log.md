@@ -3,6 +3,13 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: preview precision
+
+Preview buffers held absolute `f32` millimetres, which step by 8 µm at 100 m from the
+origin and 60 µm at the 1 km import limit, coarser than a 20 µm fill. Each buffer now
+carries its lower-left corner as `f64` and `f32` offsets from it; the canvas adds the two
+in double precision.
+
 ## 2026-10-25 — M4: profile JSON Schema
 
 `docs/profile-schema.json` is generated from the serde types with schemars (doc comments
