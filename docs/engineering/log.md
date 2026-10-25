@@ -40,6 +40,12 @@ an edit or evaluation used to re-select the store's selection on the canvas, so 
 a freshly selected edge also deleted the layer selected before; the canvas now keeps its
 own selection until the selection changes elsewhere.
 
+The preview has a minimap like the graph's, for a consistent main area: same size, corner
+and colours as Svelte Flow's (light and dark), the drawing with everything outside the view
+masked, drag to pan (pressing outside the view jumps there) and wheel to zoom. The drawing
+is rendered into it once per fetch; panning only redraws the mask, since redrawing a large
+panel on every move would not keep up.
+
 ## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
 
 Layers, passes, audits and plans now run concurrently and the optimiser's scans use the

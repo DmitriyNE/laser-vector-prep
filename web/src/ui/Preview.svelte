@@ -60,24 +60,37 @@
     return { key, canvas, x: h.originX, top: h.originY + h.height * h.cellMm, wMm: h.width * h.cellMm, hMm: h.height * h.cellMm };
   }
 
+  /** A view of the document: mm at the centre of a w × h pixel area, and pixels per mm. */
+  type View = { cx: number; cy: number; ppm: number; w: number; h: number };
+
+  function project(v: View, x: number, y: number): [number, number] {
+    return [v.w / 2 + (x - v.cx) * v.ppm, v.h / 2 - (y - v.cy) * v.ppm];
+  }
+
   function toScreen(x: number, y: number, w: number, h: number): [number, number] {
-    return [w / 2 + (x - cx) * ppm, h / 2 - (y - cy) * ppm];
+    return project({ cx, cy, ppm, w, h }, x, y);
   }
 
   function toMm(px: number, py: number, w: number, h: number): [number, number] {
     return [cx + (px - w / 2) / ppm, cy - (py - h / 2) / ppm];
   }
 
-  function fit() {
-    const ev = store.evaluation;
-    let b: [number, number, number, number] | null = null;
-    const grow = (x: [number, number, number, number] | null) => {
+  type Bounds = [number, number, number, number];
+
+  /** Bounds of everything imported and evaluated (mm). */
+  function sceneBounds(): Bounds | null {
+    let b: Bounds | null = null;
+    const grow = (x: Bounds | null) => {
       if (!x) return;
       b = b ? [Math.min(b[0], x[0]), Math.min(b[1], x[1]), Math.max(b[2], x[2]), Math.max(b[3], x[3])] : [...x];
     };
     for (const s of store.sources) grow(s.boundsMm);
-    if (ev) grow(ev.boundsMm);
-    const bb = b as [number, number, number, number] | null;
+    if (store.evaluation) grow(store.evaluation.boundsMm);
+    return b;
+  }
+
+  function fit() {
+    const bb = sceneBounds();
     if (!bb || !canvas) return;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
@@ -149,6 +162,7 @@
     if (token !== fetchToken) return; // a newer fetch is in flight
     items = next;
     heatImages = nextHeat;
+    renderMiniScene();
     if (!fitted) fit();
     draw();
   }
@@ -166,17 +180,25 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     drawGrid(ctx, w, h);
+    drawScene(ctx, { cx, cy, ppm, w, h }, true);
+    drawRulers(ctx, w, h);
+    drawMinimap();
+  }
+
+  /** Heatmaps and every visible item through view `v`; `emphasis` thickens the selection. */
+  function drawScene(ctx: CanvasRenderingContext2D, v: View, emphasis: boolean) {
     ctx.imageSmoothingEnabled = false;
     for (const hi of heatImages) {
-      const [sx, sy] = toScreen(hi.x, hi.top, w, h);
-      ctx.drawImage(hi.canvas, sx, sy, hi.wMm * ppm, hi.hMm * ppm);
+      const [sx, sy] = project(v, hi.x, hi.top);
+      ctx.drawImage(hi.canvas, sx, sy, hi.wMm * v.ppm, hi.hMm * v.ppm);
     }
     const sel = store.selection;
     for (const it of items) {
       const selected =
-        (sel.kind === "pass" && it.key === `pass:${sel.id}`) ||
-        (sel.kind === "layer" && it.key === `layer:${sel.id}`) ||
-        (sel.kind === "source" && it.key === `src:${sel.file}:${sel.layer}`);
+        emphasis &&
+        ((sel.kind === "pass" && it.key === `pass:${sel.id}`) ||
+          (sel.kind === "layer" && it.key === `layer:${sel.id}`) ||
+          (sel.kind === "source" && it.key === `src:${sel.file}:${sel.layer}`));
       ctx.strokeStyle = it.color;
       ctx.lineWidth = selected ? it.width + 1.5 : it.width;
       ctx.setLineDash(it.dash);
@@ -191,12 +213,12 @@
           const a = starts[i]!;
           const b = starts[i + 1]!;
           if (b - a < 2) continue;
-          const [x0, y0] = toScreen(x(a), y(a), w, h);
+          const [x0, y0] = project(v, x(a), y(a));
           ctx.moveTo(x0, y0);
           for (let s = 0; s < b - a; s++) {
             const k = a + s;
             const n = s + 1 < b - a ? k + 1 : a;
-            segment(ctx, x(k), y(k), x(n), y(n), bulges[k]!, w, h);
+            segment(ctx, v, x(k), y(k), x(n), y(n), bulges[k]!);
           }
           ctx.closePath();
         }
@@ -211,20 +233,19 @@
         if (b - a < 2) continue;
         const isClosed = closed[i] === 1;
         ctx.beginPath();
-        const [x0, y0] = toScreen(x(a), y(a), w, h);
+        const [x0, y0] = project(v, x(a), y(a));
         ctx.moveTo(x0, y0);
         const segments = isClosed ? b - a : b - a - 1;
         for (let s = 0; s < segments; s++) {
           const k = a + s;
           const n = s + 1 < b - a ? k + 1 : a; // the closing segment returns to the start
-          segment(ctx, x(k), y(k), x(n), y(n), bulges[k]!, w, h);
+          segment(ctx, v, x(k), y(k), x(n), y(n), bulges[k]!);
         }
         if (isClosed) ctx.closePath();
         ctx.stroke();
       }
     }
     ctx.setLineDash([]);
-    drawRulers(ctx, w, h);
   }
 
   /**
@@ -232,10 +253,10 @@
    * a native arc, or a line when the arc's sagitta is below a fraction of a pixel. The y
    * flip turns the model's counter-clockwise arcs into the canvas's anticlockwise ones.
    */
-  function segment(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, bulge: number, w: number, h: number) {
-    const [sx2, sy2] = toScreen(x2, y2, w, h);
+  function segment(ctx: CanvasRenderingContext2D, v: View, x1: number, y1: number, x2: number, y2: number, bulge: number) {
+    const [sx2, sy2] = project(v, x2, y2);
     const chord = Math.hypot(x2 - x1, y2 - y1);
-    if (bulge === 0 || chord === 0 || (Math.abs(bulge) * chord * ppm) / 2 < 0.25) {
+    if (bulge === 0 || chord === 0 || (Math.abs(bulge) * chord * v.ppm) / 2 < 0.25) {
       ctx.lineTo(sx2, sy2);
       return;
     }
@@ -246,11 +267,11 @@
     const cx = mx - (y2 - y1) * off;
     const cy = my + (x2 - x1) * off;
     const r = Math.hypot(x1 - cx, y1 - cy);
-    const [scx, scy] = toScreen(cx, cy, w, h);
-    const [sx1, sy1] = toScreen(x1, y1, w, h);
+    const [scx, scy] = project(v, cx, cy);
+    const [sx1, sy1] = project(v, x1, y1);
     const a0 = Math.atan2(sy1 - scy, sx1 - scx);
     const a1 = Math.atan2(sy2 - scy, sx2 - scx);
-    ctx.arc(scx, scy, r * ppm, a0, a1, bulge > 0);
+    ctx.arc(scx, scy, r * v.ppm, a0, a1, bulge > 0);
   }
 
   function niceStep(pxPerMm: number): number {
@@ -343,6 +364,126 @@
     canvas.releasePointerCapture(e.pointerId);
   }
 
+  // ---- minimap: the whole drawing with the view marked, like the graph's ---------------
+
+  const MINI_W = 200;
+  const MINI_H = 150;
+  let mini: HTMLCanvasElement;
+  /** The drawing rendered once per fetch (redrawing a large panel on every pan would not
+   * keep up) and the document bounds it covers. */
+  let miniScene: { canvas: HTMLCanvasElement; bounds: Bounds } | null = $state.raw(null);
+  const dark = globalThis.matchMedia?.("(prefers-color-scheme: dark)");
+
+  function renderMiniScene() {
+    const b = sceneBounds();
+    if (!b) {
+      miniScene = null;
+      return;
+    }
+    const bw = Math.max(b[2] - b[0], 1e-3);
+    const bh = Math.max(b[3] - b[1], 1e-3);
+    const scale = Math.min(MINI_W / bw, MINI_H / bh) * devicePixelRatio;
+    const off = miniScene?.canvas ?? document.createElement("canvas");
+    off.width = Math.max(1, Math.ceil(bw * scale));
+    off.height = Math.max(1, Math.ceil(bh * scale));
+    const ctx = off.getContext("2d")!;
+    ctx.clearRect(0, 0, off.width, off.height);
+    drawScene(ctx, { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, ppm: scale, w: off.width, h: off.height }, false);
+    miniScene = { canvas: off, bounds: b };
+  }
+
+  /** The main view's rectangle in document mm. */
+  function viewBounds(): Bounds {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const [x0, y1] = toMm(0, 0, w, h);
+    const [x1, y0] = toMm(w, h, w, h);
+    return [x0, y0, x1, y1];
+  }
+
+  /** The minimap's own view: the drawing and the main view, fitted with a margin. */
+  function miniView(): View | null {
+    if (!miniScene || !canvas) return null;
+    const b = miniScene.bounds;
+    const vb = viewBounds();
+    const e: Bounds = [Math.min(b[0], vb[0]), Math.min(b[1], vb[1]), Math.max(b[2], vb[2]), Math.max(b[3], vb[3])];
+    const scale = Math.min(MINI_W / Math.max(e[2] - e[0], 1e-3), MINI_H / Math.max(e[3] - e[1], 1e-3)) / 1.1;
+    return { cx: (e[0] + e[2]) / 2, cy: (e[1] + e[3]) / 2, ppm: scale, w: MINI_W, h: MINI_H };
+  }
+
+  /** The main view's rectangle on the minimap, in its pixels. */
+  function viewRect(v: View): Bounds {
+    const vb = viewBounds();
+    const [x0, y0] = project(v, vb[0], vb[3]);
+    const [x1, y1] = project(v, vb[2], vb[1]);
+    return [x0, y0, x1, y1];
+  }
+
+  function drawMinimap() {
+    if (!mini) return;
+    const dpr = devicePixelRatio;
+    if (mini.width !== MINI_W * dpr || mini.height !== MINI_H * dpr) {
+      mini.width = MINI_W * dpr;
+      mini.height = MINI_H * dpr;
+    }
+    const ctx = mini.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, MINI_W, MINI_H);
+    const v = miniView();
+    if (!v || !miniScene) return;
+    const b = miniScene.bounds;
+    const [sx, sy] = project(v, b[0], b[3]);
+    ctx.drawImage(miniScene.canvas, sx, sy, (b[2] - b[0]) * v.ppm, (b[3] - b[1]) * v.ppm);
+    // Everything outside the main view is masked, as on Svelte Flow's minimap.
+    const [x0, y0, x1, y1] = viewRect(v);
+    ctx.beginPath();
+    ctx.rect(0, 0, MINI_W, MINI_H);
+    ctx.rect(x0, y0, x1 - x0, y1 - y0);
+    ctx.fillStyle = dark?.matches ? "rgba(60, 60, 60, 0.6)" : "rgba(240, 240, 240, 0.6)";
+    ctx.fill("evenodd");
+  }
+
+  // Drag the view rectangle to pan (pressing outside it jumps there first); wheel zooms.
+  let miniDrag: { x: number; y: number; cx: number; cy: number; ppm: number } | null = null;
+
+  function onMiniDown(e: PointerEvent) {
+    const v = miniView();
+    if (!v) return;
+    const [x0, y0, x1, y1] = viewRect(v);
+    if (e.offsetX < x0 || e.offsetX > x1 || e.offsetY < y0 || e.offsetY > y1) {
+      cx = v.cx + (e.offsetX - v.w / 2) / v.ppm;
+      cy = v.cy - (e.offsetY - v.h / 2) / v.ppm;
+      draw();
+    }
+    // The minimap's scale moves with the view; the drag keeps the scale it started with.
+    miniDrag = { x: e.clientX, y: e.clientY, cx, cy, ppm: miniView()!.ppm };
+    mini.setPointerCapture(e.pointerId);
+  }
+
+  function onMiniMove(e: PointerEvent) {
+    if (!miniDrag) return;
+    cx = miniDrag.cx + (e.clientX - miniDrag.x) / miniDrag.ppm;
+    cy = miniDrag.cy - (e.clientY - miniDrag.y) / miniDrag.ppm;
+    draw();
+  }
+
+  function onMiniUp(e: PointerEvent) {
+    miniDrag = null;
+    mini.releasePointerCapture(e.pointerId);
+  }
+
+  function onMiniWheel(e: WheelEvent) {
+    e.preventDefault();
+    ppm = Math.min(Math.max(ppm * Math.exp(-e.deltaY * 0.0015), 0.01), 1e5);
+    draw();
+  }
+
+  $effect(() => {
+    const redraw = () => drawMinimap();
+    dark?.addEventListener("change", redraw);
+    return () => dark?.removeEventListener("change", redraw);
+  });
+
   $effect(() => {
     // Re-fetch when geometry or visibility changes.
     void store.previewRevision;
@@ -393,6 +534,16 @@
     </span>
     <BusyIndicator {store} />
   </div>
+  <canvas
+    class="minimap"
+    class:empty={!miniScene}
+    bind:this={mini}
+    aria-label="overview: drag the view, wheel to zoom"
+    onpointerdown={onMiniDown}
+    onpointermove={onMiniMove}
+    onpointerup={onMiniUp}
+    onwheel={onMiniWheel}
+  ></canvas>
 </div>
 
 <style>
@@ -423,5 +574,23 @@
   .coords {
     font-family: ui-monospace, monospace;
     opacity: 0.8;
+  }
+  /* Size, place and colours of Svelte Flow's minimap in the graph tab. */
+  .minimap {
+    position: absolute;
+    right: 15px;
+    bottom: 15px;
+    width: 200px;
+    height: 150px;
+    background: #fff;
+    cursor: grab;
+  }
+  .minimap.empty {
+    display: none;
+  }
+  @media (prefers-color-scheme: dark) {
+    .minimap {
+      background: #141414;
+    }
   }
 </style>

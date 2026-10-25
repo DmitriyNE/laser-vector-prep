@@ -52,7 +52,7 @@ test("the graph tab shows files, slots, layers, passes and groups with their sta
 
   // The preview is still there, with its own state, when switching back.
   await page.getByRole("tab", { name: "Preview" }).click();
-  await expect(page.locator(".preview canvas")).toBeVisible();
+  await expect(page.locator(".preview > canvas:not(.minimap)")).toBeVisible();
   await expect(page.locator(".svelte-flow")).toBeHidden();
 });
 
