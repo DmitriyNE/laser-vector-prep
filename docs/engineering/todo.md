@@ -117,8 +117,9 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Large inputs: contour fill now fills islands independently and in parallel
       (`par::map`); a 4×8 panel of the board evaluates in 0.5 s natively (was 1.1 s), an
       8×8 panel (22 k paths) in 0.8 s natively and 2.6 s in Chrome
-- [ ] Still sequential on large inputs: layer compositing, the order statistics' coverage
-      raster, and bleed-aware improvement (about 2 s of the 4.6 s for the 8×8 panel)
+- [x] Still sequential on large inputs: layer compositing, the order statistics' coverage
+      raster, and bleed-aware improvement (about 2 s of the 4.6 s for the 8×8 panel); now
+      parallel (D35)
 - [x] Cooperative cancellation and progress through a control block in shared wasm
       memory; a new edit cancels the running evaluation; Cancel button and progress bar
       (spec §12 #19)
@@ -151,8 +152,10 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Nix store cache in CI (Magic Nix Cache); no measurable speed-up yet (see log)
 - [x] Booleans resolve near-coincident edges and arcs; no saved fuzz input or randomized
       near-coincident case leaves a chain open (D34; vertex-to-edge snapping was dropped)
-- [ ] Parallel evaluation: independent layers, passes and groups; coverage raster;
-      optimizer candidate search; deterministic for any thread count
+- [x] Parallel evaluation: independent layers, passes and groups; coverage raster;
+      optimizer candidate search; deterministic for any thread count (D35)
+- [ ] Coverage audit: compute both differences (missed and spill) from one intersection
+      pass; the audit is now most of a large panel's evaluation
 - [ ] Graph view (Svelte Flow + dagre), tab next to the preview: files/layers → slots →
       working layers → passes → groups with live status; click selects, eyes/solo
 - [ ] Graph editing: connect operands, slot mappings and pass groups; add/delete layers,

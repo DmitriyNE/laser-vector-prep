@@ -500,3 +500,59 @@ robust result never replaced an exact one, and the panel benchmark did not slow 
 
 Cost: i_overlay and its four helper crates add 266 kB to the wasm module (97 kB gzipped,
 about 9%).
+
+## D35 — Parallel evaluation that cannot change results (2026-10-25)
+
+D33 asked for parallel composition and optimisation whose results do not depend on the
+number of threads.
+
+- **Layers** evaluate in dependency waves (one more than the deepest input's wave); the
+  layers of a wave are composited concurrently. A task graph would start a layer as soon as
+  its own inputs are done, but the heavy work sits inside single layers (unions, offsets,
+  fills), which are parallel themselves.
+- **Composition**: a region layer's parts (stroked paths, hatches, filled loops) are built in
+  parallel and united in one n-ary union. Folding pairwise unions re-resolved the growing
+  region for every part and was the whole cost of compositing (0.92 s → 0.01 s for the
+  8×8 panel, natively). The composite is the same region; its loops may start at other
+  vertices, which shifts contour-fill seams slightly.
+- **Passes** (pattern and coverage audit) and **output groups** (plans) run concurrently.
+  Whatever completes is cached, also when the evaluation is cancelled meanwhile.
+- **Optimiser**: the plans are bit-identical to the sequential ones. The local search still
+  applies, per sweep, the first move in scan order that pays off; positions are scanned in
+  parallel blocks against the unchanged sequence and the candidates offered in scan order.
+  Precedence is checked by computing positions after the move instead of building the new
+  order. Footprint cells are visited row by row over an interval containing the capsule,
+  with the same exact distance test, so probes are read-only and a full re-stamp runs in
+  parallel bands of rows (counts are integers). The seam programme's jump costs and the
+  crossing count are parallel too. Lifting the one-move-per-sweep limit was measured and
+  rejected: 2 000 sweeps shorten the 4×4 panel's jumps by 0.4%.
+- `tests/parallel_determinism.rs` compares whole evaluations (geometry, paths, audits,
+  plans, diagnostics) with parallelism off and on 1, 3 and 8 threads, on a panel in
+  bleed-aware mode and on a cutting grid with precedence constraints.
+
+Natively, on a machine shared with a load average between 20 and 100, the 8×8 panel went
+from 8.3 to 7.4 s on one thread and from 2.7 to 1.8 s on ten (bleed-aware). The coverage
+audit is now most of the work; computing both of its differences from one intersection
+pass would about halve it.
+
+## D36 — The wasm build's allocator: per-thread caches over a sleeping heap lock (2026-10-25)
+
+Timing D35 in Chrome showed the 8×8 panel taking 53 s per evaluation with ten threads,
+17 s with four, 10 s with two and 16 s with one. std's allocator for wasm guards one
+dlmalloc heap with a spin lock: every allocation of every thread queues on it, and with
+more threads than free cores the spinning starves the thread that holds it. std cannot
+block there because a browser's main thread may not wait; our module only runs in workers.
+
+`lvp-wasm` therefore installs its own global allocator: small blocks (up to 2 KiB, in 28
+size classes) are cached in 32 slots and move to and from the heap in batches, and the
+heap (the same dlmalloc) sits behind a lock that spins briefly and then sleeps with
+`memory.atomic.wait32` (sleeping at once made cancellation sluggish in Firefox under load:
+every hand-over of the lock waited for the scheduler). A
+thread picks its slot by its stack address, because wasm-bindgen allocates a new thread's
+stack and TLS block through this allocator before that thread's TLS exists; a slot is only
+tried, and a busy one sends the call to the heap. The cache logic is generic over its heap
+and tested natively by threads that allocate, resize and free blocks of every size, many
+freed by another thread. With it the panel takes 3.3 s per evaluation in Chrome with ten
+threads (13.6 s with one), and 2.7 s for import and first evaluation instead of 72 s; in
+Firefox 8 s instead of 37 to 49 s, measured while the machine was far busier. Cost: the
+module grows by 82 kB (21 kB gzipped); std's own copy of dlmalloc stays linked.

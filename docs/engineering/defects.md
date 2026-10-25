@@ -4,6 +4,7 @@ Open defects first, then fixed ones. One line each; details go in the log or an 
 
 | ID | Status | Area | Description | Found | Fixed |
 |---|---|---|---|---|---|
+| DEF-13 | fixed | wasm | In the browser, more threads made evaluation slower: an 8×8 panel took 53 s with ten threads and 10 s with two, because std's wasm allocator serialises every allocation on a spin lock that starves under contention. The wasm build now has its own allocator (D36): 3.3 s with ten threads. Found by timing D35 in Chrome. | 2026-10-25 | 2026-10-25 |
 | DEF-12 | fixed | geometry | Near-coincident edges and arcs whose vertices did not line up could leave a boolean's boundary chain open: that part of the composite was dropped with a warning (D30). Vertex snapping also took the first vertex in range instead of the nearest, which could leave a sliver. Now resolved exactly where possible, else by a robust polygon boolean (D34). Found by fuzzing. | 2026-10-25 | 2026-10-25 |
 | DEF-11 | fixed | geometry | A PDF whose transforms produced non-finite coordinates crashed a clip boolean (NaN in the kernel's spatial index). Booleans now refuse non-finite loops (D30). Found by fuzzing. | 2026-10-25 | 2026-10-25 |
 | DEF-10 | fixed | geometry | Compositing was quadratic in loops stacked in one place (a step-and-repeat with zero step flashed every pad hundreds of times): 11 s for a 1 KB Gerber. Exact duplicates are now merged with a count (D30). Found by fuzzing. | 2026-10-25 | 2026-10-25 |

@@ -18,6 +18,15 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+/// Threads [`map`] runs on: the pool's, or 1 while parallelism is off.
+pub fn threads() -> usize {
+    if enabled() {
+        rayon::current_num_threads()
+    } else {
+        1
+    }
+}
+
 /// `items.map(f)`, in parallel when enabled; results keep the input order.
 pub fn map<T, R, F>(items: Vec<T>, f: F) -> Vec<R>
 where

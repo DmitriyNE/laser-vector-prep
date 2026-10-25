@@ -44,9 +44,9 @@ Pure Rust, host-testable, no browser dependencies. All lengths in millimetres.
 | `gerber` | RS-274X / X2 reader: standard and macro apertures (`gerber::macros`: variables, arithmetic, primitives 1/2/4/5/6/7/20/21/22), draws with arcs in both quadrant modes, regions, step-and-repeat, aperture blocks, LM/LR/LS transforms, dark/clear compositing in source order, `TF.FileFunction` as the layer function. One layer per file, named after the file. |
 | `model` | Configuration types = the profile schema (serde, camelCase): source bindings, working layers, passes, output groups, export and optimizer settings. |
 | `profile` | Versioned JSON parsing with migrations, structural validation, built-in presets. |
-| `eval` | Binding resolution (matched / missing / ambiguous) by layer name, file + layer, file-name glob or layer function, dependency order with cycle rejection, source interpretation (closed loops, stroke expansion, hatches), envelope providers (named boundary, bounding box / circle, buffer, convex hull), boolean composition `union(A) op union(B)`, pattern passes, fingerprint cache. |
+| `eval` | Binding resolution (matched / missing / ambiguous) by layer name, file + layer, file-name glob or layer function, dependency order with cycle rejection, source interpretation (closed loops, stroke expansion, hatches), envelope providers (named boundary, bounding box / circle, buffer, convex hull), boolean composition `union(A) op union(B)` (a layer's parts built in parallel and united in one n-ary union), pattern passes, fingerprint cache. Layers evaluate in dependency waves, the layers of a wave, all passes (with their coverage audits) and all output groups concurrently (D35). |
 | `patterns` | Passthrough; inward contour fill (`gapfill`: Voronoi medial-axis centrelines for cores narrower than a pitch, missed-area audit); boundary trace (`trace`: inside / on / outside, kerf, rings, holes first); parallel hatch, crosshatch and boundary + hatch (`hatch`: exact line/arc crossings on a global phase lattice, serpentine). |
-| `order` | Path-order plans per output group (D24): precedence-aware nearest-entry construction, or-opt / 2-opt improvement with delta evaluation, orientation and seam DP; raster footprint model for the bleed penalty, statistics (jumps, length, crossings, protected coverage, peak stacking) and the heatmap. |
+| `order` | Path-order plans per output group (D24): precedence-aware nearest-entry construction, or-opt / 2-opt improvement with delta evaluation, orientation and seam DP; raster footprint model for the bleed penalty, statistics (jumps, length, crossings, protected coverage, peak stacking) and the heatmap. Move scans, seam costs, crossings and raster stamping use the thread pool without changing any result (D35). |
 | `export` | Export paths per output group in planned order; `export::pdf` writes deterministic 1:1 vector PDFs (strokes only), `export::svg` one Inkscape layer per group on the same page, `export::dxf` one layer per group with arcs kept and model coordinates (nearest ACI colour); `export::pdf` writes deterministic 1:1 vector PDFs (strokes only). |
 | `project` | The worker-side facade: sources, profile, evaluation, JSON summaries, preview buffers, jump previews, export. |
 | `diag` | `Diagnostic { severity, code, message, context }` used everywhere; codes are stable dotted identifiers. |
@@ -64,6 +64,8 @@ Invariants worth knowing:
 - Domains are explicit envelope layers (D19). A subtraction whose B reaches outside A
   reports `eval.subject_outside_domain`; an envelope without reference geometry is
   `eval.envelope_unbounded`. No bounding box is ever assumed.
+- Parallelism never changes a result: geometry, paths, audits and plans are identical with
+  parallelism off and on any number of threads (`tests/parallel_determinism.rs`, D35).
 - Preview jumps (`Project::preview_jumps`) are hypothetical straight lines between the
   planned path endpoints of one group; they and the footprint heatmap never reach an
   exporter. Plans never alter mark geometry (D24).
@@ -72,7 +74,9 @@ Invariants worth knowing:
 
 Holds one `Project` in a thread local. Every export is a synchronous adapter: JSON strings
 for structured data, typed arrays for geometry, byte vectors for files, `JsError` for
-failures. The rayon pool is started by the host (`initThreadPool`) once per worker.
+failures. The rayon pool is started by the host (`initThreadPool`) once per worker. Its
+own global allocator (`alloc`, D36) caches small blocks per thread in front of a shared
+dlmalloc heap whose lock sleeps; std's wasm allocator spins and serialises every thread.
 
 ## Web app (`web/`)
 

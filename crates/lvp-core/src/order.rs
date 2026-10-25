@@ -323,14 +323,11 @@ struct Raster {
     height: usize,
     counts: Vec<u16>,
     mask: Vec<u8>,
-    /// Scratch: last stamp id per cell, to avoid counting a cell twice for one jump.
-    stamp: Vec<u32>,
-    stamp_id: u32,
     footprint_r: f64,
-    /// Cell offsets that can lie within the footprint of a point: the stencil walked at
-    /// every step along a jump (exact distance test afterwards).
-    disk: Vec<(i64, i64)>,
 }
+
+/// Rows of the raster stamped together when the whole sequence is re-stamped in parallel.
+const BAND_ROWS: usize = 32;
 
 impl Raster {
     fn new(bounds: BBox, cell_mm: f64, footprint_mm: f64, protected: Option<&Region>) -> Raster {
@@ -344,18 +341,6 @@ impl Raster {
             width = (b.width() / cell).ceil() as usize + 1;
             height = (b.height() / cell).ceil() as usize + 1;
         }
-        // Step points sit anywhere in a cell and cell centres up to r away must be seen:
-        // radius r plus one cell diagonal covers both offsets.
-        let reach = (r + cell * std::f64::consts::SQRT_2) / cell;
-        let rc = reach.ceil() as i64;
-        let mut disk = Vec::new();
-        for dy in -rc..=rc {
-            for dx in -rc..=rc {
-                if ((dx * dx + dy * dy) as f64).sqrt() <= reach + 0.01 {
-                    disk.push((dx, dy));
-                }
-            }
-        }
         let mut raster = Raster {
             origin: b.min,
             cell,
@@ -363,10 +348,7 @@ impl Raster {
             height,
             counts: vec![0; width * height],
             mask: vec![0; width * height],
-            stamp: vec![0; width * height],
-            stamp_id: 0,
             footprint_r: r,
-            disk,
         };
         if let Some(region) = protected {
             raster.fill_mask(region);
@@ -447,81 +429,129 @@ impl Raster {
         self.mask.iter().any(|m| *m != 0)
     }
 
-    /// Visit every cell of the capsule around `a -> b`, once, with the current count. The
-    /// callback returns the new count for the cell.
-    fn stamp_capsule(&mut self, a: Point, b: Point, mut f: impl FnMut(u16, bool) -> u16) {
-        self.stamp_id = self.stamp_id.wrapping_add(1);
-        if self.stamp_id == 0 {
-            self.stamp.fill(0);
-            self.stamp_id = 1;
-        }
+    /// Visit, once each, the cells of rows `rows` whose centre lies within the footprint
+    /// of the jump `a -> b` (a capsule). The capsule is convex, so each row is scanned
+    /// over an interval of x that contains it, with a cell of slack for rounding, and the
+    /// exact distance test decides.
+    fn cells_in_rows(
+        &self,
+        a: Point,
+        b: Point,
+        rows: std::ops::Range<usize>,
+        mut f: impl FnMut(usize),
+    ) {
         let r = self.footprint_r;
-        let len = dist(a, b);
-        let steps = (len / self.cell).ceil().max(1.0) as usize;
-        for s in 0..=steps {
-            let t = s as f64 / steps as f64;
-            let c = Point::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
-            let cx = ((c.x - self.origin.x) / self.cell).floor() as i64;
-            let cy = ((c.y - self.origin.y) / self.cell).floor() as i64;
-            for k in 0..self.disk.len() {
-                let (dx, dy) = self.disk[k];
-                let (ix, iy) = (cx + dx, cy + dy);
-                if ix < 0 || iy < 0 || ix >= self.width as i64 || iy >= self.height as i64 {
+        let slack = r + self.cell;
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        // Cell index ranges, along one axis, of the centres within [lo, hi].
+        let first = |lo: f64, origin: f64| ((lo - origin) / self.cell - 0.5).ceil();
+        let last = |hi: f64, origin: f64| ((hi - origin) / self.cell - 0.5).floor();
+        let y0 = first(a.y.min(b.y) - slack, self.origin.y).max(rows.start as f64);
+        let y1 = last(a.y.max(b.y) + slack, self.origin.y).min(rows.end as f64 - 1.0);
+        if y0 > y1 {
+            return;
+        }
+        for iy in y0 as usize..=y1 as usize {
+            let y = self.origin.y + (iy as f64 + 0.5) * self.cell;
+            // Points of the jump within `slack` of this row in y.
+            let (t0, t1) = if dy == 0.0 {
+                if (y - a.y).abs() > slack {
                     continue;
                 }
-                let idx = iy as usize * self.width + ix as usize;
-                if self.stamp[idx] == self.stamp_id {
-                    continue;
+                (0.0, 1.0)
+            } else {
+                let (u, v) = ((y - slack - a.y) / dy, (y + slack - a.y) / dy);
+                (u.min(v).max(0.0), u.max(v).min(1.0))
+            };
+            if t0 > t1 {
+                continue;
+            }
+            let (xa, xb) = (a.x + t0 * dx, a.x + t1 * dx);
+            let x0 = first(xa.min(xb) - slack, self.origin.x).max(0.0);
+            let x1 = last(xa.max(xb) + slack, self.origin.x).min(self.width as f64 - 1.0);
+            if x0 > x1 {
+                continue;
+            }
+            for ix in x0 as usize..=x1 as usize {
+                if seg_dist(self.centre(ix, iy), a, b) <= r {
+                    f(iy * self.width + ix);
                 }
-                let p = self.centre(ix as usize, iy as usize);
-                if seg_dist(p, a, b) > r {
-                    continue;
-                }
-                self.stamp[idx] = self.stamp_id;
-                let m = self.mask[idx] != 0;
-                self.counts[idx] = f(self.counts[idx], m);
             }
         }
     }
 
+    fn cells(&self, a: Point, b: Point, f: impl FnMut(usize)) {
+        self.cells_in_rows(a, b, 0..self.height, f);
+    }
+
     /// Protected cells a jump's footprint would cover, without changing anything.
-    fn probe(&mut self, a: Point, b: Point) -> f64 {
+    fn probe(&self, a: Point, b: Point) -> f64 {
         let mut n = 0.0;
-        self.stamp_capsule(a, b, |c, m| {
-            if m {
+        self.cells(a, b, |i| {
+            if self.mask[i] != 0 {
                 n += 1.0;
             }
-            c
         });
         n
     }
 
     /// Add a jump; returns the increase of Σ coverage² over protected cells (in cells).
     fn add(&mut self, a: Point, b: Point) -> f64 {
+        let mut cells = Vec::new();
+        self.cells(a, b, |i| cells.push(i));
         let mut delta = 0.0;
-        self.stamp_capsule(a, b, |c, m| {
-            if m {
+        for i in cells {
+            let c = self.counts[i];
+            if self.mask[i] != 0 {
                 delta += 2.0 * c as f64 + 1.0;
             }
-            c.saturating_add(1)
-        });
+            self.counts[i] = c.saturating_add(1);
+        }
         delta
     }
 
     /// Remove a jump previously added; returns the (negative) change of Σ coverage².
     fn remove(&mut self, a: Point, b: Point) -> f64 {
+        let mut cells = Vec::new();
+        self.cells(a, b, |i| cells.push(i));
         let mut delta = 0.0;
-        self.stamp_capsule(a, b, |c, m| {
-            if m && c > 0 {
+        for i in cells {
+            let c = self.counts[i];
+            if self.mask[i] != 0 && c > 0 {
                 delta += -2.0 * c as f64 + 1.0;
             }
-            c.saturating_sub(1)
-        });
+            self.counts[i] = c.saturating_sub(1);
+        }
         delta
     }
 
-    fn clear(&mut self) {
-        self.counts.fill(0);
+    /// Replace the counts by the footprints of `jumps`; returns Σ coverage² over protected
+    /// cells (in cells). Bands of rows are stamped in parallel; counts are integers, so the
+    /// result does not depend on how the work is split.
+    fn stamp_all(&mut self, jumps: &[Jump]) -> f64 {
+        let bands: Vec<std::ops::Range<usize>> = (0..self.height)
+            .step_by(BAND_ROWS)
+            .map(|y| y..(y + BAND_ROWS).min(self.height))
+            .collect();
+        let raster = &*self;
+        let counts = crate::par::map(bands, |rows| {
+            let base = rows.start * raster.width;
+            let mut counts = vec![0u16; rows.len() * raster.width];
+            for &(a, b) in jumps {
+                raster.cells_in_rows(a, b, rows.clone(), |i| {
+                    let c = &mut counts[i - base];
+                    *c = c.saturating_add(1);
+                });
+            }
+            counts
+        });
+        self.counts = counts.concat();
+        self.counts
+            .iter()
+            .zip(&self.mask)
+            .filter(|(_, m)| **m != 0)
+            .map(|(c, _)| f64::from(*c) * f64::from(*c))
+            .sum()
     }
 
     fn cell_area(&self) -> f64 {
@@ -625,17 +655,6 @@ impl Seq {
             .map(|(a, b)| dist(*a, *b))
             .sum()
     }
-
-    fn respects(&self, precedence: &[(usize, usize)]) -> bool {
-        if precedence.is_empty() {
-            return true;
-        }
-        let mut pos = vec![0usize; self.reversed.len()];
-        for (k, &n) in self.order.iter().enumerate() {
-            pos[n] = k;
-        }
-        precedence.iter().all(|&(a, b)| pos[a] < pos[b])
-    }
 }
 
 /// Greedy nearest-entry construction honouring precedence.
@@ -717,10 +736,10 @@ fn construct(nodes: &[Node], precedence: &[(usize, usize)], start: Option<Point>
 
 /// Per-jump cost used by the orientation/seam DP: length plus, in bleed-aware runs, the
 /// footprint's protected coverage (single-jump proxy for the squared penalty).
-fn jump_cost(obj: &mut Objective<'_>, a: Point, b: Point) -> f64 {
+fn jump_cost(obj: &Objective<'_>, a: Point, b: Point) -> f64 {
     let len = dist(a, b);
     if obj.bleed_weight > 0.0
-        && let Some(r) = &mut obj.raster
+        && let Some(r) = &obj.raster
     {
         let scale = r.cell_area() / (2.0 * r.footprint_r);
         return len + obj.bleed_weight * scale * r.probe(a, b);
@@ -743,7 +762,7 @@ fn nearest_vertex(nd: &Node, to: Point) -> usize {
 /// programming over a few candidate states per path: both orientations of an open path;
 /// for a loop, the seam nearest to each possible predecessor end and the seams nearest to
 /// the successor's entry points.
-fn polish(seq: &mut Seq, obj: &mut Objective<'_>) {
+fn polish(seq: &mut Seq, obj: &Objective<'_>) {
     let nodes = obj.nodes;
     let (start, end) = (obj.start, obj.end);
     let m = seq.order.len();
@@ -804,14 +823,26 @@ fn polish(seq: &mut Seq, obj: &mut Objective<'_>) {
             None => 0.0,
         };
     }
+    // The costs of the jumps between consecutive positions' states (most of the work, and
+    // independent of each other) in parallel; row-major by (previous state, state).
+    let edges: Vec<Vec<f64>> = crate::par::map((1..m).collect(), |k| {
+        let mut c = Vec::with_capacity(states[k - 1].len() * states[k].len());
+        for &(prev_rev, prev_seam) in &states[k - 1] {
+            let from = node(k - 1).end(prev_rev, prev_seam);
+            for &(rev, seam) in &states[k] {
+                c.push(jump_cost(obj, from, node(k).start(rev, seam)));
+            }
+        }
+        c
+    });
     for k in 1..m {
-        for (ps, &(prev_rev, prev_seam)) in states[k - 1].clone().iter().enumerate() {
+        let width = states[k].len();
+        for ps in 0..states[k - 1].len() {
             if !cost[k - 1][ps].is_finite() {
                 continue;
             }
-            let from = node(k - 1).end(prev_rev, prev_seam);
-            for (si, &(rev, seam)) in states[k].clone().iter().enumerate() {
-                let c = cost[k - 1][ps] + jump_cost(obj, from, node(k).start(rev, seam));
+            for si in 0..width {
+                let c = cost[k - 1][ps] + edges[k - 1][ps * width + si];
                 if c < cost[k][si] {
                     cost[k][si] = c;
                     back[k][si] = ps;
@@ -868,13 +899,10 @@ impl Objective<'_> {
     /// Re-stamp the raster for `seq` and return the full objective.
     fn total(&mut self, seq: &Seq) -> f64 {
         let len = seq.jump_length(self.nodes, self.start, self.end);
+        let scale = self.bleed_scale();
         if let Some(r) = &mut self.raster {
-            r.clear();
-            let mut sq = 0.0;
-            for (a, b) in seq.jumps(self.nodes, self.start, self.end) {
-                sq += r.add(a, b);
-            }
-            len + self.bleed_weight * sq * self.bleed_scale()
+            let sq = r.stamp_all(&seq.jumps(self.nodes, self.start, self.end));
+            len + self.bleed_weight * sq * scale
         } else {
             len
         }
@@ -887,9 +915,322 @@ impl Objective<'_> {
 
 type Jump = (Point, Point);
 
+fn jump_len(j: &Jump) -> f64 {
+    dist(j.0, j.1)
+}
+
+/// A local move of [`improve`].
+enum Move {
+    /// The node at position `i` moves to just after position `a` (`-1`: to the front),
+    /// with the given orientation and seam.
+    Relocate {
+        i: usize,
+        a: i64,
+        rev: bool,
+        seam: usize,
+    },
+    /// The run of positions `first..=last` is reversed.
+    Reverse { first: usize, last: usize },
+}
+
+impl Move {
+    /// Where the move puts the node at position `k` of a sequence of `m` nodes.
+    fn moved(&self, k: usize, m: usize) -> usize {
+        match *self {
+            Move::Relocate { i, a, .. } => {
+                let at = Self::insertion(i, a, m);
+                if k == i {
+                    return at;
+                }
+                let k = if k > i { k - 1 } else { k };
+                if k >= at { k + 1 } else { k }
+            }
+            Move::Reverse { first, last } => {
+                if (first..=last).contains(&k) {
+                    first + last - k
+                } else {
+                    k
+                }
+            }
+        }
+    }
+
+    /// Index at which a relocated node is inserted once removed from position `i`.
+    fn insertion(i: usize, a: i64, m: usize) -> usize {
+        let mut at = (a + 1) as usize;
+        if a >= 0 && a as usize >= i {
+            at -= 1;
+        }
+        at.min(m - 1)
+    }
+
+    fn apply(&self, seq: &mut Seq, nodes: &[Node]) {
+        match *self {
+            Move::Relocate { i, a, rev, seam } => {
+                let m = seq.order.len();
+                let n = seq.order.remove(i);
+                seq.order.insert(Self::insertion(i, a, m), n);
+                seq.reversed[n] = rev;
+                seq.seam[n] = seam;
+            }
+            Move::Reverse { first, last } => {
+                seq.order[first..=last].reverse();
+                for &n in &seq.order[first..=last] {
+                    if !nodes[n].closed {
+                        seq.reversed[n] = !seq.reversed[n];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A move that improves the estimated objective, with the jumps it removes and adds.
+struct Candidate {
+    mv: Move,
+    removed: Vec<Jump>,
+    added: Vec<Jump>,
+}
+
+/// What a scan for moves reads: the current sequence, unchanged while candidates are
+/// collected, so positions can be scanned in parallel.
+struct Scan<'a> {
+    seq: &'a Seq,
+    obj: &'a Objective<'a>,
+    pos: &'a [usize],
+    neighbours: &'a [Vec<usize>],
+    precedence: &'a [(usize, usize)],
+    /// Weight of a protected cell, in mm of jump length.
+    scale: f64,
+}
+
+impl Scan<'_> {
+    fn m(&self) -> usize {
+        self.seq.order.len()
+    }
+
+    /// The point a jump into position `k + 1` comes from (the assumed start before the
+    /// first path).
+    fn end_at(&self, k: i64) -> Option<Point> {
+        if k < 0 {
+            self.obj.start
+        } else {
+            Some(self.seq.end(self.obj.nodes, k as usize))
+        }
+    }
+
+    /// The point a jump out of position `k - 1` goes to (the assumed end after the last).
+    fn start_at(&self, k: usize) -> Option<Point> {
+        if k >= self.m() {
+            self.obj.end
+        } else {
+            Some(self.seq.start(self.obj.nodes, k))
+        }
+    }
+
+    /// Protected cells under a jump's footprint, or 0 without a bleed penalty.
+    fn probe(&self, j: &Jump) -> f64 {
+        match (&self.obj.raster, self.obj.bleed_weight > 0.0) {
+            (Some(r), true) => r.probe(j.0, j.1),
+            _ => 0.0,
+        }
+    }
+
+    fn respects(&self, mv: &Move) -> bool {
+        let m = self.m();
+        self.precedence
+            .iter()
+            .all(|&(a, b)| mv.moved(self.pos[a], m) < mv.moved(self.pos[b], m))
+    }
+
+    /// Or-opt moves of the node at position `i` next to its spatial neighbours, in scan
+    /// order, each with the orientation or seam that suits its new slot best.
+    fn relocations(&self, i: usize) -> Vec<Candidate> {
+        let (seq, nodes, m) = (self.seq, self.obj.nodes, self.m());
+        let uses_raster = self.obj.uses_raster();
+        let n = seq.order[i];
+        let nd = &nodes[n];
+        let prev_i = self.end_at(i as i64 - 1);
+        let next_i = self.start_at(i + 1);
+        let cur_s = seq.start(nodes, i);
+        let cur_e = seq.end(nodes, i);
+        // Jumps around i that disappear when it moves, and the one that joins the gap.
+        let removed_i: Vec<Jump> = [(prev_i, Some(cur_s)), (Some(cur_e), next_i)]
+            .into_iter()
+            .filter_map(|(x, y)| Some((x?, y?)))
+            .collect();
+        let joined: Option<Jump> = prev_i.zip(next_i);
+        let len_removed_i: f64 = removed_i.iter().map(jump_len).sum();
+        let cov_removed_i: f64 = removed_i.iter().map(|j| self.probe(j)).sum();
+        let len_joined = joined.as_ref().map_or(0.0, jump_len);
+        let cov_joined = joined.as_ref().map_or(0.0, |j| self.probe(j));
+        let mut out = Vec::new();
+        for &nb in &self.neighbours[n] {
+            let j = self.pos[nb] as i64;
+            for a in [j, j - 1] {
+                if a == i as i64 || a == i as i64 - 1 || a < -1 || a >= m as i64 {
+                    continue;
+                }
+                let a_end = self.end_at(a);
+                let after_a = if (a + 1) as usize == i {
+                    self.start_at(i + 1)
+                } else {
+                    self.start_at((a + 1) as usize)
+                };
+                let removed_a: Option<Jump> = a_end.zip(after_a);
+                let removed_len = len_removed_i + removed_a.as_ref().map_or(0.0, jump_len);
+                let removed_cov = cov_removed_i + removed_a.as_ref().map_or(0.0, |j| self.probe(j));
+                // Orientation / seam candidates of the moved node in its new slot.
+                let candidates: Vec<(bool, usize)> = if nd.closed {
+                    let mut v = Vec::new();
+                    if let Some(p) = a_end {
+                        v.push((false, nearest_vertex(nd, p)));
+                    }
+                    if let Some(p) = after_a {
+                        v.push((false, nearest_vertex(nd, p)));
+                    }
+                    if v.is_empty() {
+                        v.push((false, seq.seam[n]));
+                    }
+                    v
+                } else {
+                    vec![(false, 0), (true, 0)]
+                };
+                let mut best: Option<(f64, (bool, usize), Vec<Jump>)> = None;
+                for (rev, seam) in candidates {
+                    let ns = nd.start(rev, seam);
+                    let ne = nd.end(rev, seam);
+                    let into: Option<Jump> = a_end.map(|p| (p, ns));
+                    let out_of: Option<Jump> = after_a.map(|p| (ne, p));
+                    let len_delta = len_joined
+                        + into.as_ref().map_or(0.0, jump_len)
+                        + out_of.as_ref().map_or(0.0, jump_len)
+                        - removed_len;
+                    // The bleed term can gain at most what the removed jumps covered.
+                    if len_delta - self.scale * (removed_cov - cov_joined).max(0.0) >= -1e-9 {
+                        continue;
+                    }
+                    let mut delta = len_delta;
+                    if uses_raster {
+                        let est = cov_joined
+                            + into.as_ref().map_or(0.0, |j| self.probe(j))
+                            + out_of.as_ref().map_or(0.0, |j| self.probe(j))
+                            - removed_cov;
+                        delta += self.scale * est;
+                    }
+                    if delta < -1e-9 && best.as_ref().is_none_or(|b| delta < b.0) {
+                        let added: Vec<Jump> =
+                            [joined, into, out_of].into_iter().flatten().collect();
+                        best = Some((delta, (rev, seam), added));
+                    }
+                }
+                let Some((_, (rev, seam), added)) = best else {
+                    continue;
+                };
+                let mv = Move::Relocate { i, a, rev, seam };
+                if !self.precedence.is_empty() && !self.respects(&mv) {
+                    continue;
+                }
+                let removed = removed_i.iter().copied().chain(removed_a).collect();
+                out.push(Candidate { mv, removed, added });
+            }
+        }
+        out
+    }
+
+    /// 2-opt moves reversing a run that starts at position `first` (`first == 0` reverses
+    /// a prefix, which is how the first path can move when no start point is assumed) and
+    /// ends at a spatial neighbour of its first node, in scan order.
+    fn reversals(&self, first: usize) -> Vec<Candidate> {
+        let (seq, nodes) = (self.seq, self.obj.nodes);
+        let uses_raster = self.obj.uses_raster();
+        let n_next = seq.order[first];
+        let a_end = self.end_at(first as i64 - 1);
+        let run_first_s = seq.start(nodes, first);
+        let in_jump: Option<Jump> = a_end.map(|p| (p, run_first_s));
+        let in_len = in_jump.as_ref().map_or(0.0, jump_len);
+        let in_cov = in_jump.as_ref().map_or(0.0, |j| self.probe(j));
+        let mut out = Vec::new();
+        for &nb in &self.neighbours[n_next] {
+            let j = self.pos[nb];
+            if j <= first {
+                continue;
+            }
+            let b_start = self.start_at(j + 1);
+            let run_last_e = seq.end(nodes, j);
+            let out_jump: Option<Jump> = b_start.map(|p| (run_last_e, p));
+            // Reversed run: enter at the old end of node j, leave from the old start of
+            // the first node.
+            let new_in: Option<Jump> = a_end.map(|p| (p, run_last_e));
+            let new_out: Option<Jump> = b_start.map(|p| (run_first_s, p));
+            let removed_len = in_len + out_jump.as_ref().map_or(0.0, jump_len);
+            let len_delta = new_in.as_ref().map_or(0.0, jump_len)
+                + new_out.as_ref().map_or(0.0, jump_len)
+                - removed_len;
+            let removed_cov = in_cov + out_jump.as_ref().map_or(0.0, |jp| self.probe(jp));
+            if len_delta - self.scale * removed_cov >= -1e-9 {
+                continue;
+            }
+            let mut delta = len_delta;
+            if uses_raster {
+                let est = new_in.as_ref().map_or(0.0, |jp| self.probe(jp))
+                    + new_out.as_ref().map_or(0.0, |jp| self.probe(jp))
+                    - removed_cov;
+                delta += self.scale * est;
+            }
+            if delta >= -1e-9 {
+                continue;
+            }
+            let mv = Move::Reverse { first, last: j };
+            if !self.precedence.is_empty() && !self.respects(&mv) {
+                continue;
+            }
+            out.push(Candidate {
+                mv,
+                removed: [in_jump, out_jump].into_iter().flatten().collect(),
+                added: [new_in, new_out].into_iter().flatten().collect(),
+            });
+        }
+        out
+    }
+}
+
+/// Apply `c` if it pays off. With a bleed penalty the candidate's estimate treated its
+/// jumps' footprints as independent: the exact change is taken on the raster, and the
+/// raster restored if the move does not pay.
+fn try_apply(seq: &mut Seq, obj: &mut Objective<'_>, c: &Candidate, scale: f64) -> bool {
+    if obj.uses_raster() {
+        let r = obj.raster.as_mut().expect("uses_raster");
+        let mut exact = 0.0;
+        for (x, y) in &c.removed {
+            exact += r.remove(*x, *y);
+        }
+        for (x, y) in &c.added {
+            exact += r.add(*x, *y);
+        }
+        let len_delta: f64 =
+            c.added.iter().map(jump_len).sum::<f64>() - c.removed.iter().map(jump_len).sum::<f64>();
+        if len_delta + scale * exact >= -1e-9 {
+            for (x, y) in &c.added {
+                r.remove(*x, *y);
+            }
+            for (x, y) in &c.removed {
+                r.add(*x, *y);
+            }
+            return false;
+        }
+    }
+    c.mv.apply(seq, obj.nodes);
+    true
+}
+
 /// Local search with or-opt (relocate one path, re-choosing its orientation or seam) and
 /// 2-opt (reverse a run) moves, candidates limited to spatial neighbours, evaluated by the
 /// delta of the affected jumps only. Precedence is checked before a move is applied.
+///
+/// Each sweep applies the first move, in scan order, that pays off. Positions are scanned
+/// in parallel blocks against the unchanged sequence and the candidates offered in scan
+/// order, so the result is that of a sequential scan whatever the number of threads.
 fn improve(seq: &mut Seq, obj: &mut Objective<'_>, precedence: &[(usize, usize)], max_sweeps: u32) {
     let m = seq.order.len();
     if m < 3 {
@@ -902,266 +1243,65 @@ fn improve(seq: &mut Seq, obj: &mut Objective<'_>, precedence: &[(usize, usize)]
     for (i, c) in centres.iter().enumerate() {
         grid.insert(i, *c);
     }
-    let neighbours: Vec<Vec<usize>> = (0..nodes.len())
-        .map(|i| {
-            grid.k_nearest(centres[i], NEIGHBOURS, Some(i))
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect()
-        })
-        .collect();
-    let has_precedence = !precedence.is_empty();
+    let neighbours: Vec<Vec<usize>> = crate::par::map((0..nodes.len()).collect(), |i| {
+        grid.k_nearest(centres[i], NEIGHBOURS, Some(i))
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect()
+    });
     // Make the raster reflect the current sequence.
     let _ = obj.total(seq);
     let scale = obj.bleed_scale() * obj.bleed_weight;
+    // A sequential scan stops at the first move; a parallel one also evaluates the rest of
+    // its block, which is the price of the parallelism.
+    let threads = crate::par::threads();
+    let block = if threads > 1 { 64 * threads } else { 1 };
 
     let mut pos: Vec<usize> = vec![0; nodes.len()];
-    for sweep in 0..max_sweeps {
+    for _ in 0..max_sweeps {
         if crate::cancel::cancelled() {
             return;
         }
-        let mut improved = false;
         for (k, &n) in seq.order.iter().enumerate() {
             pos[n] = k;
         }
-        // Points before/after a position in the current sequence.
-        let (start_pt, end_pt) = (obj.start, obj.end);
-        let end_at = |seq: &Seq, k: i64| -> Option<Point> {
-            if k < 0 {
-                start_pt
-            } else {
-                Some(seq.end(nodes, k as usize))
-            }
-        };
-        let start_at = |seq: &Seq, k: usize| -> Option<Point> {
-            if k >= m {
-                end_pt
-            } else {
-                Some(seq.start(nodes, k))
-            }
-        };
-        // Coverage probe (protected cells of a jump's footprint), or 0 without a raster.
-        let probe = |obj: &mut Objective<'_>, j: &Jump| -> f64 {
-            match (&mut obj.raster, obj.bleed_weight > 0.0) {
-                (Some(r), true) => r.probe(j.0, j.1),
-                _ => 0.0,
-            }
-        };
-        let jl = |j: &Jump| dist(j.0, j.1);
-        let uses_raster = obj.uses_raster();
-
-        // ---- or-opt: move the node at position i to just after position a.
-        'outer: for i in 0..m {
-            let n = seq.order[i];
-            let nd = &nodes[n];
-            let prev_i = end_at(seq, i as i64 - 1);
-            let next_i = start_at(seq, i + 1);
-            let cur_s = seq.start(nodes, i);
-            let cur_e = seq.end(nodes, i);
-            // Jumps around i that disappear when it moves, and the one that joins the gap.
-            let removed_i: Vec<Jump> = [(prev_i, Some(cur_s)), (Some(cur_e), next_i)]
-                .into_iter()
-                .filter_map(|(x, y)| Some((x?, y?)))
-                .collect();
-            let joined: Option<Jump> = prev_i.zip(next_i);
-            let len_removed_i: f64 = removed_i.iter().map(jl).sum();
-            let cov_removed_i: f64 = removed_i.iter().map(|j| probe(obj, j)).sum();
-            let len_joined = joined.as_ref().map_or(0.0, jl);
-            let cov_joined = joined.as_ref().map_or(0.0, |j| probe(obj, j));
-            for &nb in &neighbours[n] {
-                let j = pos[nb] as i64;
-                for a in [j, j - 1] {
-                    if a == i as i64 || a == i as i64 - 1 || a < -1 || a >= m as i64 {
-                        continue;
-                    }
-                    let a_end = end_at(seq, a);
-                    let after_a = if (a + 1) as usize == i {
-                        start_at(seq, i + 1)
-                    } else {
-                        start_at(seq, (a + 1) as usize)
+        // Or-opt over every position, then (if none paid) 2-opt over every run start.
+        let mut improved = false;
+        for reverse in [false, true] {
+            let positions = if reverse { m - 1 } else { m };
+            let mut from = 0;
+            while from < positions && !improved {
+                let to = (from + block).min(positions);
+                let found = {
+                    let scan = Scan {
+                        seq,
+                        obj,
+                        pos: &pos,
+                        neighbours: &neighbours,
+                        precedence,
+                        scale,
                     };
-                    let removed_a: Option<Jump> = a_end.zip(after_a);
-                    let removed_len = len_removed_i + removed_a.as_ref().map_or(0.0, jl);
-                    let removed_cov =
-                        cov_removed_i + removed_a.as_ref().map_or(0.0, |j| probe(obj, j));
-                    // Orientation / seam candidates of the moved node in its new slot.
-                    let candidates: Vec<(bool, usize)> = if nd.closed {
-                        let mut v = Vec::new();
-                        if let Some(p) = a_end {
-                            v.push((false, nearest_vertex(nd, p)));
+                    crate::par::map((from..to).collect(), |k| {
+                        if reverse {
+                            scan.reversals(k)
+                        } else {
+                            scan.relocations(k)
                         }
-                        if let Some(p) = after_a {
-                            v.push((false, nearest_vertex(nd, p)));
-                        }
-                        if v.is_empty() {
-                            v.push((false, seq.seam[n]));
-                        }
-                        v
-                    } else {
-                        vec![(false, 0), (true, 0)]
-                    };
-                    let mut best: Option<(f64, (bool, usize), Vec<Jump>)> = None;
-                    for (rev, seam) in candidates {
-                        let ns = nd.start(rev, seam);
-                        let ne = nd.end(rev, seam);
-                        let into: Option<Jump> = a_end.map(|p| (p, ns));
-                        let out_of: Option<Jump> = after_a.map(|p| (ne, p));
-                        let len_delta = len_joined
-                            + into.as_ref().map_or(0.0, jl)
-                            + out_of.as_ref().map_or(0.0, jl)
-                            - removed_len;
-                        // The bleed term can gain at most what the removed jumps covered.
-                        if len_delta - scale * (removed_cov - cov_joined).max(0.0) >= -1e-9 {
-                            continue;
-                        }
-                        let mut delta = len_delta;
-                        if uses_raster {
-                            let est = cov_joined
-                                + into.as_ref().map_or(0.0, |j| probe(obj, j))
-                                + out_of.as_ref().map_or(0.0, |j| probe(obj, j))
-                                - removed_cov;
-                            delta += scale * est;
-                        }
-                        if delta < -1e-9 && best.as_ref().is_none_or(|b| delta < b.0) {
-                            let added: Vec<Jump> =
-                                [joined, into, out_of].into_iter().flatten().collect();
-                            best = Some((delta, (rev, seam), added));
-                        }
-                    }
-                    let Some((_, (rev, seam), added)) = best else {
-                        continue;
-                    };
-                    let removed: Vec<Jump> = removed_i.iter().copied().chain(removed_a).collect();
-                    // Build the candidate order and check constraints.
-                    let mut order = seq.order.clone();
-                    let node = order.remove(i);
-                    let mut at = (a + 1) as usize;
-                    if a >= 0 && a as usize >= i {
-                        at -= 1;
-                    }
-                    order.insert(at.min(order.len()), node);
-                    let cand = Seq {
-                        order,
-                        reversed: seq.reversed.clone(),
-                        seam: seq.seam.clone(),
-                    };
-                    if has_precedence && !cand.respects(precedence) {
-                        continue;
-                    }
-                    // Exact bleed delta on the raster; revert if it does not pay off.
-                    if uses_raster {
-                        let r = obj.raster.as_mut().unwrap();
-                        let mut exact = 0.0;
-                        for (x, y) in &removed {
-                            exact += r.remove(*x, *y);
-                        }
-                        for (x, y) in &added {
-                            exact += r.add(*x, *y);
-                        }
-                        let len_delta: f64 =
-                            added.iter().map(jl).sum::<f64>() - removed.iter().map(jl).sum::<f64>();
-                        if len_delta + scale * exact >= -1e-9 {
-                            for (x, y) in &added {
-                                r.remove(*x, *y);
-                            }
-                            for (x, y) in &removed {
-                                r.add(*x, *y);
-                            }
-                            continue;
-                        }
-                    }
-                    *seq = cand;
-                    seq.reversed[n] = rev;
-                    seq.seam[n] = seam;
-                    improved = true;
-                    break 'outer;
-                }
+                    })
+                };
+                improved = found
+                    .iter()
+                    .flatten()
+                    .any(|c| try_apply(seq, obj, c, scale));
+                from = to;
             }
-        }
-        if improved {
-            continue;
-        }
-        // ---- 2-opt: reverse the run (i+1 ..= j); i = -1 reverses a prefix, which is how
-        // the first path can move when no start point is assumed.
-        'outer2: for i in -1i64..(m as i64 - 1) {
-            let first = (i + 1) as usize;
-            let n_next = seq.order[first];
-            let a_end = end_at(seq, i);
-            let run_first_s = seq.start(nodes, first);
-            let in_jump: Option<Jump> = a_end.map(|p| (p, run_first_s));
-            let in_len = in_jump.as_ref().map_or(0.0, jl);
-            let in_cov = in_jump.as_ref().map_or(0.0, |j| probe(obj, j));
-            for &nb in &neighbours[n_next] {
-                let j = pos[nb];
-                if j <= first {
-                    continue;
-                }
-                let b_start = start_at(seq, j + 1);
-                let run_last_e = seq.end(nodes, j);
-                let out_jump: Option<Jump> = b_start.map(|p| (run_last_e, p));
-                // Reversed run: enter at the old end of node j, leave from the old start of
-                // the first node.
-                let new_in: Option<Jump> = a_end.map(|p| (p, run_last_e));
-                let new_out: Option<Jump> = b_start.map(|p| (run_first_s, p));
-                let removed_len = in_len + out_jump.as_ref().map_or(0.0, jl);
-                let len_delta = new_in.as_ref().map_or(0.0, jl) + new_out.as_ref().map_or(0.0, jl)
-                    - removed_len;
-                let removed_cov = in_cov + out_jump.as_ref().map_or(0.0, |jp| probe(obj, jp));
-                if len_delta - scale * removed_cov >= -1e-9 {
-                    continue;
-                }
-                let mut delta = len_delta;
-                if uses_raster {
-                    let est = new_in.as_ref().map_or(0.0, |jp| probe(obj, jp))
-                        + new_out.as_ref().map_or(0.0, |jp| probe(obj, jp))
-                        - removed_cov;
-                    delta += scale * est;
-                }
-                if delta >= -1e-9 {
-                    continue;
-                }
-                let mut cand = seq.clone();
-                cand.order[first..=j].reverse();
-                for &nn in &cand.order[first..=j] {
-                    if !nodes[nn].closed {
-                        cand.reversed[nn] = !cand.reversed[nn];
-                    }
-                }
-                if has_precedence && !cand.respects(precedence) {
-                    continue;
-                }
-                let removed: Vec<Jump> = [in_jump, out_jump].into_iter().flatten().collect();
-                let added: Vec<Jump> = [new_in, new_out].into_iter().flatten().collect();
-                if uses_raster {
-                    let r = obj.raster.as_mut().unwrap();
-                    let mut exact = 0.0;
-                    for (x, y) in &removed {
-                        exact += r.remove(*x, *y);
-                    }
-                    for (x, y) in &added {
-                        exact += r.add(*x, *y);
-                    }
-                    let len_delta: f64 =
-                        added.iter().map(jl).sum::<f64>() - removed.iter().map(jl).sum::<f64>();
-                    if len_delta + scale * exact >= -1e-9 {
-                        for (x, y) in &added {
-                            r.remove(*x, *y);
-                        }
-                        for (x, y) in &removed {
-                            r.add(*x, *y);
-                        }
-                        continue;
-                    }
-                }
-                *seq = cand;
-                improved = true;
-                break 'outer2;
+            if improved {
+                break;
             }
         }
         if !improved {
             break;
         }
-        let _ = sweep;
     }
 }
 
@@ -1170,16 +1310,17 @@ fn stats_of(seq: &Seq, obj: &mut Objective<'_>, crossings_cap: usize) -> Stats {
     let jumps = seq.jumps(nodes, obj.start, obj.end);
     let objective = obj.total(seq);
     let lengths: Vec<f64> = jumps.iter().map(|(a, b)| dist(*a, *b)).collect();
-    let mut crossings = 0usize;
-    if jumps.len() <= crossings_cap {
-        for i in 0..jumps.len() {
-            for j in i + 2..jumps.len() {
-                if segments_cross(jumps[i].0, jumps[i].1, jumps[j].0, jumps[j].1) {
-                    crossings += 1;
-                }
-            }
-        }
-    }
+    let crossings = if jumps.len() <= crossings_cap {
+        crate::par::map((0..jumps.len()).collect(), |i| {
+            (i + 2..jumps.len())
+                .filter(|&j| segments_cross(jumps[i].0, jumps[i].1, jumps[j].0, jumps[j].1))
+                .count()
+        })
+        .into_iter()
+        .sum()
+    } else {
+        0
+    };
     let (covered, overlap, peak) = match &obj.raster {
         Some(r) if r.has_mask() => {
             let (c, o, p) = r.protected_stats();
@@ -1257,9 +1398,9 @@ pub fn plan(
         OptimizerMode::AsGenerated => generated,
         OptimizerMode::MinimumJump | OptimizerMode::BleedAware => {
             let mut s = construct(&nodes, &precedence, start);
-            polish(&mut s, &mut obj);
+            polish(&mut s, &obj);
             improve(&mut s, &mut obj, &precedence, settings.max_sweeps);
-            polish(&mut s, &mut obj);
+            polish(&mut s, &obj);
             s
         }
     };
@@ -1618,5 +1759,71 @@ mod tests {
             (sq2 - 4.0 * sq).abs() < 1e-9,
             "squared coverage quadruples when two jumps stack"
         );
+    }
+
+    proptest::proptest! {
+        /// The row scan visits exactly the cells whose centre lies within the footprint,
+        /// once each, for jumps of any length and direction, also partly off the raster;
+        /// stamping in bands gives the counts and squared sum that adding jump by jump does.
+        #[test]
+        fn capsule_cells_match_a_brute_force_scan(
+            jumps in proptest::collection::vec((-1.0f64..6.0, -1.0f64..5.0, -1.0f64..6.0, -1.0f64..5.0), 1..12),
+            cell in 0.02f64..0.3,
+            footprint in 0.0f64..0.8,
+        ) {
+            let bounds = BBox { min: Point::new(0.0, 0.0), max: Point::new(5.0, 4.0) };
+            let protected = Region::from_loops(
+                [rect(Point::new(1.0, 1.0), Point::new(4.0, 3.0))],
+                LoopRule::NonZero,
+            );
+            let mut r = Raster::new(bounds, cell, footprint, Some(&protected));
+            let jumps: Vec<Jump> = jumps
+                .into_iter()
+                .map(|(ax, ay, bx, by)| (Point::new(ax, ay), Point::new(bx, by)))
+                .collect();
+            let mut sq = 0.0;
+            for &(a, b) in &jumps {
+                let mut seen = Vec::new();
+                r.cells(a, b, |i| seen.push(i));
+                let mut expect = Vec::new();
+                for iy in 0..r.height {
+                    for ix in 0..r.width {
+                        if seg_dist(r.centre(ix, iy), a, b) <= r.footprint_r {
+                            expect.push(iy * r.width + ix);
+                        }
+                    }
+                }
+                seen.sort_unstable();
+                proptest::prop_assert_eq!(seen, expect);
+                sq += r.add(a, b);
+            }
+            let added = r.counts.clone();
+            let stamped = r.stamp_all(&jumps);
+            proptest::prop_assert_eq!(&r.counts, &added);
+            proptest::prop_assert_eq!(stamped, sq);
+        }
+
+        /// `Move::moved` predicts where `Move::apply` puts every node.
+        #[test]
+        fn moves_predict_their_positions(m in 3usize..30, x in 0usize..1000, y in 0usize..1000, reverse: bool) {
+            let nodes: Vec<Node> = (0..m)
+                .map(|k| Node { pass: 0, index: k, closed: k % 2 == 0, verts: vec![Point::new(k as f64, 0.0), Point::new(k as f64, 1.0)] })
+                .collect();
+            let mut seq = Seq { order: (0..m).rev().collect(), reversed: vec![false; m], seam: vec![0; m] };
+            let mv = if reverse {
+                let first = x % (m - 1);
+                Move::Reverse { first, last: first + 1 + y % (m - 1 - first) }
+            } else {
+                let i = x % m;
+                let a = (y % (m + 1)) as i64 - 1;
+                proptest::prop_assume!(a != i as i64 && a != i as i64 - 1);
+                Move::Relocate { i, a, rev: true, seam: 1 }
+            };
+            let before = seq.order.clone();
+            mv.apply(&mut seq, &nodes);
+            for (k, n) in before.iter().enumerate() {
+                proptest::prop_assert_eq!(seq.order[mv.moved(k, m)], *n);
+            }
+        }
     }
 }

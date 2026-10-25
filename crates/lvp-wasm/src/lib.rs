@@ -9,6 +9,10 @@
 //! `wasm-bindgen-rayon`: the host must `await initThreadPool(n)` once before calling anything
 //! that may run in parallel.
 
+// `memory.atomic.wait32` / `notify` for the allocator's lock (the toolchain is nightly anyway
+// for build-std).
+#![cfg_attr(target_arch = "wasm32", feature(stdarch_wasm_atomic_wait))]
+
 use std::cell::RefCell;
 
 use lvp_core::model::{GroupId, LayerId, PassId};
@@ -18,6 +22,16 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_bindgen_rayon::init_thread_pool;
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+mod alloc;
+
+/// Small blocks cached per thread in front of a heap whose lock sleeps: std's wasm allocator
+/// spins on one lock, which starves with many threads (see [`alloc`]).
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static ALLOCATOR: alloc::SlotAllocator<alloc::SharedHeap> =
+    alloc::SlotAllocator::new(alloc::SharedHeap::new());
 
 /// Panic messages go to the worker console instead of a bare `unreachable` trap.
 #[cfg(target_arch = "wasm32")]

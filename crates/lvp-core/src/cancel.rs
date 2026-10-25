@@ -94,10 +94,10 @@ pub fn step(fraction: f64) {
     CONTROL.done.fetch_max(at, Ordering::Relaxed);
 }
 
-/// The current step is complete; the next one starts.
+/// The current step is complete; the next one starts. Safe to call from several threads
+/// (steps that run concurrently each complete once).
 pub fn next_step() {
-    let base = STEP_BASE.load(Ordering::Relaxed) + STEP;
-    STEP_BASE.store(base, Ordering::Relaxed);
+    let base = STEP_BASE.fetch_add(STEP, Ordering::Relaxed) + STEP;
     CONTROL.done.fetch_max(base, Ordering::Relaxed);
 }
 

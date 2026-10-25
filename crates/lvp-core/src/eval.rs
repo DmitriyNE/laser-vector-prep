@@ -12,6 +12,7 @@ use crate::diag::{Diagnostic, Severity};
 use crate::geom::{self, BBox, Point};
 use crate::model::*;
 use crate::order::{self, GroupPlan, PassPaths};
+use crate::par;
 use crate::patterns::{self, Geometry};
 use crate::pline::{self, Pline};
 use crate::profile;
@@ -286,6 +287,41 @@ fn hash_json<T: serde::Serialize>(h: &mut DefaultHasher, v: &T) {
     serde_json::to_string(v).unwrap_or_default().hash(h);
 }
 
+/// `order` (a dependency order) in waves: each layer's inputs are in earlier waves.
+fn waves<'a>(profile: &Profile, order: &'a [LayerId]) -> Vec<Vec<&'a LayerId>> {
+    let mut level: HashMap<&LayerId, usize> = HashMap::new();
+    let mut waves: Vec<Vec<&LayerId>> = Vec::new();
+    for id in order {
+        let layer = profile.layer(id).expect("ordered layer exists");
+        let l = layer
+            .inputs
+            .iter()
+            .chain(&layer.operands)
+            .filter_map(|op| match op {
+                Operand::Layer(dep) => level.get(dep).map(|l| l + 1),
+                Operand::Source(_) => None,
+            })
+            .max()
+            .unwrap_or(0);
+        level.insert(id, l);
+        if waves.len() <= l {
+            waves.resize_with(l + 1, Vec::new);
+        }
+        waves[l].push(id);
+    }
+    waves
+}
+
+/// `f()`, or `None` if the computation is cancelled before or during it: work stopped
+/// early is partial and must not be cached.
+fn unless_cancelled<R>(f: impl FnOnce() -> R) -> Option<R> {
+    if cancel::cancelled() {
+        return None;
+    }
+    let r = f();
+    (!cancel::cancelled()).then_some(r)
+}
+
 impl Evaluator {
     pub fn new() -> Self {
         Self::default()
@@ -363,43 +399,72 @@ impl Evaluator {
             .sum::<usize>();
         cancel::steps((order.len() + passes + profile.output_groups.len()) as u32);
 
-        for id in &order {
-            let layer = profile.layer(id).expect("ordered layer exists");
-            let fp = self.layer_fingerprint(layer, sources, &bindings, &ev.layers);
-            if let Some((cfp, geom, diags)) = self.layer_cache.get(id)
-                && *cfp == fp
-            {
-                ev.layers.insert(
-                    id.clone(),
-                    LayerResult {
-                        geometry: geom.clone(),
-                        diagnostics: diags.clone(),
-                        fingerprint: fp,
-                        cached: true,
-                    },
-                );
-                cancel::next_step();
-                continue;
+        // Layers in dependency waves: a wave's layers depend only on earlier waves and are
+        // composited concurrently.
+        for wave in waves(profile, &order) {
+            let mut todo = Vec::new();
+            for id in wave {
+                let layer = profile.layer(id).expect("ordered layer exists");
+                let fp = self.layer_fingerprint(layer, sources, &bindings, &ev.layers);
+                match self.layer_cache.get(id) {
+                    Some((cfp, geom, diags)) if *cfp == fp => {
+                        ev.layers.insert(
+                            id.clone(),
+                            LayerResult {
+                                geometry: geom.clone(),
+                                diagnostics: diags.clone(),
+                                fingerprint: fp,
+                                cached: true,
+                            },
+                        );
+                        cancel::next_step();
+                    }
+                    _ => todo.push((layer, fp)),
+                }
             }
             cancel::check()?;
-            let (geometry, diagnostics) =
-                compute_layer(layer, profile, sources, &bindings, &ev.layers);
-            cancel::check()?;
-            cancel::next_step();
-            self.layer_cache
-                .insert(id.clone(), (fp, geometry.clone(), diagnostics.clone()));
-            ev.layers.insert(
-                id.clone(),
-                LayerResult {
-                    geometry,
-                    diagnostics,
-                    fingerprint: fp,
-                    cached: false,
-                },
-            );
+            let done = &ev.layers;
+            let computed = par::map(todo, |(layer, fp)| {
+                let r =
+                    unless_cancelled(|| compute_layer(layer, profile, sources, &bindings, done))?;
+                cancel::next_step();
+                Some((layer.id.clone(), fp, r))
+            });
+            let mut stopped = false;
+            for r in computed {
+                let Some((id, fp, (geometry, diagnostics))) = r else {
+                    stopped = true;
+                    continue;
+                };
+                self.layer_cache
+                    .insert(id.clone(), (fp, geometry.clone(), diagnostics.clone()));
+                ev.layers.insert(
+                    id,
+                    LayerResult {
+                        geometry,
+                        diagnostics,
+                        fingerprint: fp,
+                        cached: false,
+                    },
+                );
+            }
+            if stopped {
+                return Err(Cancelled);
+            }
         }
         ev.order = order;
 
+        // Passes, each with its coverage audit, concurrently.
+        struct Job<'a> {
+            layer: &'a LayerId,
+            pass: &'a Pass,
+            geometry: &'a Geometry,
+            fp: u64,
+            cached: Option<CachedPass>,
+            /// Audit width, its fingerprint and the cached audit.
+            audit: Option<(f64, u64, Option<patterns::Audit>)>,
+        }
+        let mut jobs = Vec::new();
         for layer in profile
             .working_layers
             .iter()
@@ -413,63 +478,101 @@ impl Evaluator {
                 hash_json(&mut h, &pass.pattern);
                 lr.fingerprint.hash(&mut h);
                 let fp = h.finish();
-                let (paths, diagnostics, precedence, cached) = match self.pass_cache.get(&pass.id) {
-                    Some((cfp, paths, diags, prec)) if *cfp == fp => {
-                        (paths.clone(), diags.clone(), prec.clone(), true)
-                    }
-                    _ => {
-                        cancel::check()?;
-                        let out = patterns::generate(&pass.pattern, &lr.geometry);
-                        cancel::check()?;
-                        self.pass_cache.insert(
-                            pass.id.clone(),
-                            (
-                                fp,
-                                out.paths.clone(),
-                                out.diagnostics.clone(),
-                                out.precedence.clone(),
-                            ),
-                        );
-                        (out.paths, out.diagnostics, out.precedence, false)
-                    }
-                };
-                let audit_width = profile
+                let cached = self.pass_cache.get(&pass.id).filter(|c| c.0 == fp).cloned();
+                let audit = profile
                     .group(&pass.group)
                     .and_then(|g| g.audit_width_mm)
-                    .filter(|w| *w > 0.0 && w.is_finite());
-                let audit = match (&lr.geometry, audit_width) {
-                    (Geometry::Region(region), Some(w)) => {
+                    .filter(|w| {
+                        *w > 0.0 && w.is_finite() && matches!(lr.geometry, Geometry::Region(_))
+                    })
+                    .map(|w| {
                         let mut h = DefaultHasher::new();
                         fp.hash(&mut h);
                         w.to_bits().hash(&mut h);
                         let afp = h.finish();
-                        match self.audit_cache.get(&pass.id) {
-                            Some((cfp, a)) if *cfp == afp => Some(a.clone()),
-                            _ => {
-                                cancel::check()?;
-                                let a = patterns::audit(region, &paths, w);
-                                cancel::check()?;
-                                self.audit_cache.insert(pass.id.clone(), (afp, a.clone()));
-                                Some(a)
-                            }
-                        }
-                    }
-                    _ => None,
-                };
-                cancel::next_step();
-                ev.passes.push((
-                    pass.id.clone(),
-                    PassResult {
-                        layer: layer.id.clone(),
-                        group: pass.group.clone(),
-                        paths,
-                        diagnostics,
-                        precedence,
-                        cached,
-                        audit,
-                    },
-                ));
+                        let cached = self
+                            .audit_cache
+                            .get(&pass.id)
+                            .filter(|c| c.0 == afp)
+                            .map(|c| c.1.clone());
+                        (w, afp, cached)
+                    });
+                jobs.push(Job {
+                    layer: &layer.id,
+                    pass,
+                    geometry: &lr.geometry,
+                    fp,
+                    cached,
+                    audit,
+                });
             }
+        }
+        let computed = par::map(jobs, |job| {
+            let generated = match job.cached {
+                Some((_, paths, diagnostics, precedence)) => {
+                    Some((true, paths, diagnostics, precedence))
+                }
+                None => unless_cancelled(|| patterns::generate(&job.pass.pattern, job.geometry))
+                    .map(|out| (false, out.paths, out.diagnostics, out.precedence)),
+            };
+            // `Some(None)`: an audit was wanted but cancelled.
+            let audit = match (&generated, job.geometry, &job.audit) {
+                (Some((_, paths, ..)), Geometry::Region(region), Some((w, afp, cached))) => {
+                    Some(match cached {
+                        Some(a) => Some((*afp, a.clone(), true)),
+                        None => unless_cancelled(|| patterns::audit(region, paths, *w))
+                            .map(|a| (*afp, a, false)),
+                    })
+                }
+                _ => None,
+            };
+            if generated.is_some() && !matches!(audit, Some(None)) {
+                cancel::next_step();
+            }
+            (job.layer, job.pass, job.fp, generated, audit)
+        });
+        // Whatever completed is cached, even if the evaluation stopped meanwhile.
+        let mut stopped = false;
+        for (layer, pass, fp, generated, audit) in computed {
+            let Some((cached, paths, diagnostics, precedence)) = generated else {
+                stopped = true;
+                continue;
+            };
+            let id = &pass.id;
+            if !cached {
+                self.pass_cache.insert(
+                    id.clone(),
+                    (fp, paths.clone(), diagnostics.clone(), precedence.clone()),
+                );
+            }
+            let audit = match audit {
+                Some(Some((afp, a, cached))) => {
+                    if !cached {
+                        self.audit_cache.insert(id.clone(), (afp, a.clone()));
+                    }
+                    Some(a)
+                }
+                Some(None) => {
+                    stopped = true;
+                    continue;
+                }
+                None => None,
+            };
+            ev.passes.push((
+                id.clone(),
+                PassResult {
+                    layer: layer.clone(),
+                    group: pass.group.clone(),
+                    paths,
+                    diagnostics,
+                    precedence,
+                    cached,
+                    audit,
+                },
+            ));
+        }
+        if stopped {
+            return Err(Cancelled);
         }
         ev.bindings = bindings;
         ev.unbound_layers = unbound;
@@ -478,11 +581,12 @@ impl Evaluator {
     }
 
     /// Plan the path order of every output group (spec §7), cached per group on the
-    /// geometry of its passes, the settings and the protected regions.
+    /// geometry of its passes, the settings and the protected regions. Groups are planned
+    /// concurrently.
     fn plan_groups(&mut self, profile: &Profile, ev: &mut Evaluation) -> Result<(), Cancelled> {
         let settings = &profile.optimizer;
         // Protected region: union of the configured layers' regions, with a fingerprint.
-        let mut protected: Option<Region> = None;
+        let mut protected = Vec::new();
         let mut protected_fp = DefaultHasher::new();
         for id in &settings.protected {
             match ev.layers.get(id) {
@@ -491,10 +595,7 @@ impl Evaluator {
                     if let Geometry::Region(r) = &lr.geometry
                         && !r.is_empty()
                     {
-                        protected = Some(match protected.take() {
-                            Some(acc) => acc.union(r),
-                            None => r.clone(),
-                        });
+                        protected.push(r.clone());
                     }
                 }
                 None => {
@@ -505,33 +606,59 @@ impl Evaluator {
                 }
             }
         }
+        let protected = (!protected.is_empty()).then(|| Region::union_all(protected));
         let protected_fp = protected_fp.finish();
-        let mut plans = Vec::new();
-        for group in &profile.output_groups {
-            let passes: Vec<PassPaths<'_>> = ev
-                .passes
-                .iter()
-                .filter(|(_, r)| r.group == group.id)
-                .map(|(id, r)| PassPaths {
-                    id: id.clone(),
-                    paths: &r.paths,
-                    precedence: &r.precedence,
-                })
-                .collect();
-            let mode = group.order_mode.unwrap_or(settings.mode);
-            let fp = order::fingerprint(&passes, mode, settings, protected_fp);
-            let plan = match self.plan_cache.get(&group.id) {
-                Some((cfp, plan)) if *cfp == fp => plan.clone(),
-                _ => {
-                    cancel::check()?;
-                    let plan = order::plan(&passes, mode, settings, protected.as_ref());
-                    cancel::check()?;
-                    self.plan_cache.insert(group.id.clone(), (fp, plan.clone()));
-                    plan
+        let jobs: Vec<_> = profile
+            .output_groups
+            .iter()
+            .map(|group| {
+                let passes: Vec<PassPaths<'_>> = ev
+                    .passes
+                    .iter()
+                    .filter(|(_, r)| r.group == group.id)
+                    .map(|(id, r)| PassPaths {
+                        id: id.clone(),
+                        paths: &r.paths,
+                        precedence: &r.precedence,
+                    })
+                    .collect();
+                let mode = group.order_mode.unwrap_or(settings.mode);
+                let fp = order::fingerprint(&passes, mode, settings, protected_fp);
+                let cached = self
+                    .plan_cache
+                    .get(&group.id)
+                    .filter(|c| c.0 == fp)
+                    .map(|c| c.1.clone());
+                (group, passes, mode, fp, cached)
+            })
+            .collect();
+        let computed = par::map(jobs, |(group, passes, mode, fp, cached)| {
+            let plan = match cached {
+                Some(plan) => Some((plan, true)),
+                None => {
+                    unless_cancelled(|| order::plan(&passes, mode, settings, protected.as_ref()))
+                        .map(|plan| (plan, false))
                 }
             };
-            cancel::next_step();
-            plans.push((group.id.clone(), plan));
+            if plan.is_some() {
+                cancel::next_step();
+            }
+            (&group.id, fp, plan)
+        });
+        let mut plans = Vec::new();
+        let mut stopped = false;
+        for (id, fp, plan) in computed {
+            let Some((plan, cached)) = plan else {
+                stopped = true;
+                continue;
+            };
+            if !cached {
+                self.plan_cache.insert(id.clone(), (fp, plan.clone()));
+            }
+            plans.push((id.clone(), plan));
+        }
+        if stopped {
+            return Err(Cancelled);
         }
         ev.groups = plans;
         Ok(())
@@ -602,7 +729,7 @@ fn source_geometry(
         }
         GeometryKind::Region => {
             let mut closed_loops: Vec<Pline> = Vec::new();
-            let mut parts: Vec<Region> = Vec::new();
+            let mut parts: Vec<Part<'_>> = Vec::new();
             let mut open_without_width = 0usize;
             for p in prims {
                 match p {
@@ -613,14 +740,12 @@ fn source_geometry(
                             StrokeWidth::None => None,
                         };
                         match (pline.is_closed(), w) {
-                            (_, Some(w)) if w > 0.0 => parts.push(region::stroke(pline, w)),
+                            (_, Some(w)) if w > 0.0 => parts.push(Part::Stroke(pline, w)),
                             (true, _) => closed_loops.push(pline.clone()),
                             (false, _) => open_without_width += 1,
                         }
                     }
-                    Primitive::Hatch { loops, rule, .. } => {
-                        parts.push(Region::from_loops(loops.iter().cloned(), *rule))
-                    }
+                    Primitive::Hatch { loops, rule, .. } => parts.push(Part::Fill(loops, *rule)),
                 }
             }
             if open_without_width > 0 {
@@ -629,11 +754,7 @@ fn source_geometry(
                     format!("{open_without_width} open path(s) cannot bound a region; set a stroke width or use a linework layer"),
                 ));
             }
-            let mut region = Region::from_loops(closed_loops, interp.loop_rule.into());
-            for part in parts {
-                region = region.union(&part);
-            }
-            Geometry::Region(region)
+            Geometry::Region(compose(closed_loops, interp.loop_rule.into(), parts))
         }
     }
 }
@@ -647,7 +768,7 @@ fn to_region(g: &Geometry, interp: &Interpretation, diags: &mut Vec<Diagnostic>)
             let mut open = 0usize;
             for p in paths {
                 match (p.is_closed(), interp.stroke_width) {
-                    (_, StrokeWidth::Fixed { mm }) if mm > 0.0 => parts.push(region::stroke(p, mm)),
+                    (_, StrokeWidth::Fixed { mm }) if mm > 0.0 => parts.push(Part::Stroke(p, mm)),
                     (true, _) => closed.push(p.clone()),
                     (false, _) => open += 1,
                 }
@@ -658,13 +779,28 @@ fn to_region(g: &Geometry, interp: &Interpretation, diags: &mut Vec<Diagnostic>)
                     format!("{open} open path(s) from a linework input cannot bound a region; set a fixed stroke width"),
                 ));
             }
-            let mut r = Region::from_loops(closed, interp.loop_rule.into());
-            for part in parts {
-                r = r.union(&part);
-            }
-            r
+            compose(closed, interp.loop_rule.into(), parts)
         }
     }
+}
+
+/// A piece of a region layer besides its plain closed loops.
+enum Part<'a> {
+    /// A path stroked with a width.
+    Stroke(&'a Pline, f64),
+    /// Loops filled by their own rule (a hatch, a composited Gerber or PDF fill).
+    Fill(&'a [Pline], LoopRule),
+}
+
+/// The union of `closed` (filled by `rule`) and `parts`: the pieces are built in parallel
+/// and united in one n-ary boolean.
+fn compose(closed: Vec<Pline>, rule: LoopRule, parts: Vec<Part<'_>>) -> Region {
+    let parts = par::map(parts, |part| match part {
+        Part::Stroke(p, w) => region::stroke(p, w),
+        Part::Fill(loops, rule) => Region::from_loops(loops.iter().cloned(), rule),
+    });
+    let base = (!closed.is_empty()).then(|| Region::from_loops(closed, rule));
+    Region::union_all(base.into_iter().chain(parts))
 }
 
 fn compute_layer(
@@ -755,15 +891,15 @@ fn compute_layer(
                 .collect(),
         ),
         GeometryKind::Region => {
-            let union_of = |gs: &[Geometry], diags: &mut Vec<Diagnostic>| {
-                gs.iter()
-                    .map(|g| to_region(g, &layer.interpretation, diags))
-                    .fold(Region::empty(), |acc, r| {
-                        if acc.is_empty() { r } else { acc.union(&r) }
-                    })
+            let mut united = |gs: &[Geometry]| {
+                let regions: Vec<Region> = gs
+                    .iter()
+                    .map(|g| to_region(g, &layer.interpretation, &mut diags))
+                    .collect();
+                Region::union_all(regions)
             };
-            let a = union_of(&group_a, &mut diags);
-            let b = union_of(&group_b, &mut diags);
+            let a = united(&group_a);
+            let b = united(&group_b);
             if layer.op == LayerOp::Subtraction && !b.is_empty() {
                 // Spec: subject geometry outside the domain must be diagnosed, not guessed away.
                 let outside = b.difference(&a);
@@ -834,11 +970,8 @@ fn envelope(
         return Region::empty();
     }
     let union_ref = |diags: &mut Vec<Diagnostic>| {
-        refs.iter()
-            .map(|g| to_region(g, interp, diags))
-            .fold(Region::empty(), |acc, r| {
-                if acc.is_empty() { r } else { acc.union(&r) }
-            })
+        let regions: Vec<Region> = refs.iter().map(|g| to_region(g, interp, diags)).collect();
+        Region::union_all(regions)
     };
     match provider {
         EnvelopeProvider::NamedBoundary => union_ref(diags),

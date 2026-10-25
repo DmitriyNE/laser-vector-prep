@@ -3,6 +3,24 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
+
+Layers, passes, audits and plans now run concurrently and the optimiser's scans use the
+pool (D35), with results identical for any thread count. Before changing the optimiser,
+every plan of the four presets in both modes on 2×2 and 4×4 panels, and of a cutting grid
+with 800 precedence constraints, was hashed; the new code reproduces all of them on one
+and on ten threads. Compositing turned out to be quadratic: each part of a region layer
+was united with everything before it.
+
+Timing the result in Chrome showed the real problem: ten threads took 53 s for an 8×8
+panel, two threads 10 s. std's wasm allocator spins on one lock (DEF-13). The wasm build
+now caches small blocks per thread in front of a heap whose lock sleeps (D36), and the
+panel takes 3.3 s. The browser figure in the M4 notes (2.6 s) predates the coverage
+audit, whose booleans allocate heavily; nobody had timed the panel in a browser since.
+
+Timings this session are rough: another project kept the machine at load averages of 20
+to 260, so old and new builds were always run alternately, side by side.
+
 ## 2026-10-25 — After M4: near-coincident booleans, Nix cache measured
 
 Booleans no longer leave near-coincident boundaries unresolved (D34): the exact boolean
