@@ -16,6 +16,12 @@
   // coi-serviceworker reloads the page once to get there; until then we just wait.
   const isolated = globalThis.crossOriginIsolated === true;
   const store = new ProjectStore();
+  /** The main area's tab. The graph mounts on first use and then stays, like the preview. */
+  let tab: "preview" | "graph" = $state("preview");
+  let graphMounted = $state(false);
+  $effect(() => {
+    if (tab === "graph") graphMounted = true;
+  });
   // Debug and end-to-end test hook: the store is reachable from the console.
   (globalThis as { lvp?: ProjectStore }).lvp = store;
 
@@ -36,7 +42,17 @@
       <LayersPanel {store} />
     </aside>
     <main>
-      <Preview {store} />
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected={tab === "preview"} onclick={() => (tab = "preview")}>Preview</button>
+        <button role="tab" aria-selected={tab === "graph"} onclick={() => (tab = "graph")}>Graph</button>
+      </div>
+      <div class="view" class:hidden={tab !== "preview"}><Preview {store} /></div>
+      {#if graphMounted}
+        <!-- Loaded on first use: the graph library is most of its size. -->
+        <div class="view" class:hidden={tab !== "graph"}>
+          {#await import("./ui/GraphView.svelte") then { default: GraphView }}<GraphView {store} />{/await}
+        </div>
+      {/if}
     </main>
     <aside class="right">
       <PropertiesPanel {store} />
@@ -75,6 +91,36 @@
     grid-area: main;
     min-width: 0;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 2px 4px 0;
+    border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  }
+  .tabs button {
+    border: 1px solid transparent;
+    border-bottom: 0;
+    background: none;
+    color: inherit;
+    padding: 3px 10px;
+    border-radius: 4px 4px 0 0;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+  .tabs button[aria-selected="true"] {
+    border-color: color-mix(in srgb, CanvasText 15%, transparent);
+    background: Canvas;
+    opacity: 1;
+  }
+  .view {
+    flex: 1;
+    min-height: 0;
+  }
+  .view.hidden {
+    display: none;
   }
   .gate {
     padding: 2rem;

@@ -88,7 +88,8 @@ dlmalloc heap whose lock sleeps; std's wasm allocator spins and serialises every
 | `src/core/types.ts` | TypeScript mirror of the serde types. |
 | `src/state/project.svelte.ts` | `ProjectStore`: UI state, editable profile, debounced evaluation with at most one run in flight (a newer edit cancels it), cancel, profile persistence, export. |
 | `src/state/profileStore.ts` | IndexedDB for named profiles and the last-used profile; no drawing bytes. |
-| `src/ui/*.svelte` | Panels from the spec: sources, layers, properties, output groups, profiles bar, export, diagnostics, canvas preview. |
+| `src/state/graph.ts` | The model as a graph (imported layers → slots → working layers → passes → output groups) with each node's status, and its layout: a column per kind of node, layers by dependency depth, ordered within columns by dagre. Pure functions, tested with vitest. |
+| `src/ui/*.svelte` | Panels from the spec: sources, layers, properties, output groups, profiles bar, export, diagnostics, canvas preview; `GraphView` and `GraphNode` draw the graph tab next to the preview with Svelte Flow, loaded on first use. |
 | `sw/coi-serviceworker.js` | Vendored coi-serviceworker, extended to precache the bundle for offline use; emitted by the Vite build with the asset manifest. The page half reloads once the registration is active. |
 | `e2e/`, `playwright.config.ts` | Playwright suite against the production bundle in the installed Chrome: workflow (import, evaluate, export, slots, two operand groups) and service worker + offline; `static-server.mjs` serves `dist/` without isolation headers. |
 

@@ -156,7 +156,7 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       optimizer candidate search; deterministic for any thread count (D35)
 - [ ] Coverage audit: compute both differences (missed and spill) from one intersection
       pass; the audit is now most of a large panel's evaluation
-- [ ] Graph view (Svelte Flow + dagre), tab next to the preview: files/layers → slots →
+- [x] Graph view (Svelte Flow + dagre), tab next to the preview: files/layers → slots →
       working layers → passes → groups with live status; click selects, eyes/solo
 - [ ] Graph editing: connect operands, slot mappings and pass groups; add/delete layers,
       passes, groups, slots; undo/redo for profile edits

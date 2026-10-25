@@ -2,6 +2,7 @@
   import type { Pass, WorkingLayer } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
   import { shortId } from "../util/download.js";
+  import { opLabel, patternLabel, plural } from "../state/labels.js";
   import Eye from "./Eye.svelte";
 
   let { store }: { store: ProjectStore } = $props();
@@ -9,7 +10,6 @@
   const summaryOf = (id: string) => store.evaluation?.layers.find((l) => l.id === id);
   const passSummary = (id: string) => store.evaluation?.passes.find((p) => p.id === id);
   const errors = (ds: { severity: string }[] | undefined) => ds?.filter((d) => d.severity === "error").length ?? 0;
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   function addLayer(kind: "region" | "envelope" = "region") {
     const id = shortId("wl");
@@ -81,50 +81,10 @@
     store.selection = { kind: "none" };
   }
 
-  function patternLabel(p: Pass) {
-    const pt = p.pattern;
-    switch (pt.kind) {
-      case "contourFill":
-        return `contour ${pt.pitchMm} mm${pt.gapFill ? " +gap" : ""}`;
-      case "boundaryTrace":
-        return `trace ${pt.side}${pt.offsetMm ? ` ${pt.offsetMm} mm` : ""}${pt.kerfMm ? ` kerf ${pt.kerfMm}` : ""}${pt.rings > 1 ? ` ×${pt.rings}` : ""}${pt.join && pt.join.kind !== "round" ? ` ${pt.join.kind}` : ""}`;
-      case "hatch":
-        return `hatch ${pt.pitchMm} mm @ ${pt.angleDeg}°`;
-      case "crossHatch":
-        return `crosshatch ${pt.pitchMm} mm @ ${pt.anglesDeg.join("/")}°`;
-      case "boundaryHatch":
-        return `${pt.shells} shell${pt.shells === 1 ? "" : "s"} + hatch ${pt.pitchMm} mm`;
-      default:
-        return "passthrough";
-    }
-  }
-
-  function envelopeLabel(l: WorkingLayer) {
-    const e = l.envelope;
-    if (!e) return "envelope";
-    switch (e.provider) {
-      case "namedBoundary":
-        return "named boundary";
-      case "boundingBox":
-        return `box +${e.marginMm} mm`;
-      case "boundingCircle":
-        return `circle +${e.marginMm} mm`;
-      case "buffer":
-        return `buffer ${e.distanceMm} mm${e.join && e.join.kind !== "round" ? ` ${e.join.kind}` : ""}`;
-      case "convexHull":
-        return `hull +${e.distanceMm} mm${e.join && e.join.kind !== "round" ? ` ${e.join.kind}` : ""}`;
-    }
-  }
-
   function usedBy(id: string) {
     return store.profile.workingLayers
       .filter((l) => [...l.inputs, ...l.operands].some((o) => "layer" in o && o.layer === id))
       .map((l) => l.name);
-  }
-
-  function opLabel(l: WorkingLayer) {
-    if (l.kind === "envelope") return envelopeLabel(l);
-    return l.op === "union" ? "union" : l.op === "intersection" ? "A ∩ B" : l.op === "subtraction" ? "A − B" : "A xor B";
   }
 
   /** Second line of a layer row: kind, operation, flags and who reads it. */

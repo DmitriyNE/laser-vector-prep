@@ -66,7 +66,7 @@
             npmRoot = "web";
             npmDeps = pkgs.fetchNpmDeps {
               src = ./web;
-              hash = "sha256-Xr14VbI9Tyw3ADvoRr7ujeX3M8ClBoXkHLc8u3W4pyk=";
+              hash = "sha256-K84GR2fH7dUrXFQWXaRjj/40u/im+8fPHK89+6QW8L0=";
             };
             nativeBuildInputs = [
               rust

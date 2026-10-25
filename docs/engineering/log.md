@@ -3,6 +3,21 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — After M4: graph view
+
+The main area has a Graph tab next to the preview (D33): imported files with a row per
+layer, slots, working layers with their operand groups A and B, passes and output groups,
+connected as the profile and the bindings connect them, each with its status from the
+latest evaluation. A click selects into the properties panel and the eyes act on the
+preview as in the layer list. Svelte Flow 1.7 draws it; dagre 3.1.1 (pinned to a release
+some months old) orders each column. Letting dagre place everything gave a diagonal
+staircase, because a virtual root pinning the columns dragged long chains of dummy nodes
+through the layout; the columns are now assigned directly and dagre only orders them.
+The graph code is a separate chunk loaded on first use (225 kB, 73 kB gzipped), so the
+page itself grew by 11 kB; the service worker precaches it with the rest for offline use.
+Svelte Flow's own node type `group` brought its own styling, so output groups are nodes of
+type `output`.
+
 ## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
 
 Layers, passes, audits and plans now run concurrently and the optimiser's scans use the
