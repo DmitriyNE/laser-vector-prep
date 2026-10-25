@@ -105,14 +105,14 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 
 - [x] cargo-fuzz targets (six readers + end to end), crasher regressions in `just test`,
       `just fuzz`
-- [ ] Nightly fuzz workflow in CI
+- [x] Nightly fuzz workflow in CI
 - [x] Gerber panic on non-UTF-8 bytes; compositing hang on extreme coordinates (bounded
       grid, out-of-range primitives dropped at import)
-- [ ] Triage the first 10-minute run of every target (crashers in `fuzz/artifacts/`, not
-      committed): Gerber 143 crash / 9 timeout / 1 oom, IPC 28 / 1 timeout, SVG 14 / 3
-      timeouts, PDF 5 / 1 timeout / 1 slow, GDSII 1 oom; DXF and pipeline clean
-- [ ] Expansion budget across readers (DXF INSERT nesting, Gerber SR/AB, GDSII arrays,
-      PDF forms, IPC steps): refuse files that expand past what the browser can hold
+- [x] Triage the first two 10-minute runs of every target: boolean robustness (D30,
+      DEF-5/6/10/11), import work budget and PDF form cycles (D31, DEF-9)
+- [x] Expansion budget across readers (D31)
+- [ ] Booleans: near-coincident edges and arcs whose vertices do not line up can still
+      leave a boundary chain open; reported as a warning (`Region::incomplete`), not fixed
 - [ ] Large inputs: a 4×8 panel of the board takes 4–6 s to evaluate natively against
       20 ms for one board; profile and fix the superlinear stage
 - [ ] Cooperative cancellation and progress (shared-memory flag, rayon stops between

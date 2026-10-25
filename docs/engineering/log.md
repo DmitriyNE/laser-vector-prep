@@ -3,6 +3,28 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: fuzzing
+
+cargo-fuzz targets for the six readers and the import → evaluate → export pipeline, with
+saved crashers replayed by `just test` and a nightly workflow (D29). Two 10-minute runs of
+every target found eleven defects (DEF-5 to DEF-11), most of them in the boolean rather
+than the readers: self-intersecting loops were never split at their own crossings, the
+union of near-duplicate pads could be empty, stacked duplicates made compositing
+quadratic, and non-finite coordinates crashed the kernel's index (D30). The rest were
+unbounded expansion (D31), a Gerber panic on multibyte input and a hang on extreme
+coordinates. The first run produced 189 crashing inputs and 18 timeouts or out-of-memory
+cases; all of them now finish, and the second run found three new inputs, now fixed.
+
+Learned:
+
+- `cargo fuzz` turns on debug assertions for every crate unless given `-O`; the per-crate
+  profile in `fuzz/Cargo.toml` only takes effect with `-O`.
+- The kernel's own position tolerance (10 nm) is the floor for every tolerance around it.
+  A finer join tolerance looked more exact and was the cause of DEF-6.
+- Escalating tolerances and perturbing inputs to rescue inconsistent booleans looked
+  promising and rescued nothing once self-intersections were handled; measuring each
+  rescue against the saved crashers kept the code simpler.
+
 ## 2026-10-25 — Path-order defaults
 
 Bleed-aware by default for the two LDI presets, minimum jump for the rest and for new

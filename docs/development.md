@@ -33,12 +33,13 @@ or prefix each call with `nix develop -c`.
 |---|---|
 | `just build` | One-shot production build: `npm ci`, release wasm + `wasm-opt`, `svelte-check`, Vite build → `web/dist/` |
 | `just dev` | Debug wasm, then Vite dev server with hot reload |
-| `just test` | `cargo test` (unit + property tests, DXF/Gerber/SVG/PDF/GDSII/IPC-2581 fixtures, presets, path order, export round trips, fixture staleness), `svelte-check`, `vitest` driving the real wasm through import → evaluate → export |
+| `just test` | `cargo test` (unit + property tests, DXF/Gerber/SVG/PDF/GDSII/IPC-2581 fixtures, presets, path order, export round trips, fixture staleness, saved fuzz inputs), `svelte-check`, `vitest` driving the real wasm through import → evaluate → export |
 | `just e2e` | Browser end-to-end tests of `web/dist` in the locally installed Chrome (run `just build` first; see below) |
 | `just regression` | Fixture-based `#[ignore]`d tests |
 | `just fixtures` | Regenerate `fixtures/` from `crates/lvp-fixtures` |
 | `just lint` | `rustfmt --check` and `clippy -D warnings` for host and wasm targets |
 | `just wasm [release]` | Rebuild only the wasm + JS glue into `web/src/wasm/` (run after Rust changes while `just dev` is up) |
+| `just fuzz <target> [seconds]` | Coverage-guided fuzzing of one reader or the whole pipeline (see Fuzzing below); `just fuzz-all` runs every target |
 | `just preview` | Build, then serve `web/dist` locally |
 | `just clean` | Remove build outputs |
 
@@ -98,6 +99,29 @@ After a green run on `main` the `deploy` job publishes `web/dist` to GitHub Page
 first visit goes through the coi-serviceworker reload described below; the build uses
 relative URLs (`base: "./"`), so the site works under the `/laser-vector-prep/` sub-path.
 The repository's Pages source must be "GitHub Actions" (Settings → Pages).
+
+## Fuzzing
+
+`fuzz/` holds coverage-guided [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz)
+targets: one per reader (`dxf`, `gerber`, `svg`, `pdf`, `gds`, `ipc`) and `pipeline`
+(import → evaluate a preset → export). They all call `lvp_core::fuzz::run`. The crate is
+its own workspace because of libFuzzer's instrumentation.
+
+- `just fuzz <target> [seconds]` seeds from `fixtures/` and grows `fuzz/corpus/<target>`
+  (not committed). Extra arguments go to libFuzzer, e.g. `-fork=4 -ignore_crashes=1` to
+  keep going after a crash. `just fuzz-all [seconds]` runs every target in turn.
+- A crash, hang or allocation over 2 GB stops the run and leaves the input in
+  `fuzz/artifacts/<target>/`. Minimise it with
+  `cd fuzz && cargo fuzz tmin --sanitizer none -O <target> <file>`, fix the bug, and save
+  the input under `fixtures/fuzz/<target>/` with a descriptive name. `just test` replays
+  every saved input through the same entry point.
+- Fuzz builds keep debug assertions and overflow checks for everything except
+  cavalier_contours, whose debug-only self-checks fire on near-degenerate geometry that
+  its release build handles (decisions D30). That is set in `fuzz/Cargo.toml`, which is
+  why the recipes pass `-O`.
+- `.github/workflows/fuzz.yml` runs each target for five minutes every night (and on
+  demand with a chosen duration), restoring and saving the corpus through the Actions
+  cache. A failing target uploads its input as the `fuzz-<target>` artifact.
 
 ## Shared-memory wasm and threads
 

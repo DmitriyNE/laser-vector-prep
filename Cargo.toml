@@ -32,3 +32,9 @@ serde_json = "1"
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# The kernel's debug-only self-checks fire on near-degenerate input (boundaries within its
+# 10 nm tolerance) that its release build handles; our booleans detect what such input does
+# to a result and report it (`Region::incomplete`). Same in fuzz/Cargo.toml.
+[profile.dev.package.cavalier_contours]
+debug-assertions = false

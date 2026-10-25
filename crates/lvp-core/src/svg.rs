@@ -19,7 +19,7 @@ use crate::geom::Point;
 use crate::model::SourceFormat;
 use crate::pline::{self, Pline};
 use crate::region::{LoopRule, Region};
-use crate::source::{Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
+use crate::source::{Budget, Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
 use crate::units::Unit;
 
 /// CSS pixels per inch; usvg converts every length to user units (px) at this density.
@@ -166,6 +166,7 @@ struct Walker<'a> {
     height_px: f64,
     diags: Vec<Diagnostic>,
     counts: Counts,
+    budget: Budget,
     layers: Vec<SourceLayer>,
     scan: &'a Scan,
 }
@@ -176,11 +177,28 @@ struct Counts {
     round_caps_substituted: usize,
     unpainted: usize,
     clipped_linework: usize,
+    /// Clipped fills whose boolean could not be resolved completely.
+    incomplete_boolean: usize,
     masked: usize,
     filtered: usize,
 }
 
+fn region_vertices(r: &Region) -> usize {
+    r.loops.iter().map(|l| l.vertex_count()).sum()
+}
+
 impl Walker<'_> {
+    /// Keep a primitive if the import budget allows it (see [`Budget`]).
+    fn push(&mut self, layer: usize, prim: Primitive) {
+        let vertices = match &prim {
+            Primitive::Path { pline, .. } => pline.vertex_count(),
+            Primitive::Hatch { loops, .. } => loops.iter().map(|l| l.vertex_count()).sum(),
+        };
+        if self.budget.primitive(vertices) {
+            self.layers[layer].primitives.push(prim);
+        }
+    }
+
     fn layer_name(&self, g: &usvg::Group, fallback: &str) -> String {
         let id = g.id();
         if id.is_empty() {
@@ -221,6 +239,10 @@ impl Walker<'_> {
                             l
                         })
                         .collect();
+                    let vertices = loops.iter().map(|l| l.vertex_count()).sum::<usize>();
+                    if !self.budget.boolean(vertices + region_vertices(&region)) {
+                        return region;
+                    }
                     let r = Region::from_loops(loops, fill_rule(rule));
                     region = if region.is_empty() {
                         r
@@ -249,7 +271,11 @@ impl Walker<'_> {
             Some(c) => {
                 let r = self.clip_region(c, g.abs_transform());
                 Some(match clip {
-                    Some(outer) => outer.intersection(&r),
+                    Some(outer) => {
+                        self.budget
+                            .boolean(region_vertices(&outer) + region_vertices(&r));
+                        outer.intersection(&r)
+                    }
                     None => r,
                 })
             }
@@ -294,7 +320,14 @@ impl Walker<'_> {
             let rule = fill_rule(fill.rule());
             let prim = match clip {
                 Some(c) => {
+                    let vertices = loops.iter().map(|l| l.vertex_count()).sum::<usize>();
+                    if !self.budget.boolean(vertices + region_vertices(c)) {
+                        return;
+                    }
                     let r = Region::from_loops(loops, rule).intersection(c);
+                    if r.incomplete {
+                        self.counts.incomplete_boolean += 1;
+                    }
                     if r.is_empty() {
                         None
                     } else {
@@ -314,7 +347,7 @@ impl Walker<'_> {
                 }),
             };
             if let Some(prim) = prim {
-                self.layers[layer].primitives.push(prim);
+                self.push(layer, prim);
                 emitted = true;
             }
         }
@@ -333,10 +366,13 @@ impl Walker<'_> {
                     self.counts.clipped_linework += 1;
                 }
                 for (l, _) in &parts {
-                    self.layers[layer].primitives.push(Primitive::Path {
-                        pline: l.clone(),
-                        width: Some(width),
-                    });
+                    self.push(
+                        layer,
+                        Primitive::Path {
+                            pline: l.clone(),
+                            width: Some(width),
+                        },
+                    );
                 }
                 emitted = true;
             }
@@ -348,10 +384,13 @@ impl Walker<'_> {
                 self.counts.clipped_linework += 1;
             }
             for (l, _) in &parts {
-                self.layers[layer].primitives.push(Primitive::Path {
-                    pline: l.clone(),
-                    width: None,
-                });
+                self.push(
+                    layer,
+                    Primitive::Path {
+                        pline: l.clone(),
+                        width: None,
+                    },
+                );
             }
         }
     }
@@ -393,6 +432,7 @@ pub fn read_bytes(
         height_px,
         diags: Vec::new(),
         counts: Counts::default(),
+        budget: Budget::new(opts.max_work),
         layers: Vec::new(),
         scan: &scanned,
     };
@@ -446,6 +486,9 @@ pub fn read_bytes(
         }
     }
     collect(&mut walker, tree.root(), &loose_name, &mut loose_layer);
+    if walker.budget.exhausted() {
+        return Err(walker.budget.error(SourceFormat::Svg));
+    }
     let mut diags = std::mem::take(&mut walker.diags);
     let c = &walker.counts;
     if scanned.text > 0 {
@@ -484,6 +527,15 @@ pub fn read_bytes(
             format!(
                 "clip paths were applied to fills but not to {} stroked or unpainted path(s)",
                 c.clipped_linework
+            ),
+        ));
+    }
+    if c.incomplete_boolean > 0 {
+        diags.push(Diagnostic::warning(
+            "svg.incomplete_boolean",
+            format!(
+                "{} clipped fill(s) could not be clipped completely; the unresolved part was left out (boundaries within nanometres of each other)",
+                c.incomplete_boolean
             ),
         ));
     }
@@ -552,6 +604,25 @@ mod tests {
             }
         }
         r
+    }
+
+    #[test]
+    fn imports_past_the_work_limit_are_refused() {
+        let bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/svg/marking.svg"
+        ));
+        assert!(read_bytes("t.svg", bytes, &ReadOptions::default()).is_ok());
+        let err = read_bytes(
+            "t.svg",
+            bytes,
+            &ReadOptions {
+                max_work: 50,
+                ..ReadOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("import refused"), "{}", err.message);
     }
 
     #[test]

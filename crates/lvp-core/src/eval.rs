@@ -727,6 +727,17 @@ fn compute_layer(
             "layer evaluates to no geometry",
         ));
     }
+    // Report an inconsistent boolean where it happens, not on every layer downstream.
+    let inherited = layer.inputs.iter().chain(&layer.operands).any(|op| {
+        matches!(op, Operand::Layer(lid)
+            if matches!(done.get(lid), Some(LayerResult { geometry: Geometry::Region(r), .. }) if r.incomplete))
+    });
+    if matches!(&geometry, Geometry::Region(r) if r.incomplete) && !inherited {
+        diags.push(Diagnostic::warning(
+            "eval.incomplete_boolean",
+            "part of this region's boundary could not be resolved and was left out: the input has boundaries within nanometres of each other that the geometry kernel cannot intersect consistently",
+        ));
+    }
     (geometry, diags)
 }
 

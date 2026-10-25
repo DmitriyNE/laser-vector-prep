@@ -18,7 +18,7 @@ use crate::geom::Point;
 use crate::model::SourceFormat;
 use crate::pline::{self, Pline};
 use crate::region::{self, LoopRule, Region};
-use crate::source::{Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
+use crate::source::{Budget, Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
 use crate::units::Unit;
 
 fn unit_scale(name: Option<&str>) -> Option<(f64, Option<Unit>)> {
@@ -144,6 +144,7 @@ struct Reader<'a> {
     lines: HashMap<String, LineDesc>,
     counts: Counts,
     diags: Vec<Diagnostic>,
+    budget: Budget,
     _doc: &'a Document<'a>,
 }
 
@@ -535,6 +536,17 @@ impl Reader<'_> {
     }
 
     /// Features of one `<Set>` (or `<Features>` block) in document order.
+    /// Keep a feature if the import budget allows it (see [`Budget`]).
+    fn emit(&mut self, out: &mut Vec<(bool, Shape)>, dark: bool, shape: Shape) {
+        let vertices: usize = match &shape {
+            Shape::Fill(r) => r.loops.iter().map(|l| l.vertex_count()).sum(),
+            Shape::Stroke { pline, .. } | Shape::Centreline(pline) => pline.vertex_count(),
+        };
+        if self.budget.primitive(vertices) {
+            out.push((dark, shape));
+        }
+    }
+
     fn features(
         &mut self,
         n: Node<'_, '_>,
@@ -593,7 +605,7 @@ impl Reader<'_> {
                         }
                     }
                     if let Some(shape) = self.primitive_ref(c, scale, &local) {
-                        out.push((dark, shape));
+                        self.emit(out, dark, shape);
                     }
                 }
                 "Hole" => {
@@ -602,35 +614,39 @@ impl Reader<'_> {
                     let y = attr_f(c, "y").unwrap_or(0.0) * scale;
                     if d > 0.0 {
                         let circle = pline::circle(Point::new(x, y), d / 2.0);
-                        out.push((
-                            dark,
-                            Shape::Fill(Region::from_loops(
-                                [xf.apply_pline(&circle)],
-                                LoopRule::NonZero,
-                            )),
+                        let shape = Shape::Fill(Region::from_loops(
+                            [xf.apply_pline(&circle)],
+                            LoopRule::NonZero,
                         ));
+                        self.emit(out, dark, shape);
                     }
                 }
                 "Line" | "Arc" | "Polyline" => {
                     if let Some(shape) = self.linework(c, scale, &xf) {
-                        out.push((dark, shape));
+                        self.emit(out, dark, shape);
                     }
                 }
                 "Contour" => {
                     let r = self.contour(c, scale);
                     if !r.is_empty() {
-                        out.push((dark, self.flash(&r, &xf)));
+                        {
+                            let shape = self.flash(&r, &xf);
+                            self.emit(out, dark, shape);
+                        }
                     }
                 }
                 "Polygon" => {
                     if let Some(l) = self.closed(c, scale) {
                         let r = Region::from_loops([l], LoopRule::NonZero);
-                        out.push((dark, self.flash(&r, &xf)));
+                        {
+                            let shape = self.flash(&r, &xf);
+                            self.emit(out, dark, shape);
+                        }
                     }
                 }
                 "StandardPrimitiveRef" | "UserPrimitiveRef" => {
                     if let Some(shape) = self.primitive_ref_node(c, &xf) {
-                        out.push((dark, shape));
+                        self.emit(out, dark, shape);
                     }
                 }
                 "Text" => self.unsupported("Text"),
@@ -810,8 +826,9 @@ fn ellipse(w: f64, h: f64, tol: f64) -> Pline {
 }
 
 /// Shapes of one layer into primitives, compositing in source order when negative sets
-/// exist (as the Gerber reader does).
-fn composite(items: Vec<(bool, Shape)>) -> Vec<Primitive> {
+/// exist (as the Gerber reader does). The flag reports a boolean that could not be
+/// resolved completely (see `Region::incomplete`).
+fn composite(items: Vec<(bool, Shape)>) -> (Vec<Primitive>, bool) {
     let to_prim = |s: Shape| -> Primitive {
         match s {
             Shape::Fill(r) => Primitive::Hatch {
@@ -828,7 +845,13 @@ fn composite(items: Vec<(bool, Shape)>) -> Vec<Primitive> {
         }
     };
     if items.iter().all(|(dark, _)| *dark) {
-        return items.into_iter().map(|(_, s)| to_prim(s)).collect();
+        let incomplete = items
+            .iter()
+            .any(|(_, s)| matches!(s, Shape::Fill(r) if r.incomplete));
+        return (
+            items.into_iter().map(|(_, s)| to_prim(s)).collect(),
+            incomplete,
+        );
     }
     let mut acc = Region::empty();
     let mut centrelines = Vec::new();
@@ -852,12 +875,21 @@ fn composite(items: Vec<(bool, Shape)>) -> Vec<Primitive> {
             acc.difference(&r)
         };
     }
+    let incomplete = acc.incomplete;
     let mut out = Vec::new();
     if !acc.is_empty() {
         out.push(to_prim(Shape::Fill(acc)));
     }
     out.extend(centrelines);
-    out
+    (out, incomplete)
+}
+
+fn incomplete_boolean(layer: &str) -> Diagnostic {
+    Diagnostic::warning(
+        "ipc.incomplete_boolean",
+        "part of the layer could not be composited and was left out: boundaries within nanometres of each other could not be intersected consistently",
+    )
+    .with_context(layer)
 }
 
 pub fn read_bytes(
@@ -899,6 +931,7 @@ pub fn read_bytes(
         user: HashMap::new(),
         lines: HashMap::new(),
         counts: Counts::default(),
+        budget: Budget::new(opts.max_work),
         diags: Vec::new(),
         _doc: &doc,
     };
@@ -970,11 +1003,11 @@ pub fn read_bytes(
             }
             let name = format!("{prefix}Profile");
             ensure_layer(&mut layers, name.clone(), Some("PROFILE".into()));
-            layers
-                .get_mut(&name)
-                .unwrap()
-                .primitives
-                .extend(composite(items));
+            let (prims, incomplete) = composite(items);
+            if incomplete {
+                diags.push(incomplete_boolean(&name));
+            }
+            layers.get_mut(&name).unwrap().primitives.extend(prims);
         }
         for lf in step
             .children()
@@ -995,17 +1028,20 @@ pub fn read_bytes(
                     _ => reader.features(lf, scale, Xform::IDENTITY, &mut items, true),
                 }
             }
+            if reader.budget.exhausted() {
+                return Err(reader.budget.error(SourceFormat::Ipc2581));
+            }
             if items.is_empty() {
                 continue;
             }
             let name = format!("{prefix}{layer_ref}");
             let function = functions.get(layer_ref).cloned().filter(|f| !f.is_empty());
             ensure_layer(&mut layers, name.clone(), function);
-            layers
-                .get_mut(&name)
-                .unwrap()
-                .primitives
-                .extend(composite(items));
+            let (prims, incomplete) = composite(items);
+            if incomplete {
+                diags.push(incomplete_boolean(&name));
+            }
+            layers.get_mut(&name).unwrap().primitives.extend(prims);
         }
     }
     diags.extend(reader.diags);
@@ -1107,6 +1143,25 @@ mod tests {
    <Step name="s1">
     <Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="30" y="0"/><PolyStepCurve x="30" y="20" centerX="30" centerY="10" clockwise="false"/><PolyStepSegment x="0" y="20"/><PolyStepSegment x="0" y="0"/></Polygon></Profile>
 "#;
+
+    #[test]
+    fn imports_past_the_work_limit_are_refused() {
+        let bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/ipc2581/board.xml"
+        ));
+        assert!(read_bytes("t.xml", bytes, &ReadOptions::default()).is_ok());
+        let err = read_bytes(
+            "t.xml",
+            bytes,
+            &ReadOptions {
+                max_work: 50,
+                ..ReadOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("import refused"), "{}", err.message);
+    }
 
     #[test]
     fn pads_lines_and_profile_read_as_layers_with_functions() {

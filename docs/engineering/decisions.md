@@ -360,3 +360,53 @@ Decided by the owner at the M4 kickoff, after spikes:
 - **Bundle size:** left as is. The release wasm is 2.6 MB, 1.05 MB gzipped; `wasm-opt -Oz`
   saves nothing over `-O3` and `opt-level = "s"` saves 12 % gzipped at a speed cost. The
   service worker caches it after the first visit.
+
+## D30 — Boolean robustness: kernel-consistent tolerances, reported incompleteness (2026-10-25)
+
+Fuzzing found three defects in the n-loop boolean (`region::resolve`):
+
+- A loop that crosses itself was never split at its own crossings, and a split point
+  coinciding in space with another (a self-crossing) was merged with it. Bow-tie fills
+  came out empty and self-intersecting regions kept a negative lobe (DEF-5). Loops are now
+  split at their self-intersections, and two splits only merge when they are close in
+  space *and* along the loop.
+- Boundaries within the kernel's own tolerance (cavalier_contours treats points within
+  10 nm as equal) were intersected inconsistently: the union of a pad flashed twice 1 nm
+  apart was empty (DEF-6). Our join tolerance was 1 nm, finer than the kernel's. It is now
+  the kernel's 10 nm, and vertices of different loops within 30 nm are snapped together
+  before intersecting, so near-duplicates become exact duplicates. Segments shorter than
+  the join tolerance are removed first. A sweep of circle and square pairs offset by
+  10 pm to 10 µm in 12 directions is now clean.
+- What still cannot be made consistent (near-coincident edges and arcs whose vertices do
+  not line up) is no longer dropped silently: `Region::incomplete` records that a boundary
+  chain did not close, booleans propagate it, and the evaluator (on the layer where it
+  arises) and the Gerber, IPC-2581, PDF and SVG readers report it as a warning.
+
+Two more guards came from a second fuzzing run: exact duplicate loops (a pad flashed
+hundreds of times in place by a step-and-repeat with zero step) are merged into one loop
+with a count before classification, since each slice's winding probe otherwise visited
+every copy; and booleans refuse loops with non-finite coordinates or coordinates beyond
+10 km, which reached the kernel's spatial index from a PDF transform and crashed it.
+
+Tried and dropped: retrying an inconsistent boolean with coarser tolerances (up to 1 µm)
+or with each loop moved by a tiny distinct offset. Once self-intersections were handled
+neither rescued a single additional fuzz case.
+
+The kernel's debug-only self-checks fire on exactly such near-degenerate input and its
+release build handles it, so they are disabled in dev and fuzz builds; our own
+consistency check reports the consequences.
+
+## D31 — Import work budget (2026-10-25)
+
+Readers had depth limits but no bound on total expansion: DXF block arrays of block
+arrays, Gerber step-and-repeat (one fuzz input asked for 15 million copies), GDSII
+references, PDF forms invoking forms, and IPC-2581 dictionary primitives placed by many
+pads all multiply a small file into unbounded memory or time. Every reader now charges a
+shared `source::Budget`: one unit per vertex emitted (roughly 24 bytes), six per
+primitive, one per instance, array cell or content operator, and 100 + 10 per vertex for
+each boolean a reader performs (PDF and SVG clipping). The default limit,
+`MAX_IMPORT_WORK` = 10 million units (about 240 MB of geometry, a quarter of the 1 GiB the
+worker can address), is a `ReadOptions` field so tests use small ones. A file that
+exhausts it is refused with one clear error rather than imported partly; GDSII's separate
+5 million instance cap is gone. PDF forms that invoke themselves (a reference cycle) are
+skipped with an error instead of recursing to the depth limit.

@@ -40,11 +40,11 @@ regression:
 
 # Fuzz one target (dxf gerber svg pdf gds ipc pipeline) for `secs` seconds, seeded from the
 # fixtures; the corpus grows in fuzz/corpus/<target>. Crashers land in fuzz/artifacts/<target>/:
-# minimise with `cd fuzz && cargo fuzz tmin <target> <file>` and save the result under
+# minimise with `cd fuzz && cargo fuzz tmin --sanitizer none -O <target> <file>` and save the result under
 # fixtures/fuzz/<target>/, where `just test` replays it.
 # Extra arguments go to libFuzzer, e.g. `-fork=2 -ignore_crashes=1` to keep going after a crash.
 fuzz target secs="60" *args: (fuzz-seeds target)
-    cd fuzz && cargo fuzz run --sanitizer none --debug-assertions {{target}} corpus/{{target}} seeds/{{target}} \
+    cd fuzz && cargo fuzz run --sanitizer none -O {{target}} corpus/{{target}} seeds/{{target}} \
         -- -max_total_time={{secs}} -timeout=10 -rss_limit_mb=2048 -print_final_stats=1 {{args}}
 
 # Every fuzz target in turn.

@@ -16,11 +16,10 @@ use crate::geom::Point;
 use crate::model::SourceFormat;
 use crate::pline;
 use crate::region::LoopRule;
-use crate::source::{Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
+use crate::source::{Budget, Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
 use crate::units::Unit;
 
 const MAX_DEPTH: usize = 64;
-const MAX_INSTANCES: usize = 5_000_000;
 
 mod rec {
     pub const HEADER: u8 = 0x00;
@@ -453,7 +452,7 @@ struct Flattener<'a> {
     nodes: usize,
     missing: BTreeSet<String>,
     depth_exceeded: bool,
-    instances: usize,
+    budget: Budget,
     tolerance_mm: f64,
 }
 
@@ -487,6 +486,15 @@ impl Flattener<'_> {
             return;
         };
         for el in &cell.elements {
+            let cost = match el {
+                Element::Boundary { pts, .. } | Element::Path { pts, .. } => {
+                    Budget::PRIMITIVE + pts.len() as u64
+                }
+                _ => 1,
+            };
+            if !self.budget.spend(cost) {
+                return;
+            }
             match el {
                 Element::Boundary { layer, dtype, pts } => {
                     let mut points: Vec<Point> = pts.iter().map(|p| self.point(&xf, *p)).collect();
@@ -583,10 +591,6 @@ impl Flattener<'_> {
                     angle_deg,
                     origin,
                 } => {
-                    self.instances += 1;
-                    if self.instances > MAX_INSTANCES {
-                        return;
-                    }
                     let local = Xf::reference(
                         *strans,
                         *mag,
@@ -618,8 +622,7 @@ impl Flattener<'_> {
                     );
                     for r in 0..*rows {
                         for c in 0..*cols {
-                            self.instances += 1;
-                            if self.instances > MAX_INSTANCES {
+                            if !self.budget.spend(1) {
                                 return;
                             }
                             let origin = (
@@ -682,11 +685,14 @@ pub fn read_bytes(
         nodes: 0,
         missing: BTreeSet::new(),
         depth_exceeded: false,
-        instances: 0,
+        budget: Budget::new(opts.max_work),
         tolerance_mm: opts.tolerance_mm,
     };
     for top in &tops {
         fl.flatten(top, top, Xf::IDENTITY, 0);
+    }
+    if fl.budget.exhausted() {
+        return Err(fl.budget.error(SourceFormat::Gds));
     }
     let mut diags = Vec::new();
     if tops.len() > 1 {
@@ -730,12 +736,6 @@ pub fn read_bytes(
         diags.push(Diagnostic::error(
             "gds.depth",
             "structure references nest deeper than 64 levels (cycle?); deeper content was skipped",
-        ));
-    }
-    if fl.instances > MAX_INSTANCES {
-        diags.push(Diagnostic::error(
-            "gds.instances",
-            "more than 5 million placed instances; the rest was skipped",
         ));
     }
     if !lib.unknown.is_empty() {
@@ -926,6 +926,36 @@ mod tests {
             }
         }
         r
+    }
+
+    #[test]
+    fn exponential_references_are_refused() {
+        // L12 places L11 ten times, ..., L1 places L0 ten times: 10^12 squares.
+        let mut b = Vec::new();
+        header(&mut b, 1e-3, 1e-9);
+        begin_cell(&mut b, "L0");
+        boundary(&mut b, 1, 0, &[(0, 0), (10, 0), (10, 10)]);
+        end_cell(&mut b);
+        for k in 1..=12 {
+            begin_cell(&mut b, &format!("L{k}"));
+            for i in 0..10 {
+                sref(&mut b, &format!("L{}", k - 1), 0, None, None, (i * 20, 0));
+            }
+            end_cell(&mut b);
+        }
+        end_lib(&mut b);
+        let t = std::time::Instant::now();
+        let err = read_bytes(
+            "x.gds",
+            &b,
+            &ReadOptions {
+                max_work: 100000,
+                ..ReadOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("import refused"), "{}", err.message);
+        assert!(t.elapsed().as_secs() < 5);
     }
 
     #[test]

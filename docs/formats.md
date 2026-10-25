@@ -28,6 +28,20 @@ kinds of primitive:
 - **Filled areas**: loops with a fill rule (hatches, flashes, regions, filled paths,
   polygons).
 
+Two safeguards apply to every format:
+
+- **Size limit.** Nested blocks, arrays, step-and-repeat, references and forms can make a
+  small file expand enormously. An import may produce about 10 million vertices (roughly
+  240 MB, a quarter of what the browser's geometry worker can address); a file that
+  expands past that is refused with an error rather than imported in part.
+- **Coordinates beyond 1 km** from the origin, or not finite, mark a corrupt or
+  mis-scaled file. Those primitives are dropped with an error naming the layer.
+
+Composited images (Gerber and IPC-2581 polarity, PDF and SVG clipping) whose boundaries
+come within a few nanometres of each other can occasionally not be resolved completely;
+the reader then warns that part of the layer was left out instead of dropping it
+silently.
+
 A layer may also carry a declared **function** (Gerber X2 `TF.FileFunction`, IPC-2581
 `layerFunction,side`), which profile slots can match with a `function` rule.
 
@@ -99,7 +113,8 @@ filters, `foreignObject` (warnings).
 | Layers | The optional-content group's name (`/OC … BDC`) when present, otherwise the paint colour as `#rrggbb`. A colour-separated PDF therefore imports as one layer per process colour. |
 
 Reported instead of read: text (error), images, shadings (warnings), pattern paints (read
-as solid), `/Rotate` (ignored). Encrypted PDFs are refused. Decompressed content is limited
+as solid), `/Rotate` (ignored), forms that invoke themselves (error, the cyclic invocation
+is skipped). Encrypted PDFs are refused. Decompressed content is limited
 to 256 MiB per page.
 
 ## GDSII
@@ -109,7 +124,7 @@ to 256 MiB per page.
 | UNITS | Database unit to millimetres; the user unit is reported. |
 | BOUNDARY, BOX | Filled polygons. |
 | PATH | Flush (0), square (2) and custom (4) ends become exact polygons with mitred joins; round ends (1) stay centrelines with their width. |
-| SREF, AREF | Flattened with reflection, magnification and rotation; nesting limited to 64 levels and 5 million placements. |
+| SREF, AREF | Flattened with reflection, magnification and rotation; nesting limited to 64 levels. |
 | Layers | `layer/datatype`; prefixed with the structure name when the library has several top structures. |
 
 Reported: TEXT and NODE (info), missing referenced structures (error).

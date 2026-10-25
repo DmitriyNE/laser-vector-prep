@@ -65,3 +65,14 @@ path = "fuzz_targets/pipeline.rs"
 test = false
 doc = false
 bench = false
+
+# Debug assertions and overflow checks everywhere except the kernel, whose debug-only
+# self-checks fire on near-degenerate input its release build handles (see the root
+# Cargo.toml). Set here, with `cargo fuzz -O`, because cargo-fuzz's own debug-assertion
+# flag (its default without -O) applies to every crate.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+[profile.release.package.cavalier_contours]
+debug-assertions = false

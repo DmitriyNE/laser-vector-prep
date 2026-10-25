@@ -20,7 +20,7 @@ use crate::geom::Point;
 use crate::model::SourceFormat;
 use crate::pline::{self, Pline};
 use crate::region::{self, LoopRule, Region};
-use crate::source::{Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
+use crate::source::{Budget, Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
 use crate::units::Unit;
 
 use macros::MacroDef;
@@ -437,6 +437,19 @@ struct Reader<'a> {
     attributes_seen: bool,
     ended: bool,
     warned: std::collections::BTreeSet<&'static str>,
+    budget: Budget,
+}
+
+/// Import work of one shape (see [`Budget`]).
+fn shape_cost(shape: &Shape) -> u64 {
+    match shape {
+        Shape::Fill { outers, holes } => outers
+            .iter()
+            .chain(holes)
+            .map(|l| Budget::PRIMITIVE + l.vertex_count() as u64)
+            .sum(),
+        Shape::Stroke { pline, .. } => Budget::PRIMITIVE + pline.vertex_count() as u64,
+    }
 }
 
 impl<'a> Reader<'a> {
@@ -466,6 +479,7 @@ impl<'a> Reader<'a> {
             attributes_seen: false,
             ended: false,
             warned: Default::default(),
+            budget: Budget::new(opts.max_work),
         }
     }
 
@@ -497,6 +511,9 @@ impl<'a> Reader<'a> {
     // ---- output sinks --------------------------------------------------------------
 
     fn push_item(&mut self, item: Item) {
+        if !self.budget.spend(shape_cost(&item.shape)) {
+            return;
+        }
         if let Some((_, items)) = self.blocks.last_mut() {
             items.push(item);
         } else if let Some(sr) = &mut self.step_repeat {
@@ -558,6 +575,11 @@ impl<'a> Reader<'a> {
         let Some(sr) = self.step_repeat.take() else {
             return;
         };
+        let copies = u64::from(sr.x.max(1)) * u64::from(sr.y.max(1));
+        let each: u64 = sr.items.iter().map(|it| shape_cost(&it.shape)).sum();
+        if !self.budget.spend(copies.saturating_mul(each)) {
+            return;
+        }
         for ix in 0..sr.x.max(1) {
             for iy in 0..sr.y.max(1) {
                 let (dx, dy) = (ix as f64 * sr.i, iy as f64 * sr.j);
@@ -833,6 +855,9 @@ impl<'a> Reader<'a> {
                 (region, None, extent)
             }
         };
+        if region.incomplete {
+            self.warn_once("gerber.incomplete_boolean", INCOMPLETE_BOOLEAN);
+        }
         self.apertures.insert(
             code,
             Aperture {
@@ -1205,7 +1230,7 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    fn finish(mut self, name: &str) -> SourceDocument {
+    fn finish(mut self, name: &str) -> Result<SourceDocument, ReadError> {
         self.flush_chain();
         if self.region_mode {
             self.diags.push(Diagnostic::warning(
@@ -1227,10 +1252,16 @@ impl<'a> Reader<'a> {
                 "file has no M02 end-of-file command",
             ));
         }
-        let primitives = composite(std::mem::take(&mut self.items));
+        if self.budget.exhausted() {
+            return Err(self.budget.error(SourceFormat::Gerber));
+        }
+        let (primitives, incomplete) = composite(std::mem::take(&mut self.items));
+        if incomplete {
+            self.warn_once("gerber.incomplete_boolean", INCOMPLETE_BOOLEAN);
+        }
         let units = self.units_declared;
         let function = self.function.take();
-        SourceDocument {
+        Ok(SourceDocument {
             format: SourceFormat::Gerber,
             version: Some(
                 if self.attributes_seen {
@@ -1248,7 +1279,7 @@ impl<'a> Reader<'a> {
                 primitives,
             }],
             diagnostics: self.diags,
-        }
+        })
     }
 }
 
@@ -1298,12 +1329,14 @@ fn obround(w: f64, h: f64) -> Pline {
     p
 }
 
+const INCOMPLETE_BOOLEAN: &str = "part of the image could not be composited and was left out: boundaries within nanometres of each other could not be intersected consistently";
+
 /// Turn the operation list into primitives. Dark-only images pass through as individual
 /// primitives (the evaluator unions them); images with clear operations are composited in
 /// order and become one region.
-fn composite(items: Vec<Item>) -> Vec<Primitive> {
+fn composite(items: Vec<Item>) -> (Vec<Primitive>, bool) {
     if items.iter().all(|it| it.dark) {
-        return items
+        let prims = items
             .into_iter()
             .map(|it| match it.shape {
                 Shape::Fill { outers, holes } => region_primitive(outers, holes),
@@ -1313,6 +1346,7 @@ fn composite(items: Vec<Item>) -> Vec<Primitive> {
                 },
             })
             .collect();
+        return (prims, false);
     }
     // Union of one polarity run. Fills without holes are merged in one pass; fills with
     // holes and strokes are unioned on top (a hole must not swallow another flash).
@@ -1364,12 +1398,13 @@ fn composite(items: Vec<Item>) -> Vec<Primitive> {
         idx = end;
     }
     if acc.is_empty() {
-        return Vec::new();
+        return (Vec::new(), acc.incomplete);
     }
-    vec![region_primitive(
+    let prim = region_primitive(
         acc.outers().cloned().collect(),
         acc.holes().cloned().collect(),
-    )]
+    );
+    (vec![prim], acc.incomplete)
 }
 
 /// Read a Gerber file. `name` becomes the layer name (one layer per file).
@@ -1394,8 +1429,11 @@ pub fn read_str(name: &str, text: &str, opts: &ReadOptions) -> Result<SourceDocu
         if let Err(message) = result {
             return Err(err(format!("command {}: {message}", n + 1)));
         }
+        if reader.budget.exhausted() {
+            return Err(reader.budget.error(SourceFormat::Gerber));
+        }
     }
-    Ok(reader.finish(name))
+    reader.finish(name)
 }
 
 pub fn read_bytes(
@@ -1430,6 +1468,15 @@ mod tests {
     }
 
     const HEAD: &str = "%FSLAX24Y24*%\n%MOMM*%\n";
+
+    #[test]
+    fn huge_step_and_repeat_is_refused() {
+        let text = "%FSLAX46Y46*%%MOMM*%%ADD10C,1*%%SRX3000000Y5I2J2*%D10*X0Y0D03*%SR*%M02*";
+        let t = std::time::Instant::now();
+        let err = read_str("x.gbr", text, &ReadOptions::default()).unwrap_err();
+        assert!(err.message.contains("import refused"), "{}", err.message);
+        assert!(t.elapsed().as_secs() < 5);
+    }
 
     #[test]
     fn format_leading_and_trailing_zero_omission() {

@@ -22,7 +22,7 @@ use crate::geom::Point;
 use crate::model::SourceFormat;
 use crate::pline::{self, Pline};
 use crate::region::{LoopRule, Region};
-use crate::source::{Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
+use crate::source::{Budget, Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
 use crate::units::Unit;
 
 const MM_PER_PT: f64 = 25.4 / 72.0;
@@ -96,9 +96,13 @@ struct Counts {
     dashed: usize,
     zero_width: usize,
     clipped_linework: usize,
+    /// Clipped fills whose boolean could not be resolved completely.
+    incomplete_boolean: usize,
     rotated_pages: usize,
     unknown_ops: std::collections::BTreeSet<String>,
     form_depth_exceeded: usize,
+    /// Form XObjects that (directly or indirectly) invoke themselves.
+    form_cycles: usize,
 }
 
 struct Interp<'a> {
@@ -110,6 +114,23 @@ struct Interp<'a> {
     layer_prefix: String,
     layers: BTreeMap<String, SourceLayer>,
     counts: Counts,
+    budget: Budget,
+    /// Form XObjects being executed, by address (they live in `doc`), to refuse cycles.
+    active_forms: Vec<usize>,
+}
+
+/// Import work of a primitive: its vertices plus allocation overhead (see [`Budget`]).
+fn primitive_cost(p: &Primitive) -> u64 {
+    match p {
+        Primitive::Path { pline, .. } => Budget::PRIMITIVE + pline.vertex_count() as u64,
+        Primitive::Hatch { loops, .. } => {
+            Budget::PRIMITIVE + loops.iter().map(|l| l.vertex_count() as u64).sum::<u64>()
+        }
+    }
+}
+
+fn region_vertices(r: &Region) -> usize {
+    r.loops.iter().map(|l| l.vertex_count()).sum()
 }
 
 fn rgb_hex(c: [u8; 3]) -> String {
@@ -238,6 +259,10 @@ impl Interp<'_> {
         initial: GState,
         depth: usize,
     ) {
+        // Decoding is paid on every invocation of a form, so it is charged too.
+        if !self.budget.spend(1 + content.len() as u64 / 64) {
+            return;
+        }
         let ops = match Content::decode(content) {
             Ok(c) => c.operations,
             Err(_) => return,
@@ -248,6 +273,9 @@ impl Interp<'_> {
         let mut layer_stack: Vec<Option<String>> = Vec::new();
         let mut in_text = false;
         for op in &ops {
+            if !self.budget.spend(1) {
+                return;
+            }
             let a = &op.operands;
             match op.operator.as_str() {
                 // ---- graphics state
@@ -397,6 +425,11 @@ impl Interp<'_> {
                             .iter()
                             .filter_map(|(pts, _)| pline::from_bulged_points(pts, true))
                             .collect();
+                        let vertices = loops.iter().map(|l| l.vertex_count()).sum::<usize>()
+                            + gs.clip.as_ref().map_or(0, region_vertices);
+                        if !self.budget.boolean(vertices) {
+                            return;
+                        }
                         let r = Region::from_loops(loops, rule);
                         gs.clip = Some(match gs.clip.take() {
                             Some(c) => c.intersection(&r),
@@ -489,6 +522,11 @@ impl Interp<'_> {
                     self.counts.form_depth_exceeded += 1;
                     return;
                 }
+                let id = std::ptr::from_ref(stream) as usize;
+                if self.active_forms.contains(&id) {
+                    self.counts.form_cycles += 1;
+                    return;
+                }
                 let mut inner = gs.clone();
                 if let Some(Object::Array(m)) = dict_get(self.doc, &stream.dict, b"Matrix") {
                     let v = nums(m);
@@ -512,6 +550,12 @@ impl Interp<'_> {
                             .iter()
                             .map(|(x, y)| self.to_mm(&inner.ctm, *x, *y))
                             .collect();
+                        if !self
+                            .budget
+                            .boolean(4 + inner.clip.as_ref().map_or(0, region_vertices))
+                        {
+                            return;
+                        }
                         let bbox =
                             Region::from_loops([pline::from_points(pts, true)], LoopRule::NonZero);
                         inner.clip = Some(match inner.clip.take() {
@@ -525,7 +569,9 @@ impl Interp<'_> {
                 let Ok(content) = stream.decompressed_content_with_limit(MAX_CONTENT_BYTES) else {
                     return;
                 };
+                self.active_forms.push(id);
                 self.run(&content, form_res.or(resources), inner, depth + 1);
+                self.active_forms.pop();
             }
             _ => {}
         }
@@ -551,7 +597,14 @@ impl Interp<'_> {
             .unwrap_or_else(|| rgb_hex(gs.fill_rgb));
         let prim = match &gs.clip {
             Some(c) => {
+                let vertices = loops.iter().map(|l| l.vertex_count()).sum::<usize>();
+                if !self.budget.boolean(vertices + region_vertices(c)) {
+                    return;
+                }
                 let r = Region::from_loops(loops, rule).intersection(c);
+                if r.incomplete {
+                    self.counts.incomplete_boolean += 1;
+                }
                 if r.is_empty() {
                     return;
                 }
@@ -569,7 +622,13 @@ impl Interp<'_> {
                 pattern: String::new(),
             },
         };
-        self.layer(&name).primitives.push(prim);
+        self.push(&name, prim);
+    }
+
+    fn push(&mut self, layer: &str, prim: Primitive) {
+        if self.budget.spend(primitive_cost(&prim)) {
+            self.layer(layer).primitives.push(prim);
+        }
     }
 
     fn emit_stroke(&mut self, subpaths: &[Subpath], gs: &GState, layer: Option<&str>) {
@@ -591,9 +650,7 @@ impl Interp<'_> {
             let Some(pl) = pline::from_bulged_points(pts, closed) else {
                 continue;
             };
-            self.layer(&name)
-                .primitives
-                .push(Primitive::Path { pline: pl, width });
+            self.push(&name, Primitive::Path { pline: pl, width });
         }
     }
 }
@@ -634,6 +691,7 @@ pub fn read_bytes(
     let multi = pages.len() > 1;
     let mut layers: BTreeMap<String, SourceLayer> = BTreeMap::new();
     let mut counts = Counts::default();
+    let mut budget = Budget::new(opts.max_work);
     let mut diags = Vec::new();
     for (n, page_id) in &pages {
         let media = inherited(&doc, *page_id, b"MediaBox")
@@ -672,6 +730,8 @@ pub fn read_bytes(
             },
             layers: std::mem::take(&mut layers),
             counts: std::mem::take(&mut counts),
+            budget: std::mem::replace(&mut budget, Budget::new(0)),
+            active_forms: Vec::new(),
         };
         let initial = GState {
             ctm: Mat::IDENTITY,
@@ -686,6 +746,10 @@ pub fn read_bytes(
         interp.run(&content, resources, initial, 0);
         layers = interp.layers;
         counts = interp.counts;
+        budget = interp.budget;
+        if budget.exhausted() {
+            return Err(budget.error(SourceFormat::Pdf));
+        }
     }
     if multi {
         diags.push(Diagnostic::info(
@@ -735,6 +799,15 @@ pub fn read_bytes(
             ),
         ));
     }
+    if counts.incomplete_boolean > 0 {
+        diags.push(Diagnostic::warning(
+            "pdf.incomplete_boolean",
+            format!(
+                "{} clipped fill(s) could not be clipped completely; the unresolved part was left out (boundaries within nanometres of each other)",
+                counts.incomplete_boolean
+            ),
+        ));
+    }
     if counts.rotated_pages > 0 {
         diags.push(Diagnostic::warning(
             "pdf.rotate",
@@ -756,6 +829,15 @@ pub fn read_bytes(
             format!(
                 "{} zero-width stroke(s) read as centrelines without width",
                 counts.zero_width
+            ),
+        ));
+    }
+    if counts.form_cycles > 0 {
+        diags.push(Diagnostic::error(
+            "pdf.form_cycle",
+            format!(
+                "{} form XObject invocation(s) skipped: the form invokes itself (a reference cycle)",
+                counts.form_cycles
             ),
         ));
     }
@@ -903,6 +985,101 @@ mod tests {
         let ring = region_of(&doc.layers[0]);
         assert!((ring.area() - (72.0 * 72.0 - 32.0 * 32.0) * MM_PER_PT * MM_PER_PT).abs() < 1e-9);
         assert_eq!(ring.holes().count(), 1);
+    }
+
+    #[test]
+    fn self_invoking_forms_are_skipped() {
+        // A form whose resources name itself: drawn once, the recursive call refused.
+        let mut doc = Document::with_version("1.5");
+        let form_id = doc.new_object_id();
+        doc.objects.insert(
+            form_id,
+            Object::Stream(Stream::new(
+                dictionary! {
+                    "Type" => "XObject", "Subtype" => "Form",
+                    "BBox" => Object::Array(vec![0.into(), 0.into(), 100.into(), 100.into()]),
+                    "Resources" => dictionary! { "XObject" => dictionary! { "F" => form_id } },
+                },
+                b"0 0 1 1 re f q 1 0 0 1 2 0 cm /F Do Q q 1 0 0 1 0 2 cm /F Do Q".to_vec(),
+            )),
+        );
+        let pages_id = doc.new_object_id();
+        let content_id = doc.add_object(Stream::new(dictionary! {}, b"/F Do".to_vec()));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), 200.into(), 150.into()]),
+            "Resources" => dictionary! { "XObject" => dictionary! { "F" => form_id } },
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(
+                dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 },
+            ),
+        );
+        let cat = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", cat);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let d = read(&bytes);
+        assert_eq!(
+            d.layers.iter().map(|l| l.primitives.len()).sum::<usize>(),
+            1
+        );
+        let cycle = d
+            .diagnostics
+            .iter()
+            .find(|x| x.code == "pdf.form_cycle")
+            .unwrap();
+        assert!(cycle.message.starts_with("2 form"), "{}", cycle.message);
+    }
+
+    #[test]
+    fn exponential_form_nesting_is_refused() {
+        // F12 draws F11 ten times, ..., F1 draws F0 (one square) ten times: 10^12 squares,
+        // all within the form depth limit.
+        let mut doc = Document::with_version("1.5");
+        let bbox = || Object::Array(vec![0.into(), 0.into(), 1000.into(), 1000.into()]);
+        let mut prev = doc.add_object(Stream::new(
+            dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => bbox() },
+            b"0 0 1 1 re f".to_vec(),
+        ));
+        for _ in 1..=12 {
+            let content: String = (0..10)
+                .map(|i| format!("q 1 0 0 1 {i} 0 cm /F Do Q "))
+                .collect();
+            prev = doc.add_object(Stream::new(
+                dictionary! {
+                    "Type" => "XObject", "Subtype" => "Form", "BBox" => bbox(),
+                    "Resources" => dictionary! { "XObject" => dictionary! { "F" => prev } },
+                },
+                content.into_bytes(),
+            ));
+        }
+        let pages_id = doc.new_object_id();
+        let content_id = doc.add_object(Stream::new(dictionary! {}, b"/F Do".to_vec()));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), 200.into(), 150.into()]),
+            "Resources" => dictionary! { "XObject" => dictionary! { "F" => prev } },
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(
+                dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 },
+            ),
+        );
+        let cat = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", cat);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let opts = ReadOptions {
+            max_work: 100_000,
+            ..ReadOptions::default()
+        };
+        let t = std::time::Instant::now();
+        let err = read_bytes("x.pdf", &bytes, &opts).unwrap_err();
+        assert!(err.message.contains("import refused"), "{}", err.message);
+        assert!(t.elapsed().as_secs() < 5);
     }
 
     #[test]

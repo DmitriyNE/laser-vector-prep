@@ -30,9 +30,14 @@ pub type DxfDocument = crate::source::SourceDocument;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DxfReadError {
-    Malformed { line: usize, message: String },
+    Malformed {
+        line: usize,
+        message: String,
+    },
     BinaryDxf,
     Empty,
+    /// Block references expand past the import work limit ([`crate::source::Budget`]).
+    TooLarge,
 }
 
 impl std::fmt::Display for DxfReadError {
@@ -43,6 +48,13 @@ impl std::fmt::Display for DxfReadError {
             }
             DxfReadError::BinaryDxf => write!(f, "binary DXF is not supported; save as ASCII DXF"),
             DxfReadError::Empty => write!(f, "file contains no DXF group codes"),
+            DxfReadError::TooLarge => write!(
+                f,
+                "{}",
+                crate::source::Budget::new(0)
+                    .error(SourceFormat::Dxf)
+                    .message
+            ),
         }
     }
 }
@@ -444,6 +456,7 @@ struct Converter<'a> {
     /// entity type -> (count, layers) for the unsupported summary
     unsupported: BTreeMap<String, (usize, BTreeSet<String>)>,
     paperspace_skipped: usize,
+    budget: crate::source::Budget,
 }
 
 impl Converter<'_> {
@@ -457,7 +470,36 @@ impl Converter<'_> {
         e.1.insert(layer.to_string());
     }
 
+    /// Convert one entity, charging the work budget for it and for what it emits (an INSERT
+    /// is charged through the entities it expands to).
     fn convert(
+        &mut self,
+        raw: &RawEntity,
+        xf: &Xf,
+        layer_override: Option<&str>,
+        depth: usize,
+        out: &mut Vec<(String, Primitive)>,
+    ) {
+        if !self.budget.spend(1) {
+            return;
+        }
+        let before = out.len();
+        self.convert_entity(raw, xf, layer_override, depth, out);
+        if raw.kind != "INSERT" {
+            for (_, p) in &out[before..] {
+                let vertices = match p {
+                    Primitive::Path { pline, .. } => pline.vertex_count(),
+                    Primitive::Hatch { loops, .. } => loops.iter().map(|l| l.vertex_count()).sum(),
+                };
+                if !self.budget.primitive(vertices) {
+                    out.truncate(before);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn convert_entity(
         &mut self,
         raw: &RawEntity,
         xf: &Xf,
@@ -1049,6 +1091,9 @@ impl Converter<'_> {
         let row_sp = raw.f(45).unwrap_or(0.0);
         for r in 0..rows {
             for c in 0..cols {
+                if !self.budget.spend(1) {
+                    return;
+                }
                 let local = Xf::translate(-block.base.x, -block.base.y)
                     .then(&Xf::scale(sx, sy))
                     .then(&Xf::translate(c as f64 * col_sp, r as f64 * row_sp))
@@ -1286,11 +1331,15 @@ pub fn read_str(text: &str, opts: &ReadOptions) -> Result<DxfDocument, DxfReadEr
         diagnostics: Vec::new(),
         unsupported: BTreeMap::new(),
         paperspace_skipped: 0,
+        budget: crate::source::Budget::new(opts.max_work),
     };
     let mut placed: Vec<(String, Primitive)> = Vec::new();
     if let Some(esec) = secs.iter().find(|s| s.name == "ENTITIES") {
         for e in group_entities(esec.pairs) {
             conv.convert(&e, &Xf::IDENTITY, None, 0, &mut placed);
+            if conv.budget.exhausted() {
+                return Err(DxfReadError::TooLarge);
+            }
         }
     } else {
         diagnostics.push(Diagnostic::warning(
@@ -1443,6 +1492,36 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn exponential_block_arrays_are_refused() {
+        // B8 holds a 10x10 array of B7, ..., B1 a 10x10 array of B0 (one line): 10^16 lines.
+        let mut blocks = String::from(
+            "  0\nBLOCK\n  2\nB0\n 10\n0\n 20\n0\n  0\nLINE\n  8\n0\n 10\n0\n 20\n0\n 11\n1\n 21\n0\n  0\nENDBLK\n",
+        );
+        let array = |name: &str| {
+            format!(
+                "  0\nINSERT\n  8\n0\n  2\n{name}\n 10\n0\n 20\n0\n 70\n10\n 71\n10\n 44\n2\n 45\n2\n"
+            )
+        };
+        for k in 1..=8 {
+            blocks += &format!(
+                "  0\nBLOCK\n  2\nB{k}\n 10\n0\n 20\n0\n{}  0\nENDBLK\n",
+                array(&format!("B{}", k - 1))
+            );
+        }
+        let t = std::time::Instant::now();
+        let err = read_str(
+            &dxf(mm(), &blocks, &array("B8")),
+            &ReadOptions {
+                max_work: 100000,
+                ..ReadOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, DxfReadError::TooLarge), "{err}");
+        assert!(t.elapsed().as_secs() < 5);
     }
 
     #[test]
