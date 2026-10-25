@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvaluationSummary, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
-import { buildGraph, layout, nodeId, rowHandle, structureKey } from "./graph.js";
+import { buildGraph, connectionEdit, dependencies, edgeRemoval, layout, nodeId, nodeRemoval, rowHandle, structureKey } from "./graph.js";
 
 function layer(id: string, extra: Partial<WorkingLayer>): WorkingLayer {
   return {
@@ -167,5 +167,43 @@ describe("model graph", () => {
     expect(structureKey(again.nodes, again.edges)).toBe(structureKey(nodes, edges));
     const fewer = buildGraph({ ...profile, outputGroups: profile.outputGroups.slice(0, 1) }, sources, evaluation);
     expect(structureKey(fewer.nodes, fewer.edges)).not.toBe(structureKey(nodes, edges));
+  });
+});
+
+describe("editing on the graph", () => {
+  const c = (source: string, sourceHandle: string, target: string, targetHandle: string) => connectionEdit(profile, sources, { source, sourceHandle, target, targetHandle });
+
+  it("turns connections into profile edits", () => {
+    expect(c("file:0", rowHandle("EDGE2"), "slot:src-edge", "in")).toEqual({ kind: "map", slot: "src-edge", file: "board.dxf", layer: "EDGE2" });
+    expect(c("slot:src-spare", "out", "layer:wl-neg", "b")).toEqual({ kind: "operand", from: { source: "src-spare" }, layer: "wl-neg", group: "b" });
+    expect(c("layer:wl-edge", "out", "layer:wl-cu", "a")).toEqual({ kind: "operand", from: { layer: "wl-edge" }, layer: "wl-cu", group: "a" });
+    expect(c("layer:wl-neg", "out", "pass:p-fill", "in")).toEqual({ kind: "movePass", pass: "p-fill", layer: "wl-neg" });
+    expect(c("pass:p-fill", "out", "group:g-unused", "in")).toEqual({ kind: "passGroup", pass: "p-fill", group: "g-unused" });
+  });
+
+  it("refuses connections that make no sense", () => {
+    expect(c("layer:wl-neg", "out", "layer:wl-edge", "a")).toBe("that would make a cycle");
+    expect(c("layer:wl-cu", "out", "layer:wl-cu", "a")).toBe("a layer cannot read itself");
+    expect(c("slot:src-cu", "out", "layer:wl-cu", "a")).toBe("already an input");
+    expect(c("slot:src-spare", "out", "layer:wl-cu", "b")).toBe("this layer has one input group");
+    expect(c("layer:wl-cu", "out", "pass:p-fill", "in")).toBe("the pass is already on this layer");
+    expect(c("pass:p-fill", "out", "group:g-a", "in")).toBe("the pass already marks in this group");
+    expect(typeof c("slot:src-cu", "out", "group:g-a", "in")).toBe("string");
+    expect(dependencies(profile, "wl-neg")).toEqual(new Set(["wl-box", "wl-edge", "wl-cu"]));
+  });
+
+  it("deletes operand edges, layers, passes, files, and only unused slots and groups", () => {
+    const { nodes, edges } = buildGraph(profile, sources, evaluation);
+    const data = (id: string) => nodes.find((n) => n.id === id)!.data;
+    const b = edges.find((e) => e.kind === "b")!;
+    expect(edgeRemoval(b)).toEqual({ kind: "operand", from: { layer: "wl-cu" }, layer: "wl-neg", group: "b" });
+    expect(edgeRemoval(edges.find((e) => e.kind === "pass")!)).toBeNull();
+    expect(edgeRemoval(edges.find((e) => e.kind === "map")!)).toBeNull();
+    expect(nodeRemoval(profile, data("slot:src-cu"))).toBeNull();
+    expect(nodeRemoval(profile, data("slot:src-spare"))).toEqual({ kind: "slot", id: "src-spare" });
+    expect(nodeRemoval(profile, data("group:g-a"))).toBeNull();
+    expect(nodeRemoval(profile, data("group:g-unused"))).toEqual({ kind: "group", id: "g-unused" });
+    expect(nodeRemoval(profile, data("layer:wl-box"))).toEqual({ kind: "layer", id: "wl-box" });
+    expect(nodeRemoval(profile, data("file:0"))).toEqual({ kind: "file", index: 0 });
   });
 });

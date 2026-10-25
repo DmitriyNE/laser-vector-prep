@@ -96,6 +96,8 @@
   <input bind:this={importInput} type="file" accept=".json,application/json" hidden onchange={onImport} />
   <button onclick={() => store.exportJson()}>Export JSON</button>
   <button onclick={() => store.reset()} disabled={!store.dirty}>Reset</button>
+  <button onclick={() => store.undo()} disabled={!store.canUndo} title="undo the last profile edit (Ctrl/⌘ Z)">Undo</button>
+  <button onclick={() => store.redo()} disabled={!store.canRedo} title="redo (Ctrl/⌘ ⇧ Z)">Redo</button>
   <span class="status">
     {#if store.evaluation}
       {@const c = bindingCounts()}

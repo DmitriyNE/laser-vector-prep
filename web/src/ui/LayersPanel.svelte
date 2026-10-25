@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Pass, WorkingLayer } from "../core/types.js";
+  import type { WorkingLayer } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
   import { shortId } from "../util/download.js";
   import { opLabel, patternLabel, plural } from "../state/labels.js";
@@ -10,42 +10,6 @@
   const summaryOf = (id: string) => store.evaluation?.layers.find((l) => l.id === id);
   const passSummary = (id: string) => store.evaluation?.passes.find((p) => p.id === id);
   const errors = (ds: { severity: string }[] | undefined) => ds?.filter((d) => d.severity === "error").length ?? 0;
-
-  function addLayer(kind: "region" | "envelope" = "region") {
-    const id = shortId("wl");
-    store.update((p) => {
-      p.workingLayers.push({
-        id,
-        name: kind === "envelope" ? `Envelope ${p.workingLayers.length + 1}` : `Layer ${p.workingLayers.length + 1}`,
-        kind,
-        inputs: [],
-        operands: [],
-        op: "union",
-        envelope: kind === "envelope" ? { provider: "boundingBox", marginMm: 0.5 } : null,
-        interpretation: { loopRule: "mergeThenNest", strokeWidth: "original" },
-        passes: [],
-        enabled: true,
-        // Envelopes are domains for other layers; they never mark unless asked explicitly.
-        referenceOnly: kind === "envelope",
-      });
-    });
-    store.selection = { kind: "layer", id };
-  }
-
-  function addPass(layer: WorkingLayer) {
-    const id = shortId("pass");
-    const group = store.profile.outputGroups[0]?.id ?? "";
-    store.update(() => {
-      layer.passes.push({
-        id,
-        name: layer.kind === "region" ? "Contour fill" : "Passthrough",
-        pattern: layer.kind === "region" ? { kind: "contourFill", pitchMm: 0.02, firstOffsetMm: null, gapFill: true } : { kind: "passthrough", reverse: false },
-        group,
-        enabled: true,
-      });
-    });
-    store.selection = { kind: "pass", id };
-  }
 
   function duplicateLayer(i: number) {
     store.update((p) => {
@@ -58,12 +22,6 @@
     });
   }
 
-  function deleteLayer(i: number) {
-    store.update((p) => {
-      p.workingLayers.splice(i, 1);
-    });
-    store.selection = { kind: "none" };
-  }
 
   function move(i: number, d: number) {
     store.update((p) => {
@@ -74,12 +32,6 @@
     });
   }
 
-  function deletePass(layer: WorkingLayer, pass: Pass) {
-    store.update(() => {
-      layer.passes.splice(layer.passes.indexOf(pass), 1);
-    });
-    store.selection = { kind: "none" };
-  }
 
   function usedBy(id: string) {
     return store.profile.workingLayers
@@ -110,8 +62,8 @@
 
 <section class="panel">
   <h2>
-    Layers <button class="add" onclick={() => addLayer("region")}>+ layer</button>
-    <button class="add" onclick={() => addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button>
+    Layers <button class="add" onclick={() => store.addLayer("region")}>+ layer</button>
+    <button class="add" onclick={() => store.addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button>
     {#if store.hiddenCount}<button class="add quiet" onclick={() => store.showAll()} title="show everything in the preview again">show all</button>{/if}
   </h2>
   {#if store.profile.workingLayers.length === 0}
@@ -136,7 +88,7 @@
           <button onclick={() => move(i, -1)} title="move up">↑</button>
           <button onclick={() => move(i, 1)} title="move down">↓</button>
           <button onclick={() => duplicateLayer(i)} title="duplicate">⧉</button>
-          <button onclick={() => deleteLayer(i)} title="delete layer">×</button>
+          <button onclick={() => store.deleteLayer(layer.id)} title="delete layer">×</button>
         </span>
       </div>
       <ul>
@@ -156,11 +108,11 @@
             </span>
             <span class="tools">
               <button class="only" onclick={() => store.solo({ kind: "pass", key: pass.id })} title="show only this in preview">only</button>
-              <button onclick={() => deletePass(layer, pass)} title="delete pass">×</button>
+              <button onclick={() => store.deletePass(pass.id)} title="delete pass">×</button>
             </span>
           </li>
         {/each}
-        <li class="addrow"><button class="add" onclick={() => addPass(layer)}>+ pass</button></li>
+        <li class="addrow"><button class="add" onclick={() => store.addPass(layer.id)}>+ pass</button></li>
       </ul>
     </div>
   {/each}

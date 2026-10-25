@@ -15,8 +15,19 @@ staircase, because a virtual root pinning the columns dragged long chains of dum
 through the layout; the columns are now assigned directly and dagre only orders them.
 The graph code is a separate chunk loaded on first use (225 kB, 73 kB gzipped), so the
 page itself grew by 11 kB; the service worker precaches it with the rest for offline use.
-Svelte Flow's own node type `group` brought its own styling, so output groups are nodes of
-type `output`.
+Svelte Flow styles its own node types (`input`, `output`, `default`, `group`), so output
+groups are nodes of type `outputGroup`.
+
+The graph is also an editor. Drawing from an imported layer's row to a slot maps it, from a
+slot or layer into input A or B of a layer adds an operand (refused, with the reason, if it
+would make a cycle or is there already), from a layer to a pass moves the pass, from a pass
+to a group sets its group; Delete removes operand edges, layers, passes, files, and slots
+and groups nobody uses. A deleted layer now also leaves the inputs of the layers that read
+it and the optimizer's protected list (the layer list used to leave them dangling), and the
+groups panel refuses to delete a group a pass marks in. Every profile edit is undoable
+(Ctrl/⌘ Z, Ctrl/⌘ ⇧ Z, buttons): the store keeps a snapshot after each edit, and typing on
+in one field extends the step. The first version merged any edits less than half a second
+apart, which the browser test caught by undoing four quick graph edits in one step.
 
 ## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
 

@@ -158,6 +158,6 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       pass; the audit is now most of a large panel's evaluation
 - [x] Graph view (Svelte Flow + dagre), tab next to the preview: files/layers → slots →
       working layers → passes → groups with live status; click selects, eyes/solo
-- [ ] Graph editing: connect operands, slot mappings and pass groups; add/delete layers,
+- [x] Graph editing: connect operands, slot mappings and pass groups; add/delete layers,
       passes, groups, slots; undo/redo for profile edits
 

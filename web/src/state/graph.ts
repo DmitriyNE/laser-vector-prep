@@ -322,3 +322,121 @@ export function layout(nodes: GraphNode[], edges: GraphEdge[]): Map<string, { x:
   }
   return out;
 }
+
+// ---- editing on the graph -------------------------------------------------------------
+
+/** A node id taken apart: its kind and the id of the profile object (a file's index). */
+export function parseNodeId(id: string): { kind: NodeData["kind"]; key: string } | null {
+  const i = id.indexOf(":");
+  const kind = id.slice(0, i);
+  return ["file", "slot", "layer", "pass", "group"].includes(kind) ? { kind: kind as NodeData["kind"], key: id.slice(i + 1) } : null;
+}
+
+function operandOf(nodeIdText: string): Operand | null {
+  const n = parseNodeId(nodeIdText);
+  if (n?.kind === "slot") return { source: n.key };
+  if (n?.kind === "layer") return { layer: n.key };
+  return null;
+}
+
+const sameOperand = (a: Operand, b: Operand) => ("source" in a && "source" in b && a.source === b.source) || ("layer" in a && "layer" in b && a.layer === b.layer);
+
+/** Layers `id` reads, directly or through other layers. */
+export function dependencies(profile: Profile, id: string): Set<string> {
+  const seen = new Set<string>();
+  const visit = (lid: string) => {
+    const l = profile.workingLayers.find((x) => x.id === lid);
+    for (const o of [...(l?.inputs ?? []), ...(l?.operands ?? [])]) {
+      if ("layer" in o && !seen.has(o.layer)) {
+        seen.add(o.layer);
+        visit(o.layer);
+      }
+    }
+  };
+  visit(id);
+  return seen;
+}
+
+/** Why `from` cannot become an input of group A or B of a layer, or null if it can. */
+export function operandProblem(profile: Profile, from: Operand, layerId: string, group: "a" | "b"): string | null {
+  const layer = profile.workingLayers.find((l) => l.id === layerId);
+  if (!layer) return "no such layer";
+  if ("source" in from && !profile.sourceBindings.some((b) => b.id === from.source)) return "no such slot";
+  if ("layer" in from) {
+    if (from.layer === layerId) return "a layer cannot read itself";
+    if (!profile.workingLayers.some((l) => l.id === from.layer)) return "no such layer";
+    if (dependencies(profile, from.layer).has(layerId)) return "that would make a cycle";
+  }
+  if (group === "b" && !hasGroupB(layer)) return "this layer has one input group";
+  if ((group === "a" ? layer.inputs : layer.operands).some((o) => sameOperand(o, from))) return "already an input";
+  return null;
+}
+
+/** A profile edit drawn on the graph. */
+export type Edit =
+  | { kind: "map"; slot: string; file: string; layer: string }
+  | { kind: "operand"; from: Operand; layer: string; group: "a" | "b" }
+  | { kind: "movePass"; pass: string; layer: string }
+  | { kind: "passGroup"; pass: string; group: string };
+
+/** The edit a connection from one handle to another stands for, or why it makes none. */
+export function connectionEdit(
+  profile: Profile,
+  sources: SourceSummary[],
+  c: { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null },
+): Edit | string {
+  const from = parseNodeId(c.source);
+  const to = parseNodeId(c.target);
+  if (!from || !to) return "unknown node";
+  if (from.kind === "file" && to.kind === "slot") {
+    const file = sources.find((s) => String(s.index) === from.key);
+    const layer = c.sourceHandle?.startsWith("row:") ? c.sourceHandle.slice(4) : null;
+    if (!file || !layer) return "unknown imported layer";
+    return { kind: "map", slot: to.key, file: file.name, layer };
+  }
+  if ((from.kind === "slot" || from.kind === "layer") && to.kind === "layer") {
+    const group = c.targetHandle === "b" ? "b" : "a";
+    const operand = operandOf(c.source)!;
+    return operandProblem(profile, operand, to.key, group) ?? { kind: "operand", from: operand, layer: to.key, group };
+  }
+  if (from.kind === "layer" && to.kind === "pass") {
+    const owner = profile.workingLayers.find((l) => l.passes.some((p) => p.id === to.key));
+    if (!profile.workingLayers.some((l) => l.id === from.key)) return "no such layer";
+    return owner?.id === from.key ? "the pass is already on this layer" : { kind: "movePass", pass: to.key, layer: from.key };
+  }
+  if (from.kind === "pass" && to.kind === "group") {
+    const pass = profile.workingLayers.flatMap((l) => l.passes).find((p) => p.id === from.key);
+    if (!pass) return "no such pass";
+    return pass.group === to.key ? "the pass already marks in this group" : { kind: "passGroup", pass: from.key, group: to.key };
+  }
+  return "these cannot be connected";
+}
+
+/** Something deleted on the graph. */
+export type Removal =
+  | { kind: "operand"; from: Operand; layer: string; group: "a" | "b" }
+  | { kind: "layer" | "pass" | "slot" | "group"; id: string }
+  | { kind: "file"; index: number };
+
+/** What deleting an edge removes: an operand edge removes the input; nothing else can go. */
+export function edgeRemoval(e: GraphEdge): Removal | null {
+  if (e.kind !== "a" && e.kind !== "b") return null;
+  const from = operandOf(e.source);
+  const layer = parseNodeId(e.target);
+  return from && layer ? { kind: "operand", from, layer: layer.key, group: e.kind } : null;
+}
+
+/** What deleting a node removes. Slots and groups still in use stay (their users would be
+ * left dangling); a layer takes its passes along and is removed from its readers' inputs. */
+export function nodeRemoval(profile: Profile, data: NodeData): Removal | null {
+  switch (data.kind) {
+    case "file":
+      return { kind: "file", index: data.index };
+    case "slot":
+      return profile.workingLayers.some((l) => [...l.inputs, ...l.operands].some((o) => "source" in o && o.source === data.id)) ? null : { kind: "slot", id: data.id };
+    case "group":
+      return profile.workingLayers.some((l) => l.passes.some((p) => p.group === data.id)) ? null : { kind: "group", id: data.id };
+    default:
+      return { kind: data.kind, id: data.id };
+  }
+}

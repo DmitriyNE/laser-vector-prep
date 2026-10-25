@@ -6,6 +6,7 @@ import type {
   EvaluationSummary,
   Diagnostic,
   MatchRule,
+  Operand,
   Preview,
   Profile,
   SourceSummary,
@@ -13,6 +14,7 @@ import type {
 } from "../core/types.js";
 import { Cancelled, GeometryWorker, WorkerCrashed, type Progress } from "../worker/client.js";
 import { download, shortId } from "../util/download.js";
+import type { Edit, Removal } from "./graph.js";
 import * as db from "./profileStore.js";
 import type { SavedProfile } from "./profileStore.js";
 
@@ -56,6 +58,8 @@ export class ProjectStore {
   /** Preset the current profile derives from (for Reset) when not based on a saved one. */
   basePresetId: string | null = $state(null);
   dirty = $state(false);
+  canUndo = $state(false);
+  canRedo = $state(false);
 
   evaluation: EvaluationSummary | null = $state(null);
   evaluating = $state(false);
@@ -83,6 +87,14 @@ export class ProjectStore {
   #debounce: ReturnType<typeof setTimeout> | undefined;
   /** Imported files, kept (in memory only) so sources can be re-imported after a crash. */
   #files: File[] = [];
+  /** The profile after each edit (JSON), for undo and redo; `#at` is the current entry. */
+  #history: string[] = [];
+  #at = 0;
+  /** The entry that matches the saved profile or preset (-1: none does). */
+  #cleanAt = 0;
+  #lastEdit = 0;
+  /** The field the last edit was typed into, if any. */
+  #lastField: Element | null = null;
 
   async init() {
     this.worker.onCrash = (msg) => void this.recover(msg);
@@ -101,6 +113,7 @@ export class ProjectStore {
         this.profile = await this.worker.call({ kind: "getProfile" });
         this.basePresetId = this.profile.profileId;
       }
+      this.#resetHistory();
       this.ready = true;
       await this.evaluate();
     } catch (e) {
@@ -173,7 +186,79 @@ export class ProjectStore {
   update(mutate: (p: Profile) => void) {
     mutate(this.profile);
     this.dirty = true;
+    this.#record();
     this.scheduleEvaluate();
+  }
+
+  // ---- undo and redo of profile edits -------------------------------------------------
+
+  /** Start the history at the profile just loaded. */
+  #resetHistory(clean = true) {
+    this.#history = [JSON.stringify($state.snapshot(this.profile))];
+    this.#at = 0;
+    this.#cleanAt = clean ? 0 : -1;
+    this.#lastEdit = 0;
+    this.#lastField = null;
+    this.#syncHistory();
+  }
+
+  /** Record the profile after an edit. Typing on in the same field (each keystroke is an
+   * edit) extends the step; anything else is a step of its own. */
+  #record() {
+    const snapshot = JSON.stringify($state.snapshot(this.profile));
+    if (snapshot === this.#history[this.#at]) return;
+    this.#history.length = this.#at + 1;
+    if (this.#cleanAt > this.#at) this.#cleanAt = -1;
+    const now = Date.now();
+    const el = globalThis.document?.activeElement ?? null;
+    const field =
+      (el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "file"].includes(el.type)) || el instanceof HTMLTextAreaElement ? el : null;
+    if (this.#at > 0 && field !== null && field === this.#lastField && now - this.#lastEdit < 1000) {
+      if (this.#cleanAt === this.#at) this.#cleanAt = -1;
+      this.#history[this.#at] = snapshot;
+    } else {
+      this.#history.push(snapshot);
+      this.#at++;
+    }
+    this.#lastEdit = now;
+    this.#lastField = field;
+    // A long session keeps the last 200 steps.
+    if (this.#history.length > 200) {
+      this.#history.shift();
+      this.#at--;
+      this.#cleanAt--;
+    }
+    this.#syncHistory();
+  }
+
+  undo() {
+    if (this.#at === 0) return;
+    this.#at--;
+    this.#restore();
+  }
+
+  redo() {
+    if (this.#at >= this.#history.length - 1) return;
+    this.#at++;
+    this.#restore();
+  }
+
+  #restore() {
+    this.profile = JSON.parse(this.#history[this.#at]!) as Profile;
+    this.dirty = this.#at !== this.#cleanAt;
+    this.#lastField = null;
+    this.#syncHistory();
+    // What was selected may be gone in the restored profile.
+    const s = this.selection;
+    const exists =
+      s.kind === "layer" ? !!this.layer(s.id) : s.kind === "pass" ? !!this.pass(s.id) : s.kind === "group" ? !!this.group(s.id) : s.kind === "binding" ? this.profile.sourceBindings.some((b) => b.id === s.id) : true;
+    if (!exists) this.selection = { kind: "none" };
+    this.scheduleEvaluate();
+  }
+
+  #syncHistory() {
+    this.canUndo = this.#at > 0;
+    this.canRedo = this.#at < this.#history.length - 1;
   }
 
   scheduleEvaluate() {
@@ -277,6 +362,7 @@ export class ProjectStore {
     this.activeSavedId = null;
     this.basePresetId = presetId;
     this.dirty = false;
+    this.#resetHistory();
     void db.setSetting(LAST_PROFILE_KEY, null);
     void this.evaluate();
   }
@@ -293,6 +379,7 @@ export class ProjectStore {
     this.activeSavedId = id;
     this.basePresetId = null;
     this.dirty = false;
+    this.#resetHistory();
     void db.setSetting(LAST_PROFILE_KEY, id);
     void this.evaluate();
   }
@@ -350,6 +437,9 @@ export class ProjectStore {
     this.activeSavedId = id;
     this.basePresetId = null;
     this.dirty = false;
+    // Saving may rename the profile: the current step is the saved profile from now on.
+    this.#history[this.#at] = JSON.stringify($state.snapshot(this.profile));
+    this.#cleanAt = this.#at;
     await db.setSetting(LAST_PROFILE_KEY, id);
   }
 
@@ -370,6 +460,7 @@ export class ProjectStore {
     this.activeSavedId = null;
     this.basePresetId = null;
     this.dirty = true;
+    this.#resetHistory(false);
     void this.evaluate();
     return diags;
   }
@@ -486,6 +577,159 @@ export class ProjectStore {
   /** Which slot an imported layer is currently matched to, if any. */
   bindingOf(file: string, layer: string) {
     return this.evaluation?.bindings.find((b) => b.status === "matched" && b.file === file && b.layer === layer);
+  }
+
+  // ---- structure: layers, passes, groups, and the edits drawn on the graph -------------
+
+  /** Add a working layer (a region, or an envelope: a bounded domain) and select it. */
+  addLayer(kind: "region" | "envelope" = "region"): string {
+    const id = shortId("wl");
+    this.update((p) => {
+      p.workingLayers.push({
+        id,
+        name: kind === "envelope" ? `Envelope ${p.workingLayers.length + 1}` : `Layer ${p.workingLayers.length + 1}`,
+        kind,
+        inputs: [],
+        operands: [],
+        op: "union",
+        envelope: kind === "envelope" ? { provider: "boundingBox", marginMm: 0.5 } : null,
+        interpretation: { loopRule: "mergeThenNest", strokeWidth: "original" },
+        passes: [],
+        enabled: true,
+        // Envelopes are domains for other layers; they never mark unless asked explicitly.
+        referenceOnly: kind === "envelope",
+      });
+    });
+    this.selection = { kind: "layer", id };
+    return id;
+  }
+
+  /** Add a pass to a layer (marking in the first output group) and select it. */
+  addPass(layerId: string): string | null {
+    const layer = this.layer(layerId);
+    if (!layer) return null;
+    const id = shortId("pass");
+    const group = this.profile.outputGroups[0]?.id ?? "";
+    this.update(() => {
+      layer.passes.push({
+        id,
+        name: layer.kind === "region" ? "Contour fill" : "Passthrough",
+        pattern: layer.kind === "region" ? { kind: "contourFill", pitchMm: 0.02, firstOffsetMm: null, gapFill: true } : { kind: "passthrough", reverse: false },
+        group,
+        enabled: true,
+      });
+    });
+    this.selection = { kind: "pass", id };
+    return id;
+  }
+
+  /** Delete a working layer with its passes; layers reading it and the optimizer's
+   * protected list forget it. */
+  deleteLayer(id: string) {
+    const other = (o: Operand) => !("layer" in o && o.layer === id);
+    this.update((p) => {
+      p.workingLayers = p.workingLayers.filter((l) => l.id !== id);
+      for (const l of p.workingLayers) {
+        l.inputs = l.inputs.filter(other);
+        l.operands = l.operands.filter(other);
+      }
+      p.optimizer.protected = p.optimizer.protected.filter((x) => x !== id);
+    });
+    if ((this.selection.kind === "layer" && this.selection.id === id) || (this.selection.kind === "pass" && !this.pass(this.selection.id))) {
+      this.selection = { kind: "none" };
+    }
+  }
+
+  deletePass(id: string) {
+    this.update((p) => {
+      for (const l of p.workingLayers) l.passes = l.passes.filter((x) => x.id !== id);
+    });
+    if (this.selection.kind === "pass" && this.selection.id === id) this.selection = { kind: "none" };
+  }
+
+  addGroup(): string {
+    const id = shortId("grp");
+    this.update((p) => {
+      p.outputGroups.push({ id, name: `Group ${p.outputGroups.length + 1}`, color: [0, 160, 0], strokeWidthMm: null, export: true, visible: true, orderMode: null });
+    });
+    this.selection = { kind: "group", id };
+    return id;
+  }
+
+  /** Passes (by name) that mark in a group. */
+  groupUsers(id: string): string[] {
+    return this.profile.workingLayers.flatMap((l) => l.passes).filter((p) => p.group === id).map((p) => p.name);
+  }
+
+  /** Remove an output group; refused while a pass marks in it. */
+  removeGroup(id: string): boolean {
+    if (this.groupUsers(id).length) return false;
+    this.update((p) => {
+      p.outputGroups = p.outputGroups.filter((g) => g.id !== id);
+    });
+    if (this.selection.kind === "group" && this.selection.id === id) this.selection = { kind: "none" };
+    return true;
+  }
+
+  /** Apply an edit drawn on the graph (validated by `connectionEdit`). */
+  applyEdit(e: Edit) {
+    switch (e.kind) {
+      case "map":
+        this.mapToBinding(e.slot, e.file, e.layer);
+        break;
+      case "operand":
+        this.update((p) => {
+          const l = p.workingLayers.find((x) => x.id === e.layer);
+          if (l) (e.group === "a" ? l.inputs : l.operands).push(e.from);
+        });
+        break;
+      case "movePass":
+        this.update((p) => {
+          const target = p.workingLayers.find((x) => x.id === e.layer);
+          const owner = p.workingLayers.find((x) => x.passes.some((ps) => ps.id === e.pass));
+          if (!target || !owner) return;
+          const pass = owner.passes.find((ps) => ps.id === e.pass)!;
+          owner.passes = owner.passes.filter((ps) => ps.id !== e.pass);
+          target.passes.push(pass);
+        });
+        break;
+      case "passGroup":
+        this.update((p) => {
+          for (const l of p.workingLayers) for (const ps of l.passes) if (ps.id === e.pass) ps.group = e.group;
+        });
+        break;
+    }
+  }
+
+  /** Apply a deletion made on the graph (see `nodeRemoval` and `edgeRemoval`). */
+  applyRemoval(r: Removal) {
+    switch (r.kind) {
+      case "operand": {
+        const keep = (o: Operand) => !(("source" in o && "source" in r.from && o.source === r.from.source) || ("layer" in o && "layer" in r.from && o.layer === r.from.layer));
+        this.update((p) => {
+          const l = p.workingLayers.find((x) => x.id === r.layer);
+          if (!l) return;
+          if (r.group === "a") l.inputs = l.inputs.filter(keep);
+          else l.operands = l.operands.filter(keep);
+        });
+        break;
+      }
+      case "layer":
+        this.deleteLayer(r.id);
+        break;
+      case "pass":
+        this.deletePass(r.id);
+        break;
+      case "slot":
+        this.removeBinding(r.id);
+        break;
+      case "group":
+        this.removeGroup(r.id);
+        break;
+      case "file":
+        void this.removeSource(r.index);
+        break;
+    }
   }
 
   // ---- helpers -----------------------------------------------------------------------

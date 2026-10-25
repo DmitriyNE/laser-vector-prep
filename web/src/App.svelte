@@ -25,11 +25,25 @@
   // Debug and end-to-end test hook: the store is reachable from the console.
   (globalThis as { lvp?: ProjectStore }).lvp = store;
 
+  /** Undo and redo of profile edits, except inside a text field, which has its own. */
+  function keydown(e: KeyboardEvent) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+    const key = e.key.toLowerCase();
+    if (key === "z" && !e.shiftKey) store.undo();
+    else if ((key === "z" && e.shiftKey) || key === "y") store.redo();
+    else return;
+    e.preventDefault();
+  }
+
   onMount(() => {
     if (isolated) void store.init();
     return () => store.worker.dispose();
   });
 </script>
+
+<svelte:window onkeydown={keydown} />
 
 {#if !isolated}
   <div class="gate">Waiting for cross-origin isolation (the page reloads once on first visit)…</div>

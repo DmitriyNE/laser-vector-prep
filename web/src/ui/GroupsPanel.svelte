@@ -1,22 +1,11 @@
 <script lang="ts">
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
-  import { shortId } from "../util/download.js";
 
   let { store }: { store: ProjectStore } = $props();
 
-  function add() {
-    const id = shortId("grp");
-    store.update((p) => {
-      p.outputGroups.push({ id, name: `Group ${p.outputGroups.length + 1}`, color: [0, 160, 0], strokeWidthMm: null, export: true, visible: true, orderMode: null });
-    });
-    store.selection = { kind: "group", id };
-  }
-
-  function remove(i: number) {
-    store.update((p) => {
-      p.outputGroups.splice(i, 1);
-    });
-    store.selection = { kind: "none" };
+  function remove(id: string) {
+    const users = store.groupUsers(id);
+    if (!store.removeGroup(id)) store.notice = `Group is used by ${users.join(", ")}; move those passes to another group first.`;
   }
 
   const collisions = $derived(new Set(
@@ -29,15 +18,15 @@
 </script>
 
 <section class="panel">
-  <h2>Output groups <button class="add" onclick={add}>+ group</button></h2>
+  <h2>Output groups <button class="add" onclick={() => store.addGroup()}>+ group</button></h2>
   <ul>
-    {#each store.profile.outputGroups as g, i (g.id)}
+    {#each store.profile.outputGroups as g (g.id)}
       <li class:selected={store.selection.kind === "group" && store.selection.id === g.id}>
         <span class="swatch" style:background={rgbCss(g.color)}></span>
         <button class="name" onclick={() => (store.selection = { kind: "group", id: g.id })}>{g.name}</button>
         <span class="meta">rgb({g.color.join(",")}) · {g.strokeWidthMm ?? store.profile.export.strokeWidthMm} mm · {usage(g.id)} pass(es){g.export ? "" : " · not exported"}</span>
         {#if collisions.has(g.id)}<span class="err" title="another exporting group has this exact colour">colour clash</span>{/if}
-        <button onclick={() => remove(i)} title="delete">×</button>
+        <button onclick={() => remove(g.id)} title="delete">×</button>
       </li>
     {/each}
   </ul>
