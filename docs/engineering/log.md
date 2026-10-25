@@ -3,6 +3,32 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — After M4: near-coincident booleans, Nix cache measured
+
+Booleans no longer leave near-coincident boundaries unresolved (D34): the exact boolean
+runs first, and a cluster it had to nudge, or whose result is not a valid region, is
+checked against i_overlay's robust polygon boolean, which replaces it when they disagree.
+A randomized sweep (squares, circles, capsules, irregular polygons against a copy shifted,
+rotated or scaled by 10⁻¹¹ to 10⁻³ mm) is in `just test` at 200 cases and in
+`just regression` at 40 000; all 464 saved fuzz inputs evaluate without an incomplete
+composite.
+
+What did not work, in order: snapping vertices onto nearby edges of other loops (D33's
+plan), larger winding-probe distances, and clustering crossing points into shared nodes.
+Each repaired some sweep cases and broke others. The sweep also showed that vertex snapping
+took the first vertex in range rather than the nearest, which left slivers (DEF-12).
+Reviewing the fallback before committing found that it collapsed a merged duplicate's count
+to one copy for the non-zero rules: a square twice plus the same square with a hole lost
+the hole's area in a union. It now passes every copy, with a test.
+
+Magic Nix Cache (D33) works but did not speed CI up. The dev-shell step takes 35 s with it,
+as before, and a second `nix build` of the same commit took 2:14 against 1:55 for the
+first. Uploads stopped after exactly 200 cache entries in the first minute of each run,
+which matches a per-repository rate limit, so the second run rebuilt 172 derivations.
+Most of the closure comes from cache.nixos.org anyway; what costs time is the cargo build,
+which CI already caches in `target/`, and the site derivation, which changes with every
+commit.
+
 ## 2026-10-25 — M4: packaging and deployment
 
 `just package` writes a reproducible tarball of the site (two builds of one commit gave the

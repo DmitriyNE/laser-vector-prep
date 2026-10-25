@@ -111,8 +111,9 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Triage the first two 10-minute runs of every target: boolean robustness (D30,
       DEF-5/6/10/11), import work budget and PDF form cycles (D31, DEF-9)
 - [x] Expansion budget across readers (D31)
-- [ ] Booleans: near-coincident edges and arcs whose vertices do not line up can still
-      leave a boundary chain open; reported as a warning (`Region::incomplete`), not fixed
+- [x] Booleans: near-coincident edges and arcs whose vertices do not line up could leave
+      a boundary chain open (reported only); now checked against or replaced by a robust
+      polygon boolean (D34)
 - [x] Large inputs: contour fill now fills islands independently and in parallel
       (`par::map`); a 4×8 panel of the board evaluates in 0.5 s natively (was 1.1 s), an
       8×8 panel (22 k paths) in 0.8 s natively and 2.6 s in Chrome
@@ -147,10 +148,9 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 
 ## After M4 (D33)
 
-- [ ] Nix store cache in CI (Magic Nix Cache)
-- [ ] Booleans resolve near-coincident edges and arcs: vertex-to-edge snapping and identical
-      near-duplicate segments; no saved fuzz input or randomized near-coincident case may
-      leave a chain open
+- [x] Nix store cache in CI (Magic Nix Cache); no measurable speed-up yet (see log)
+- [x] Booleans resolve near-coincident edges and arcs; no saved fuzz input or randomized
+      near-coincident case leaves a chain open (D34; vertex-to-edge snapping was dropped)
 - [ ] Parallel evaluation: independent layers, passes and groups; coverage raster;
       optimizer candidate search; deterministic for any thread count
 - [ ] Graph view (Svelte Flow + dagre), tab next to the preview: files/layers → slots →

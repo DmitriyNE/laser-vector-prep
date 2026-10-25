@@ -69,6 +69,8 @@ struct Tolerances {
     /// kernel may move a crossing point by up to its tolerance on each loop, so boundaries
     /// closer than a few tolerances cannot be intersected consistently.
     snap: f64,
+    /// Loops of the same shape within this are one loop (see `merge_duplicates`).
+    same: f64,
 }
 
 /// The kernel's own position tolerance (`pos_equal_eps` of cavalier_contours' intersection
@@ -83,6 +85,7 @@ impl Tolerances {
             probe: (extent * 1e-9).max(1e-7),
             join: (extent * 1e-8).max(KERNEL_EPS),
             snap: (extent * 3e-8).max(3.0 * KERNEL_EPS),
+            same: (extent * 1e-7).max(10.0 * KERNEL_EPS),
         }
     }
 }
@@ -118,6 +121,9 @@ struct Tagged {
     bbox: BBox,
     /// How many identical copies of this loop the operand had (see `merge_duplicates`).
     count: i32,
+    /// Moved by snapping or merged with a near (not exact) duplicate: the boolean of its
+    /// cluster is checked against the robust one (see `resolve_cluster`).
+    nudged: bool,
 }
 
 fn tag(plines: &[Pline], operand: u8) -> Vec<Tagged> {
@@ -130,6 +136,7 @@ fn tag(plines: &[Pline], operand: u8) -> Vec<Tagged> {
                 operand,
                 bbox: pline::bounds(p)?,
                 count: 1,
+                nudged: false,
             })
         })
         .collect()
@@ -261,37 +268,45 @@ fn winding(loops: &[Tagged], grid: &BBoxGrid, operand: u8, p: Point, pad: f64) -
         .sum()
 }
 
-/// Replace exact duplicates (same operand, same vertices from any starting vertex) by one
-/// loop with a count. Duplicates add nothing to the boundary but every slice's winding
-/// probe would visit each of them: a pad flashed hundreds of times in place made the
-/// boolean quadratic.
-fn merge_duplicates(loops: &mut Vec<Tagged>) {
-    // Operand, closedness and the vertex bits rotated to start at the smallest vertex.
-    type Key = (u8, bool, Vec<[u64; 3]>);
-    let key = |l: &Tagged| -> Key {
-        let v: Vec<[u64; 3]> = l
-            .pline
-            .vertex_data
-            .iter()
-            .map(|v| [v.x.to_bits(), v.y.to_bits(), v.bulge.to_bits()])
-            .collect();
-        let start = (0..v.len()).min_by_key(|&i| v[i]).unwrap_or(0);
-        let mut rotated = v[start..].to_vec();
-        rotated.extend_from_slice(&v[..start]);
-        (l.operand, l.pline.is_closed(), rotated)
+/// Replace duplicates (same operand and orientation, the same shape within `tol`: every
+/// vertex and every segment's midpoint, from any starting vertex) by one loop with a count.
+/// Duplicates add nothing to the boundary but every slice's winding probe would visit each
+/// of them (a pad flashed hundreds of times in place made the boolean quadratic), and
+/// copies a few tens of nanometres apart cross each other at grazing angles in places the
+/// kernel cannot pin down consistently, more so with three or more copies. Merging moves a
+/// boundary by at most `tol`.
+fn merge_duplicates(loops: &mut Vec<Tagged>, tol: f64) {
+    let centre = |l: &Tagged| {
+        Point::new(
+            (l.bbox.min.x + l.bbox.max.x) / 2.0,
+            (l.bbox.min.y + l.bbox.max.y) / 2.0,
+        )
     };
-    let mut first: HashMap<Key, usize> = HashMap::new();
+    let cell = |p: Point| {
+        (
+            (p.x / (4.0 * tol)).floor() as i64,
+            (p.y / (4.0 * tol)).floor() as i64,
+        )
+    };
+    let mut kept_at: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     let mut keep = vec![true; loops.len()];
     for i in 0..loops.len() {
-        match first.entry(key(&loops[i])) {
-            std::collections::hash_map::Entry::Occupied(e) => {
-                let j = *e.get();
+        let c = centre(&loops[i]);
+        let (cx, cy) = cell(c);
+        let twin = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy)))
+            .filter_map(|k| kept_at.get(&k))
+            .flatten()
+            .copied()
+            .filter_map(|j| same_shape(&loops[j], &loops[i], tol).map(|exact| (j, exact)))
+            .min_by_key(|&(j, _)| j);
+        match twin {
+            Some((j, exact)) => {
                 loops[j].count += loops[i].count;
+                loops[j].nudged |= !exact || loops[i].nudged;
                 keep[i] = false;
             }
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(i);
-            }
+            None => kept_at.entry((cx, cy)).or_default().push(i),
         }
     }
     let mut i = 0;
@@ -301,6 +316,37 @@ fn merge_duplicates(loops: &mut Vec<Tagged>) {
     });
 }
 
+/// Same operand, closedness and orientation, and every vertex and segment midpoint of `b`
+/// within `tol` of `a`'s, for some starting vertex: `Some(exact)`, `exact` when every vertex
+/// is identical.
+fn same_shape(a: &Tagged, b: &Tagged, tol: f64) -> Option<bool> {
+    let (pa, pb) = (&a.pline, &b.pline);
+    let n = pa.vertex_count();
+    if a.operand != b.operand
+        || n != pb.vertex_count()
+        || pa.is_closed() != pb.is_closed()
+        || (pa.area() > 0.0) != (pb.area() > 0.0)
+        || (a.bbox.min.x - b.bbox.min.x).abs() > tol
+        || (a.bbox.min.y - b.bbox.min.y).abs() > tol
+        || (a.bbox.max.x - b.bbox.max.x).abs() > tol
+        || (a.bbox.max.y - b.bbox.max.y).abs() > tol
+    {
+        return None;
+    }
+    let near = |p: Point, q: Point| p.distance(q) <= tol;
+    let vertex = |p: &Pline, i: usize| pt(p.at(i % n).pos());
+    let midpoint =
+        |p: &Pline, i: usize| pline::seg_midpoint_and_left_normal(p.at(i % n), p.at((i + 1) % n)).0;
+    let k = (0..n)
+        .filter(|&k| near(vertex(pa, 0), vertex(pb, k)))
+        .find(|&k| {
+            (0..n).all(|i| {
+                near(vertex(pa, i), vertex(pb, i + k)) && near(midpoint(pa, i), midpoint(pb, i + k))
+            })
+        })?;
+    Some((0..n).all(|i| pa.at(i) == pb.at((i + k) % n)))
+}
+
 /// Split points on one loop, snapped onto their segments, sorted along the loop and
 /// de-duplicated. Snapping matters: intersection points of near-tangent micro-arcs can sit
 /// off their segment by more than the join tolerance, which would make the slice invalid.
@@ -308,6 +354,7 @@ fn sorted_splits(
     p: &Pline,
     splits: &mut [(usize, Vector2<f64>)],
     join: f64,
+    merged: &mut bool,
 ) -> Vec<(usize, Vector2<f64>)> {
     for sp in splits.iter_mut() {
         let i = sp.0;
@@ -331,17 +378,38 @@ fn sorted_splits(
     };
     let mut out: Vec<(usize, Vector2<f64>)> = Vec::with_capacity(splits.len());
     for s in splits.iter() {
-        if out.last().is_none_or(|l| !same(l, s, along(s) - along(l))) {
-            out.push(*s);
+        match out.last() {
+            Some(l) if same(l, s, along(s) - along(l)) => {
+                *merged |= pt(l.1).distance(pt(s.1)) > 1e-12;
+            }
+            _ => out.push(*s),
         }
     }
     if out.len() > 1 {
         let (first, last) = (out[0], out[out.len() - 1]);
         if same(&first, &last, total - along(&last) + along(&first)) {
+            *merged |= pt(first.1).distance(pt(last.1)) > 1e-12;
             out.pop();
         }
     }
     out
+}
+
+/// The closed loop the consecutive slices of one loop form (each ends where the next
+/// starts); `None` if a slice is degenerate.
+fn rejoin(pieces: &[Pline]) -> Option<Pline> {
+    let mut out = Pline::new_closed();
+    for p in pieces {
+        let n = p.vertex_count();
+        if n < 2 {
+            return None;
+        }
+        for k in 0..n - 1 {
+            let v = p.at(k);
+            out.add(v.x, v.y, v.bulge);
+        }
+    }
+    (out.vertex_count() >= 2).then_some(out)
 }
 
 /// Midpoint (by path length) of an open or closed polyline and the left unit normal there.
@@ -385,10 +453,15 @@ fn turn(a: Point, b: Point) -> f64 {
     (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y)
 }
 
+/// How far (in `join` units) a chain may jump to the nearest free slice when nothing lies
+/// within `join` (see `stitch`): 100 nm at the default tolerances, far below the 1 µm read
+/// tolerance.
+const STITCH_GAP: f64 = 4.0;
+
 /// Stitch oriented open slices (plus already-closed whole loops) into closed loops. A
 /// chain that does not close means the classification or the intersections were
 /// inconsistent; it is dropped and the (incomplete) result comes back as `Err`.
-fn stitch(slices: Vec<Pline>, join: f64) -> Result<Vec<Pline>, Vec<Pline>> {
+fn stitch(slices: Vec<Pline>, join: f64, bridged: &mut bool) -> Result<Vec<Pline>, Vec<Pline>> {
     let (closed, open): (Vec<Pline>, Vec<Pline>) = slices.into_iter().partition(|s| s.is_closed());
     let mut result = closed;
     if open.is_empty() {
@@ -401,14 +474,16 @@ fn stitch(slices: Vec<Pline>, join: f64) -> Result<Vec<Pline>, Vec<Pline>> {
         by_start.entry(cell(start_point(s))).or_default().push(i);
     }
     let mut used = vec![false; open.len()];
-    let candidates = |p: Point, used: &[bool]| -> Vec<usize> {
+    // Unused slices starting within `radius` of `p`.
+    let candidates = |p: Point, used: &[bool], radius: f64| -> Vec<usize> {
         let (cx, cy) = cell(p);
+        let reach = (radius / join).ceil() as i64;
         let mut out = Vec::new();
-        for dx in -1..=1 {
-            for dy in -1..=1 {
+        for dx in -reach..=reach {
+            for dy in -reach..=reach {
                 if let Some(ids) = by_start.get(&(cx + dx, cy + dy)) {
                     for &i in ids {
-                        if !used[i] && start_point(&open[i]).distance(p) <= join {
+                        if !used[i] && start_point(&open[i]).distance(p) <= radius {
                             out.push(i);
                         }
                     }
@@ -417,6 +492,11 @@ fn stitch(slices: Vec<Pline>, join: f64) -> Result<Vec<Pline>, Vec<Pline>> {
         }
         out
     };
+    // A nearly tangent crossing is placed by the kernel only to within a distance that grows
+    // as the angle shrinks, so its two copies (one per loop) can end up further apart than
+    // `join`. A chain that finds nothing within `join` continues at the nearest free start,
+    // or closes on itself, within this gap: the boundary moves by at most that much.
+    let gap = STITCH_GAP * join;
 
     for first in 0..open.len() {
         if used[first] {
@@ -433,7 +513,26 @@ fn stitch(slices: Vec<Pline>, join: f64) -> Result<Vec<Pline>, Vec<Pline>> {
                 closed_ok = true;
                 break;
             }
-            let cands = candidates(tail, &used);
+            let mut cands = candidates(tail, &used, join);
+            if cands.is_empty() {
+                let nearest = candidates(tail, &used, gap).into_iter().min_by(|&a, &b| {
+                    let (da, db) = (
+                        start_point(&open[a]).distance(tail),
+                        start_point(&open[b]).distance(tail),
+                    );
+                    da.total_cmp(&db).then(a.cmp(&b))
+                });
+                let to_origin = tail.distance(origin);
+                if to_origin <= gap
+                    && nearest.is_none_or(|n| to_origin <= start_point(&open[n]).distance(tail))
+                {
+                    *bridged = true;
+                    closed_ok = true;
+                    break;
+                }
+                *bridged |= nearest.is_some();
+                cands.extend(nearest);
+            }
             let Some(&next) = (if cands.len() <= 1 {
                 cands.first()
             } else {
@@ -484,11 +583,17 @@ fn snap_vertices(loops: &mut Vec<Tagged>, join: f64, repeat: f64) {
     for (li, l) in loops.iter_mut().enumerate() {
         for v in l.pline.vertex_data.iter_mut() {
             let (cx, cy) = cell(v.x, v.y);
+            // The nearest anchor, not the first: a loop identical to an earlier one must snap
+            // each vertex onto its own twin, not onto a neighbour of it a few nanometres off.
             let near = (-1..=1)
                 .flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy)))
                 .filter_map(|c| anchors.get(&c))
                 .flatten()
-                .find(|&&(owner, x, y)| owner != li && (x - v.x).hypot(y - v.y) <= join)
+                .filter(|&&(owner, x, y)| owner != li && (x - v.x).hypot(y - v.y) <= join)
+                .min_by(|a, b| {
+                    let (da, db) = ((a.1 - v.x).hypot(a.2 - v.y), (b.1 - v.x).hypot(b.2 - v.y));
+                    da.total_cmp(&db).then(a.0.cmp(&b.0))
+                })
                 .copied();
             match near {
                 Some((_, x, y)) => {
@@ -508,6 +613,7 @@ fn snap_vertices(loops: &mut Vec<Tagged>, join: f64, repeat: f64) {
     loops.retain_mut(|l| {
         let was_moved = moved[i];
         i += 1;
+        l.nudged |= was_moved;
         match l.pline.remove_repeat_pos(repeat) {
             Some(p) => l.pline = p,
             None if !was_moved => return true,
@@ -523,10 +629,10 @@ fn snap_vertices(loops: &mut Vec<Tagged>, join: f64, repeat: f64) {
     });
 }
 
-/// The general boolean. `inside(w_a, w_b)` decides membership from the winding numbers
+/// The general boolean. `rule` decides membership from the winding numbers
 /// of the two operands. `Err` carries the loops that did close when some boundary chain
 /// could not (see [`Region::incomplete`]).
-fn resolve(a: &[Pline], b: &[Pline], inside: &Inside) -> Result<Vec<Pline>, Vec<Pline>> {
+fn resolve(a: &[Pline], b: &[Pline], rule: Rule) -> Result<Vec<Pline>, Vec<Pline>> {
     let mut loops: Vec<Tagged> = tag(a, 0).into_iter().chain(tag(b, 1)).collect();
     if loops.is_empty() {
         return Ok(Vec::new());
@@ -544,7 +650,7 @@ fn resolve(a: &[Pline], b: &[Pline], inside: &Inside) -> Result<Vec<Pline>, Vec<
         .unwrap_or(1.0);
     let tol = Tolerances::for_extent(extent);
     snap_vertices(&mut loops, tol.snap, tol.join);
-    merge_duplicates(&mut loops);
+    merge_duplicates(&mut loops, tol.same);
 
     // Loops in different clusters can neither cross nor contain each other, so each cluster
     // is an independent boolean: solved apart, in parallel where a pool exists.
@@ -561,7 +667,7 @@ fn resolve(a: &[Pline], b: &[Pline], inside: &Inside) -> Result<Vec<Pline>, Vec<
             .collect();
         let mut complete = true;
         let mut out = Vec::new();
-        for r in crate::par::map(parts, |part| resolve_tagged(part, tol, inside)) {
+        for r in crate::par::map(parts, |part| resolve_cluster(part, tol, rule)) {
             match r {
                 Ok(l) => out.extend(l),
                 Err(l) => {
@@ -572,12 +678,186 @@ fn resolve(a: &[Pline], b: &[Pline], inside: &Inside) -> Result<Vec<Pline>, Vec<
         }
         return if complete { Ok(out) } else { Err(out) };
     }
-    resolve_tagged(loops, tol, inside)
+    resolve_cluster(loops, tol, rule)
 }
 
-/// Membership from the winding numbers of the two operands; `Sync` so clusters can be
-/// resolved on several threads.
-type Inside = dyn Fn(i32, i32) -> bool + Sync;
+/// The exact boolean of one cluster, or, if it cannot be made consistent, the robust
+/// polygon boolean of the same loops with arcs flattened finely (see [`overlay_fallback`]).
+fn resolve_cluster(
+    loops: Vec<Tagged>,
+    tol: Tolerances,
+    rule: Rule,
+) -> Result<Vec<Pline>, Vec<Pline>> {
+    let flat: Vec<(u8, i32, Pline)> = loops
+        .iter()
+        .map(|l| (l.operand, l.count, l.pline.clone()))
+        .collect();
+    // Fallback flattening: 0.1 µm, coarser only for geometry beyond a metre or so.
+    let fine = tol.same.max(FALLBACK_FLATTEN_MM);
+    let mut degenerate = false;
+    match resolve_tagged(loops, tol, rule, &mut degenerate) {
+        Ok(r) => {
+            let valid = is_valid_region(&r, tol.probe);
+            if valid && !degenerate {
+                return Ok(r);
+            }
+            // Snapped or merged loops, merged cuts or bridged gaps (near-coincident
+            // boundaries, where a complete result can still be wrong: a boundary kept twice,
+            // or none), or a result that is not a valid region: check it against the robust
+            // boolean, whose area may differ only by the tolerances along the boundary.
+            let Some(robust) = overlay_fallback(&flat, rule, fine) else {
+                return Ok(r);
+            };
+            let area = |ls: &[Pline]| ls.iter().map(|l| l.area()).sum::<f64>();
+            let perimeter: f64 = flat.iter().map(|(_, _, l)| l.path_length()).sum();
+            let slack = 4.0 * fine * perimeter;
+            // Loops the size of a few tolerances either way are not counted.
+            let speck = (10.0 * tol.same).powi(2);
+            let loops = |ls: &[Pline]| ls.iter().filter(|l| l.area().abs() > speck).count();
+            if valid && loops(&r) == loops(&robust) && (area(&r) - area(&robust)).abs() <= slack {
+                Ok(r)
+            } else {
+                Ok(robust)
+            }
+        }
+        Err(partial) => {
+            if crate::cancel::cancelled() {
+                return Err(partial);
+            }
+            overlay_fallback(&flat, rule, fine).ok_or(partial)
+        }
+    }
+}
+
+/// Whether `loops` form a valid region: just inside every boundary the loops wind exactly
+/// once, just outside not at all. A boundary kept twice (two near-coincident loops whose
+/// crossing the kernel missed) winds twice inside and fails.
+fn is_valid_region(loops: &[Pline], probe: f64) -> bool {
+    let tagged: Vec<Tagged> = tag(loops, 0);
+    if tagged.len() != loops.len() {
+        return false;
+    }
+    let grid = BBoxGrid::new(tagged.iter().map(|l| l.bbox).collect());
+    tagged.iter().all(|l| {
+        let Some((mid, n)) = midpoint_and_left_normal(&l.pline) else {
+            return false;
+        };
+        let at = |d: f64| {
+            winding(
+                &tagged,
+                &grid,
+                0,
+                Point::new(mid.x + n.x * d, mid.y + n.y * d),
+                2.0 * probe,
+            )
+        };
+        at(probe) == 1 && at(-probe) == 0
+    })
+}
+
+/// Finest flattening of arcs for the polygon fallback (mm): 0.1 µm, a tenth of the read
+/// tolerance. Large geometry uses its same-shape tolerance instead, which keeps a circle a
+/// kilometre across to some ten thousand points.
+const FALLBACK_FLATTEN_MM: f64 = 1e-4;
+
+/// The boolean of `loops` (operand, multiplicity, loop) by i_overlay, a robust integer
+/// polygon boolean, with arcs flattened within `flatten`. Used only for the
+/// rare cluster of near-coincident boundaries where the exact, arc-preserving boolean
+/// cannot be made consistent; the result is complete and loses its arcs in that cluster
+/// only. `None` if a loop cannot be flattened.
+fn overlay_fallback(loops: &[(u8, i32, Pline)], rule: Rule, flatten: f64) -> Option<Vec<Pline>> {
+    use i_overlay::float::single::SingleFloatOverlay;
+    let (overlay, fill) = rule.overlay();
+    let mut subj: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut clip: Vec<Vec<[f64; 2]>> = Vec::new();
+    for (operand, count, l) in loops {
+        // Even-odd only sees a duplicate's parity. The other rules sum windings, so every
+        // copy counts: a loop twice and a hole once still cover the hole.
+        let copies = if fill == i_overlay::core::fill_rule::FillRule::EvenOdd {
+            count.rem_euclid(2)
+        } else {
+            *count
+        };
+        let pts: Vec<[f64; 2]> = pline::flatten(l, flatten)
+            .ok()?
+            .into_iter()
+            .map(|p| [p.x, p.y])
+            .collect();
+        for _ in 0..copies {
+            if *operand == 0 {
+                subj.push(pts.clone())
+            } else {
+                clip.push(pts.clone())
+            }
+        }
+    }
+    let shapes = subj.overlay_as::<i64>(&clip, overlay, fill);
+    let mut out = Vec::new();
+    for shape in shapes {
+        for (k, contour) in shape.into_iter().enumerate() {
+            let mut l =
+                pline::from_points(contour.into_iter().map(|[x, y]| Point::new(x, y)), true);
+            // Our convention: outers counter-clockwise, holes clockwise.
+            if (k == 0) != (l.area() > 0.0) {
+                l.invert_direction_mut();
+            }
+            if is_usable(&l) {
+                out.push(l);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Which points a boolean keeps, from the winding numbers of its two operands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rule {
+    /// One operand, odd winding.
+    EvenOdd,
+    /// One operand, non-zero winding.
+    NonZero,
+    /// One operand of oriented regions (outers counter-clockwise, holes clockwise): their
+    /// union, where the summed winding is positive.
+    Positive,
+    Union,
+    Intersection,
+    Difference,
+    Xor,
+}
+
+impl Rule {
+    fn inside(self, a: i32, b: i32) -> bool {
+        match self {
+            Rule::EvenOdd => a % 2 != 0,
+            Rule::NonZero => a != 0,
+            Rule::Positive => a > 0,
+            Rule::Union => a > 0 || b > 0,
+            Rule::Intersection => a > 0 && b > 0,
+            Rule::Difference => a > 0 && b <= 0,
+            Rule::Xor => (a > 0) != (b > 0),
+        }
+    }
+
+    /// The same operation for the polygon fallback. The operands of the two-operand rules
+    /// and of `Positive` are oriented regions, for which non-zero equals positive winding.
+    fn overlay(
+        self,
+    ) -> (
+        i_overlay::core::overlay_rule::OverlayRule,
+        i_overlay::core::fill_rule::FillRule,
+    ) {
+        use i_overlay::core::fill_rule::FillRule;
+        use i_overlay::core::overlay_rule::OverlayRule;
+        match self {
+            Rule::EvenOdd => (OverlayRule::Subject, FillRule::EvenOdd),
+            Rule::NonZero | Rule::Positive => (OverlayRule::Subject, FillRule::NonZero),
+            Rule::Union => (OverlayRule::Union, FillRule::NonZero),
+            Rule::Intersection => (OverlayRule::Intersect, FillRule::NonZero),
+            Rule::Difference => (OverlayRule::Difference, FillRule::NonZero),
+            Rule::Xor => (OverlayRule::Xor, FillRule::NonZero),
+        }
+    }
+}
 
 /// Below this many loops a boolean is not worth splitting into clusters.
 const MIN_LOOPS_TO_SPLIT: usize = 32;
@@ -620,8 +900,10 @@ fn clusters(loops: &[Tagged], pad: f64) -> Vec<Vec<usize>> {
 fn resolve_tagged(
     loops: Vec<Tagged>,
     tol: Tolerances,
-    inside: &Inside,
+    rule: Rule,
+    degenerate: &mut bool,
 ) -> Result<Vec<Pline>, Vec<Pline>> {
+    *degenerate |= loops.iter().any(|l| l.nudged);
     let grid = BBoxGrid::new(loops.iter().map(|l| l.bbox).collect());
 
     // 1. Intersections -> split points per loop, including where a loop crosses itself.
@@ -664,25 +946,49 @@ fn resolve_tagged(
         }
     }
 
-    // 2. Slices.
+    // 2. Slices. Slicing moves a cut to a vertex the kernel considers equal to it, so the
+    // slices of a loop chain into a slightly different loop. Classification tests against
+    // these rebuilt loops: a slice is then never judged by geometry it does not have (a
+    // slice nudged a few nanometres inside its neighbour would otherwise vanish), and the
+    // identical slices two near-coincident loops produce are seen as one shared boundary.
     let mut slices: Vec<Pline> = Vec::new();
+    let mut rebuilt: Vec<Tagged> = Vec::with_capacity(loops.len());
     for (i, l) in loops.iter().enumerate() {
-        let pts = sorted_splits(&l.pline, &mut splits[i], tol.join);
+        let pts = sorted_splits(&l.pline, &mut splits[i], tol.join, degenerate);
         if pts.len() < 2 {
             slices.push(l.pline.clone());
+            rebuilt.push(Tagged {
+                pline: l.pline.clone(),
+                ..*l
+            });
             continue;
         }
+        let mut pieces = Vec::with_capacity(pts.len());
         for k in 0..pts.len() {
             let (si, sp) = pts[k];
             let (ei, ep) = pts[(k + 1) % pts.len()];
             if let Some(vd) = PlineViewData::from_slice_points(&l.pline, sp, si, ep, ei, tol.join) {
-                let s = Pline::create_from(&vd.view(&l.pline));
-                if s.vertex_count() >= 2 && s.path_length() > 2.0 * tol.join {
-                    slices.push(s);
-                }
+                pieces.push(Pline::create_from(&vd.view(&l.pline)));
             }
         }
+        rebuilt.push(Tagged {
+            pline: (pieces.len() == pts.len())
+                .then(|| rejoin(&pieces))
+                .flatten()
+                .unwrap_or_else(|| l.pline.clone()),
+            ..*l
+        });
+        slices.extend(
+            pieces
+                .into_iter()
+                .filter(|s| s.vertex_count() >= 2 && s.path_length() > 2.0 * tol.join),
+        );
     }
+    for t in &mut rebuilt {
+        t.bbox = pline::bounds(&t.pline).unwrap_or(t.bbox);
+    }
+    let grid = BBoxGrid::new(rebuilt.iter().map(|l| l.bbox).collect());
+    let loops = rebuilt;
 
     // 3. Classify and orient; drop coincident duplicates.
     let mut seen: HashMap<(i64, i64, i64, i64, i64, i64), ()> = HashMap::new();
@@ -703,11 +1009,11 @@ fn resolve_tagged(
         let left = Point::new(mid.x + n.x * tol.probe, mid.y + n.y * tol.probe);
         let right = Point::new(mid.x - n.x * tol.probe, mid.y - n.y * tol.probe);
         let pad = tol.probe * 2.0;
-        let in_left = inside(
+        let in_left = rule.inside(
             winding(&loops, &grid, 0, left, pad),
             winding(&loops, &grid, 1, left, pad),
         );
-        let in_right = inside(
+        let in_right = rule.inside(
             winding(&loops, &grid, 0, right, pad),
             winding(&loops, &grid, 1, right, pad),
         );
@@ -729,7 +1035,9 @@ fn resolve_tagged(
     }
 
     // 4. Stitch.
-    stitch(kept, tol.join)
+    // Both copies of a crossing may each have moved by up to the join tolerance (projected
+    // onto their own loop, snapped to a nearby vertex), so their ends can be twice that apart.
+    stitch(kept, 2.5 * tol.join, degenerate)
 }
 
 impl Region {
@@ -769,22 +1077,22 @@ impl Region {
             .map(pline::ensure_ccw)
             .collect();
         let resolved = match rule {
-            LoopRule::EvenOdd => resolve(&ccw, &[], &|a, _| a % 2 != 0),
-            LoopRule::NonZero => resolve(&ccw, &[], &|a, _| a != 0),
+            LoopRule::EvenOdd => resolve(&ccw, &[], Rule::EvenOdd),
+            LoopRule::NonZero => resolve(&ccw, &[], Rule::NonZero),
             LoopRule::MergeThenNest => merge_then_nest(ccw),
         };
         Region::resolved(resolved, false)
     }
 
     pub fn boolean(&self, other: &Region, op: BoolOp) -> Region {
-        let f: &Inside = match op {
-            BoolOp::Union => &|a, b| a > 0 || b > 0,
-            BoolOp::Intersection => &|a, b| a > 0 && b > 0,
-            BoolOp::Difference => &|a, b| a > 0 && b <= 0,
-            BoolOp::Xor => &|a, b| (a > 0) != (b > 0),
+        let rule = match op {
+            BoolOp::Union => Rule::Union,
+            BoolOp::Intersection => Rule::Intersection,
+            BoolOp::Difference => Rule::Difference,
+            BoolOp::Xor => Rule::Xor,
         };
         Region::resolved(
-            resolve(&self.loops, &other.loops, f),
+            resolve(&self.loops, &other.loops, rule),
             self.incomplete || other.incomplete,
         )
     }
@@ -804,7 +1112,7 @@ impl Region {
         if count <= 1 {
             return Region { loops, incomplete };
         }
-        Region::resolved(resolve(&loops, &[], &|a, _| a > 0), incomplete)
+        Region::resolved(resolve(&loops, &[], Rule::Positive), incomplete)
     }
 
     pub fn union(&self, other: &Region) -> Region {
@@ -1106,7 +1414,7 @@ fn merge_then_nest(ccw: Vec<Pline>) -> Result<Vec<Pline>, Vec<Pline>> {
         if cluster.len() == 1 && !cluster[0].scan_for_self_intersect() {
             merged.extend(cluster);
         } else {
-            match resolve(&cluster, &[], &|a, _| a != 0) {
+            match resolve(&cluster, &[], Rule::NonZero) {
                 Ok(loops) => merged.extend(loops),
                 Err(loops) => {
                     merged.extend(loops);
@@ -1414,6 +1722,166 @@ mod tests {
             prop_assert!((all.area() - pairwise.area()).abs() < 1e-6, "{} vs {}", all.area(), pairwise.area());
             prop_assert!(all.xor(&pairwise).area() < 1e-6);
         }
+    }
+
+    /// A shape for the near-coincidence tests: rectangles, circles, capsules (strokes) and
+    /// irregular polygons, so arcs meet lines and vertices rarely line up.
+    fn near_shape(kind: u8, x: f64, y: f64, s: f64, a: f64) -> Region {
+        match kind % 4 {
+            0 => Region::from_loops([sq(x, y, s)], LoopRule::NonZero),
+            1 => Region::from_loops([circle(Point::new(x, y), s / 2.0)], LoopRule::NonZero),
+            2 => stroke(
+                &pline::from_points(
+                    [
+                        Point::new(x, y),
+                        Point::new(x + s * a.cos(), y + s * a.sin()),
+                    ],
+                    false,
+                ),
+                s / 3.0,
+            ),
+            _ => Region::from_loops(
+                [pline::from_points(
+                    (0..7).map(|k| {
+                        let t = a + k as f64 * 0.9;
+                        let r = s * (0.6 + 0.4 * ((k * 37 % 11) as f64 / 11.0));
+                        Point::new(x + r * t.cos(), y + r * t.sin())
+                    }),
+                    true,
+                )],
+                LoopRule::NonZero,
+            ),
+        }
+    }
+
+    fn moved(r: &Region, dx: f64, dy: f64, rot: f64, scale: f64) -> Region {
+        let c = r
+            .bounds()
+            .map(|b| Point::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0))
+            .unwrap();
+        Region {
+            loops: r
+                .loops
+                .iter()
+                .map(|l| {
+                    let mut l = l.clone();
+                    for v in l.vertex_data.iter_mut() {
+                        let (px, py) = (v.x - c.x, v.y - c.y);
+                        v.x = c.x + scale * (px * rot.cos() - py * rot.sin()) + dx;
+                        v.y = c.y + scale * (px * rot.sin() + py * rot.cos()) + dy;
+                    }
+                    l
+                })
+                .collect(),
+            incomplete: false,
+        }
+    }
+
+    /// Near-coincidence sweep: a shape (rectangle, circle, capsule or irregular polygon)
+    /// against a copy moved, rotated or scaled by 10 pm .. 1 µm, under union, intersection,
+    /// difference and xor; three copies at once; and shapes with holes. Every result must be
+    /// complete and its area right within the perturbation. Returns the failures.
+    fn near_coincidence_sweep(cases: usize) -> Vec<String> {
+        let mut rng = 0x2545f4914f6cdd1du64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut failures = Vec::new();
+        let mut check = |what: String, r: &Region, expect: f64, slack: f64| {
+            if r.incomplete || (r.area() - expect).abs() > slack {
+                failures.push(format!(
+                    "{what}: incomplete {} area {} vs {expect}",
+                    r.incomplete,
+                    r.area()
+                ));
+            }
+        };
+        for case in 0..cases {
+            let kind = (next() * 4.0) as u8;
+            let s = 0.5 + next() * 4.0;
+            let a = next() * 6.0;
+            let base = near_shape(kind, next() * 10.0, next() * 10.0, s, a);
+            let eps = 10f64.powf(-11.0 + next() * 8.0);
+            let dir = next() * std::f64::consts::TAU;
+            let other = match case % 3 {
+                0 => moved(&base, eps * dir.cos(), eps * dir.sin(), 0.0, 1.0),
+                1 => moved(&base, 0.0, 0.0, eps / s, 1.0),
+                _ => moved(&base, 0.0, 0.0, 0.0, 1.0 + eps / s),
+            };
+            let area = base.area();
+            let slack = 1e-4 + 20.0 * eps * s;
+            let tag = |op: &str| format!("case {case} kind {kind} eps {eps:.1e} {op}");
+            check(tag("union"), &base.union(&other), area, slack);
+            check(tag("intersection"), &base.intersection(&other), area, slack);
+            check(tag("difference"), &base.difference(&other), 0.0, slack);
+            check(tag("xor"), &base.xor(&other), 0.0, slack);
+            let third = moved(
+                &base,
+                -eps * dir.sin(),
+                eps * dir.cos(),
+                -eps / s,
+                1.0 - eps / s,
+            );
+            check(
+                tag("union of three"),
+                &Region::union_all([base.clone(), other.clone(), third]),
+                area,
+                3.0 * slack,
+            );
+            let b = base.bounds().unwrap();
+            let hole = Region::from_loops(
+                [circle(
+                    Point::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0),
+                    s * 0.1,
+                )],
+                LoopRule::NonZero,
+            );
+            let holed = base.difference(&hole);
+            let holed2 = moved(&holed, eps * dir.cos(), eps * dir.sin(), 0.0, 1.0);
+            check(
+                tag("union with holes"),
+                &holed.union(&holed2),
+                holed.area(),
+                slack,
+            );
+        }
+        failures
+    }
+
+    #[test]
+    fn near_coincident_booleans_are_complete_and_right() {
+        let failures = near_coincidence_sweep(200);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn fallback_counts_merged_duplicates() {
+        // A square twice (merged into one loop with count 2) and the same square with a
+        // clockwise hole: the winding in the hole is 2 - 1, so the union is the square.
+        let mut hole = sq(3.0, 3.0, 4.0);
+        hole.invert_direction_mut();
+        let loops = [(0, 2, sq(0.0, 0.0, 10.0)), (0, 1, hole)];
+        let r = overlay_fallback(&loops, Rule::Positive, FALLBACK_FLATTEN_MM).unwrap();
+        assert_near(r.iter().map(|l| l.area()).sum(), 100.0, 1e-9);
+        // Even-odd sees parity only: the square twice cancels, the hole's loop remains.
+        let r = overlay_fallback(&loops, Rule::EvenOdd, FALLBACK_FLATTEN_MM).unwrap();
+        assert_near(r.iter().map(|l| l.area()).sum(), 16.0, 1e-9);
+    }
+
+    /// The same sweep at scale (`just regression`): 40 000 cases, 240 000 booleans.
+    #[test]
+    #[ignore]
+    fn near_coincident_booleans_stress() {
+        let failures = near_coincidence_sweep(40_000);
+        assert!(
+            failures.is_empty(),
+            "{} failures:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]

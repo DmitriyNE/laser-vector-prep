@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 boostvoronoi.workspace = true
 cavalier_contours.workspace = true
+i_overlay.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true

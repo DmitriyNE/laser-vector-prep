@@ -392,6 +392,9 @@ Tried and dropped: retrying an inconsistent boolean with coarser tolerances (up 
 or with each loop moved by a tiny distinct offset. Once self-intersections were handled
 neither rescued a single additional fuzz case.
 
+(D34 resolves the reported cases: a suspect or unclosed boolean is checked against, or
+replaced by, a robust polygon boolean.)
+
 The kernel's debug-only self-checks fire on exactly such near-degenerate input and its
 release build handles it, so they are disabled in dev and fuzz builds; our own
 consistency check reports the consequences.
@@ -445,7 +448,7 @@ Owner's follow-ups to M4:
   the repository's GitHub Actions cache: free, no account or secrets, per store path.
 - **Booleans must resolve near-coincident boundaries** (the case D30 only reports): snap
   vertices onto nearby edges of other loops and make nearly identical segments identical,
-  so such boundaries become exact overlaps.
+  so such boundaries become exact overlaps. (Done differently: D34.)
 - **Layer compositing and path optimization run in parallel**: independent layers, passes
   and groups evaluate concurrently, the coverage raster and the optimizer's candidate
   search use the thread pool. Results must not depend on the number of threads.
@@ -457,3 +460,43 @@ Owner's follow-ups to M4:
   dagre (@dagrejs/dagre, MIT); Svelte Flow has no layout engine of its own.
 - Firefox start-up after the service-worker reload is not a focus for now.
 - UI polish is postponed.
+
+## D34 — Near-coincident booleans: exact first, checked against a robust polygon boolean (2026-10-25)
+
+D33 asked for booleans that resolve near-coincident boundaries instead of reporting them.
+The plan there, snapping vertices onto nearby edges of other loops, made things worse and
+was dropped, as were larger probe distances and clustering crossing points into nodes:
+each fixed some cases and broke others, because cavalier_contours still intersects the
+moved boundaries within its own tolerance and may disagree with itself about where they
+meet.
+
+The exact, arc-preserving boolean stays the primary path, with three repairs:
+
+- Vertices snap to the *nearest* vertex of another loop within the snap tolerance (they
+  took the first one found, which could leave a sliver).
+- Loops of the same shape within `max(extent·1e-7, 100 nm)` merge with a count, as exact
+  duplicates already did (D30); this covers copies a few tens of nanometres apart.
+- Chains that miss each other by a few join tolerances are bridged when stitching.
+
+Each of these, and merging two distinct crossing points into one, marks the cluster as
+suspect. A suspect cluster, or any result that is not a valid region (just inside every
+boundary the winding must be 1, just outside 0), is checked against i_overlay (MIT, pure
+Rust), a robust integer polygon boolean, on the same loops with arcs flattened within the
+same-shape tolerance (0.1 µm up to about a metre of extent) and duplicate counts honoured.
+The exact result is kept when it is a valid region with the same number of loops as the
+robust one (ignoring specks a few tolerances wide) and an area within four flattening
+tolerances times the input perimeter; otherwise the
+robust result replaces it, in that cluster only, without arcs. A cluster whose exact
+boolean cannot close at all also takes the robust result. `Region::incomplete` and the
+`*.incomplete_boolean` warnings remain for a loop that cannot be flattened.
+
+Evidence: a sweep of squares, circles, capsules and irregular polygons combined with a
+copy moved, rotated or scaled by 10⁻¹¹ to 10⁻³ mm (union, intersection, difference, xor,
+union of three, a hole) runs 200 cases in `just test` and 40 000 cases (240 000 booleans:
+6.5 s in a release build, three minutes in `just regression`'s dev build on a loaded
+machine) in `just regression`, with no incomplete and no wrong result. All 464
+saved fuzz inputs now evaluate without an incomplete composite. On the board fixtures the
+robust result never replaced an exact one, and the panel benchmark did not slow down.
+
+Cost: i_overlay and its four helper crates add 266 kB to the wasm module (97 kB gzipped,
+about 9%).

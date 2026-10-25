@@ -4,6 +4,7 @@ Open defects first, then fixed ones. One line each; details go in the log or an 
 
 | ID | Status | Area | Description | Found | Fixed |
 |---|---|---|---|---|---|
+| DEF-12 | fixed | geometry | Near-coincident edges and arcs whose vertices did not line up could leave a boolean's boundary chain open: that part of the composite was dropped with a warning (D30). Vertex snapping also took the first vertex in range instead of the nearest, which could leave a sliver. Now resolved exactly where possible, else by a robust polygon boolean (D34). Found by fuzzing. | 2026-10-25 | 2026-10-25 |
 | DEF-11 | fixed | geometry | A PDF whose transforms produced non-finite coordinates crashed a clip boolean (NaN in the kernel's spatial index). Booleans now refuse non-finite loops (D30). Found by fuzzing. | 2026-10-25 | 2026-10-25 |
 | DEF-10 | fixed | geometry | Compositing was quadratic in loops stacked in one place (a step-and-repeat with zero step flashed every pad hundreds of times): 11 s for a 1 KB Gerber. Exact duplicates are now merged with a count (D30). Found by fuzzing. | 2026-10-25 | 2026-10-25 |
 | DEF-9 | fixed | readers | Small files could expand without bound: block arrays of block arrays (DXF), step-and-repeat counts (Gerber), recursive references (GDSII), forms invoking forms or themselves (PDF), dictionary primitives placed by many pads (IPC-2581). Now bounded by the import work budget (D31); self-invoking forms are skipped. Found by fuzzing. | 2026-10-25 | 2026-10-25 |

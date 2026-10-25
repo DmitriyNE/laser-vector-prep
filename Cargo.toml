@@ -19,6 +19,9 @@ wasm-bindgen = "=0.2.129"
 wasm-bindgen-rayon = "1.3"
 rayon = "1.12"
 cavalier_contours = "0.9"
+# Robust integer polygon booleans: the fallback for clusters the exact arc boolean cannot
+# resolve consistently (region.rs).
+i_overlay = "9.1"
 boostvoronoi = { version = "0.12", default-features = false }
 proptest = "1.12"
 # SVG semantics (CSS, use/symbol, viewBox, shapes to paths); text stays off (D22).
