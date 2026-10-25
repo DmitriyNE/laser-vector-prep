@@ -126,8 +126,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       port"); the slow start does not reproduce locally (0.8 s through the service worker).
       Firefox evaluates the board about 2× slower than Chrome (wasm speed)
 - [ ] Re-check the live site's first visit in Firefox after deploying (14.6 s at kickoff)
-- [ ] Coverage audit (spec §10): spill, missed area, short segments against a per-group
-      effective marking width; schema v2 with the first migration
+- [x] Coverage audit (spec §10): spill, missed area, short segments against a per-group
+      effective marking width; schema v2 with the first migration (D32)
 - [ ] JSON Schema of the profile format generated from the serde types, with a staleness test
 - [ ] Preview precision far from the origin
 - [ ] `just package` builds a versioned tarball of the site; `nix build` package

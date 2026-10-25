@@ -410,3 +410,29 @@ worker can address), is a `ReadOptions` field so tests use small ones. A file th
 exhausts it is refused with one clear error rather than imported partly; GDSII's separate
 5 million instance cap is gone. PDF forms that invoke themselves (a reference cycle) are
 skipped with an error instead of recursing to the depth limit.
+
+## D32 — Coverage audit per pass, width per output group; parallel booleans (2026-10-25)
+
+Spec §10 asks for fills to be audited against an assumed swept marking width, reporting
+spill, missed area and short disconnected segments. The width belongs to the output group
+(one beam setting per group, D29): `auditWidthMm`, schema v2, absent = no audit. Each pass
+that fills a region and belongs to an audited group gets an audit: its paths stroked at
+the width (`stroke_many`), missed area = region − swept, spill = swept − region, and the
+number of paths shorter than the width. It is cached on the pass fingerprint and the
+width, cancellable, and shown with the pass's properties and as a red (missed) and amber
+(spill) overlay. The presets audit their fills at the fill pitch, the width at which
+rings exactly tile the region; on the board fixture that reports 1.19 % missed (the
+corner slivers between rounded and sharp ring corners) and no spill.
+
+The first real migration (v1 → v2) carries a v1 profile over unchanged, so a migrated
+profile has the audit off; the four v1 presets, saved as the deployed app wrote them, are
+fixtures of that migration (`fixtures/profiles/`).
+
+Stroking thousands of rings made the audit as expensive as the fill, so two things that
+help every boolean came with it: `Region::union_all` unions many regions in one boolean
+(their loops are already oriented, so the union is where the summed winding is
+positive), and `resolve` splits its input into clusters of loops whose bounding boxes
+overlap, directly or through other loops. Loops in different clusters can neither cross
+nor contain each other, so each cluster is an independent boolean, solved in parallel
+where a thread pool exists. The audit of a 4×8 panel went from 2.9 s to 1.4–1.9 s
+(measured on a heavily loaded machine; the comparison held in every run).

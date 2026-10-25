@@ -139,6 +139,8 @@ export interface OutputGroup {
   visible: boolean;
   /** Per-group path-order mode; null follows the profile's optimizer mode. */
   orderMode?: OptimizerMode | null;
+  /** Effective marking width (mm) the coverage audit assumes; absent turns it off (schema v2). */
+  auditWidthMm?: number | null;
 }
 
 /** Path-order planning (spec §7). Geometric prediction only, never a machine setting. */
@@ -198,6 +200,20 @@ export interface PassSummary {
   lengthMm: number;
   cached: boolean;
   diagnostics: Diagnostic[];
+  /** Coverage audit against the group's assumed marking width (spec §10). */
+  audit?: AuditSummary;
+}
+
+/** Paths swept at the assumed width versus the region they fill; a geometric surrogate. */
+export interface AuditSummary {
+  widthMm: number;
+  regionMm2: number;
+  /** Region area no path sweeps. */
+  missedMm2: number;
+  /** Swept area outside the region. */
+  spillMm2: number;
+  /** Paths shorter than the width. */
+  shortSegments: number;
 }
 
 /** Statistics of a path sequence under the straight-jump assumption. */

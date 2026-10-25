@@ -30,7 +30,7 @@ describe("lvp-wasm project API", () => {
       "builtin-general-marking",
       "builtin-boundary-cutting",
     ]);
-    expect(presets.every((p) => p.schemaVersion === 1)).toBe(true);
+    expect(presets.every((p) => p.schemaVersion === 2)).toBe(true);
     expect(presets[0]!.workingLayers[0]!.passes[0]!.pattern.kind).toBe("contourFill");
   });
 
@@ -52,6 +52,14 @@ describe("lvp-wasm project API", () => {
     expect(ev.passes.length).toBe(2);
 
     const pass = ev.passes[0]!;
+    // The preset audits the copper fill at its 20 µm pitch; with the test's 0.2 mm pitch
+    // most of the copper stays unswept.
+    expect(pass.audit?.widthMm).toBe(0.02);
+    expect(pass.audit!.missedMm2).toBeGreaterThan(0.5 * pass.audit!.regionMm2);
+    const missed = wasm.preview_audit(pass.id, false)!;
+    expect(missed.starts.length).toBeGreaterThan(1);
+    missed.free();
+    expect(ev.passes[1]!.audit).toBeUndefined(); // the outline is linework
     const preview = wasm.preview_pass(pass.id)!;
     expect(preview.starts.length).toBe(pass.paths + 1);
     expect(preview.coords.length).toBe(preview.starts[pass.paths]! * 2);

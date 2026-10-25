@@ -190,6 +190,12 @@ impl From<PreviewBuffer> for Preview {
     }
 }
 
+/// Missed (`spill == false`) or spill area of a pass's coverage audit, if it has one.
+#[wasm_bindgen]
+pub fn preview_audit(id: &str, spill: bool) -> Option<Preview> {
+    with(|p| p.preview_audit(&PassId::new(id), spill).map(Preview::from))
+}
+
 #[wasm_bindgen]
 pub fn preview_pass(id: &str) -> Option<Preview> {
     with(|p| p.preview_pass(&PassId::new(id)).map(Into::into))

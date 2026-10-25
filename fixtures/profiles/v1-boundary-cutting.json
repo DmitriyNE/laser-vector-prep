@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "profileId": "builtin-boundary-cutting",
+  "name": "Boundary cutting (contour trace)",
+  "sourceBindings": [
+    {
+      "id": "src-cut",
+      "name": "Cut outline",
+      "required": true,
+      "rules": [
+        {
+          "kind": "layerName",
+          "format": "dxf",
+          "name": "ROUTE_TOOL_PATH"
+        },
+        {
+          "kind": "layerName",
+          "format": "dxf",
+          "name": "CUT"
+        },
+        {
+          "kind": "layerName",
+          "format": "dxf",
+          "name": "OUTLINE"
+        },
+        {
+          "kind": "function",
+          "pattern": "Profile*"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*.gko"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*.gm1"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*-Edge_Cuts.gbr"
+        }
+      ]
+    }
+  ],
+  "workingLayers": [
+    {
+      "id": "wl-cut",
+      "name": "Cut",
+      "kind": "region",
+      "inputs": [
+        {
+          "source": "src-cut"
+        }
+      ],
+      "operands": [],
+      "op": "union",
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "none"
+      },
+      "passes": [
+        {
+          "id": "pass-cut",
+          "name": "Boundary trace, holes first",
+          "pattern": {
+            "kind": "boundaryTrace",
+            "side": "on",
+            "offsetMm": 0.0,
+            "kerfMm": 0.0,
+            "rings": 1,
+            "ringSpacingMm": 0.0,
+            "reverse": false,
+            "innerFirst": true
+          },
+          "group": "grp-cut",
+          "enabled": true
+        }
+      ],
+      "enabled": true,
+      "referenceOnly": false
+    }
+  ],
+  "outputGroups": [
+    {
+      "id": "grp-cut",
+      "name": "Cut",
+      "color": [
+        255,
+        0,
+        0
+      ],
+      "export": true,
+      "visible": true
+    }
+  ],
+  "export": {
+    "strokeWidthMm": 0.0254,
+    "marginMm": 5.0,
+    "separateFiles": false,
+    "flattenToleranceMm": 0.001
+  },
+  "optimizer": {
+    "mode": "minimumJump",
+    "footprintMm": 0.1,
+    "bleedWeight": 1.0,
+    "protected": [],
+    "cellMm": 0.05,
+    "maxSweeps": 20
+  }
+}

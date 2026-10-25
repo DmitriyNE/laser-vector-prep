@@ -42,7 +42,7 @@ export class ProjectStore {
   acceptedExtensions: string[] = $state(["dxf"]);
   saved: SavedProfile[] = $state([]);
   profile: Profile = $state({
-    schemaVersion: 1,
+    schemaVersion: 2,
     profileId: "empty",
     name: "Empty",
     sourceBindings: [],
@@ -69,6 +69,7 @@ export class ProjectStore {
   hiddenPasses = $state(new Set<string>());
   showJumps = $state(false);
   showHeatmap = $state(false);
+  showAudit = $state(false);
   showSources = $state(true);
   showLayers = $state(true);
 
@@ -254,6 +255,11 @@ export class ProjectStore {
   /** Hypothetical jumps of an output group's planned order. */
   previewJumps(groupId: string): Promise<Preview | null> {
     return this.worker.call({ kind: "previewJumps", id: groupId });
+  }
+
+  /** Missed area (or, with `spill`, swept area outside the region) of a pass's coverage audit. */
+  previewAudit(passId: string, spill: boolean): Promise<Preview | null> {
+    return this.worker.call({ kind: "previewAudit", id: passId, spill });
   }
 
   /** Footprint coverage raster of a group over the protected regions, if any. */

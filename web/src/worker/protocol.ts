@@ -21,6 +21,7 @@ export type Payload =
   | { kind: "previewLayer"; id: string }
   | { kind: "previewSource"; file: number; layer: string }
   | { kind: "previewJumps"; id: string }
+  | { kind: "previewAudit"; id: string; spill: boolean }
   | { kind: "heatmap"; id: string }
   | { kind: "exportPdf" }
   | { kind: "exportSvg" }
@@ -62,7 +63,7 @@ export type ResultOf<K extends Kind> = K extends "version"
                   ? Diagnostic[]
                   : K extends "evaluate"
                     ? EvaluationSummary
-                    : K extends "previewPass" | "previewLayer" | "previewSource" | "previewJumps"
+                    : K extends "previewPass" | "previewLayer" | "previewSource" | "previewJumps" | "previewAudit"
                       ? Preview | null
                       : K extends "heatmap"
                         ? Heatmap | null

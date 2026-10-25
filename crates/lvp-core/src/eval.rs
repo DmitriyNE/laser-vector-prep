@@ -159,6 +159,8 @@ pub struct PassResult {
     /// Ordering constraints `(before, after)` over `paths` (cutting: holes first).
     pub precedence: Vec<(usize, usize)>,
     pub cached: bool,
+    /// Coverage audit, when the pass fills a region and its group sets an audit width.
+    pub audit: Option<patterns::Audit>,
 }
 
 /// Cached pattern output of one pass: fingerprint, paths, diagnostics, precedence.
@@ -232,6 +234,7 @@ pub struct Evaluator {
     layer_cache: HashMap<LayerId, (u64, Geometry, Vec<Diagnostic>)>,
     pass_cache: HashMap<PassId, CachedPass>,
     plan_cache: HashMap<GroupId, (u64, GroupPlan)>,
+    audit_cache: HashMap<PassId, (u64, patterns::Audit)>,
 }
 
 /// Kahn's algorithm over layer→layer edges; returns `(order, cyclic)`.
@@ -292,6 +295,7 @@ impl Evaluator {
         self.layer_cache.clear();
         self.pass_cache.clear();
         self.plan_cache.clear();
+        self.audit_cache.clear();
     }
 
     /// Evaluate outside a cancellable computation (tests, tools): never cancelled.
@@ -429,6 +433,29 @@ impl Evaluator {
                         (out.paths, out.diagnostics, out.precedence, false)
                     }
                 };
+                let audit_width = profile
+                    .group(&pass.group)
+                    .and_then(|g| g.audit_width_mm)
+                    .filter(|w| *w > 0.0 && w.is_finite());
+                let audit = match (&lr.geometry, audit_width) {
+                    (Geometry::Region(region), Some(w)) => {
+                        let mut h = DefaultHasher::new();
+                        fp.hash(&mut h);
+                        w.to_bits().hash(&mut h);
+                        let afp = h.finish();
+                        match self.audit_cache.get(&pass.id) {
+                            Some((cfp, a)) if *cfp == afp => Some(a.clone()),
+                            _ => {
+                                cancel::check()?;
+                                let a = patterns::audit(region, &paths, w);
+                                cancel::check()?;
+                                self.audit_cache.insert(pass.id.clone(), (afp, a.clone()));
+                                Some(a)
+                            }
+                        }
+                    }
+                    _ => None,
+                };
                 cancel::next_step();
                 ev.passes.push((
                     pass.id.clone(),
@@ -439,6 +466,7 @@ impl Evaluator {
                         diagnostics,
                         precedence,
                         cached,
+                        audit,
                     },
                 ));
             }

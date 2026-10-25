@@ -58,6 +58,8 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       return preview(wasm.preview_source(req.file, req.layer));
     case "previewJumps":
       return preview(wasm.preview_jumps(req.id));
+    case "previewAudit":
+      return preview(wasm.preview_audit(req.id, req.spill));
     case "heatmap": {
       const h = wasm.heatmap(req.id);
       if (!h) return { result: null, transfer: [] };

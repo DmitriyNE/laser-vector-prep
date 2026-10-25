@@ -351,6 +351,17 @@
     </label>
     <label class="check"><input type="checkbox" bind:checked={pass.enabled} onchange={touch} /> enabled</label>
     <p class="hint">Layer: {passInfo.layer.name}. Pitch and offsets are centreline distances in mm, independent of the PDF stroke width.</p>
+    {@const audit = store.evaluation?.passes.find((p) => p.id === pass.id)?.audit}
+    {#if audit}
+      <dl class="audit" title="paths swept at the group's assumed marking width against the region they fill; a geometric surrogate, not a dose">
+        <dt>Audit</dt><dd>at {audit.widthMm} mm marking width</dd>
+        <dt>Missed</dt><dd>{audit.missedMm2.toFixed(4)} mm² ({((100 * audit.missedMm2) / Math.max(audit.regionMm2, 1e-12)).toFixed(2)} % of {audit.regionMm2.toFixed(3)} mm²)</dd>
+        <dt>Spill</dt><dd>{audit.spillMm2.toFixed(4)} mm² outside the region</dd>
+        <dt>Short</dt><dd>{audit.shortSegments} path(s) shorter than the width</dd>
+      </dl>
+    {:else}
+      <p class="hint">No coverage audit: set an audit width on output group “{store.group(pass.group)?.name ?? pass.group}” (fills of region layers only).</p>
+    {/if}
   {:else if group}
     <label>Name <input bind:value={group.name} oninput={touch} /></label>
     <label>Colour
@@ -360,6 +371,10 @@
     <label>PDF stroke width (mm, empty = export default)
       <input type="number" step="0.0001" min="0.0001" value={group.strokeWidthMm ?? ""}
         oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { group.strokeWidthMm = v === "" ? null : Number(v); }); }} />
+    </label>
+    <label title="the effective width each path is assumed to sweep when auditing fills of this group (missed area, spill, short segments); a geometric surrogate, not a dose">Audit width (mm, empty = no audit)
+      <input type="number" step="0.001" min="0.001" value={group.auditWidthMm ?? ""}
+        oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { group.auditWidthMm = v === "" ? null : Number(v); }); }} />
     </label>
     <label class="check"><input type="checkbox" bind:checked={group.export} onchange={touch} /> export</label>
     <label class="check"><input type="checkbox" bind:checked={group.visible} onchange={touch} /> visible in preview</label>
@@ -450,6 +465,19 @@
   .hint {
     font-size: 11px;
     opacity: 0.7;
+  }
+  .audit {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.1rem 0.6rem;
+    margin: 0.4rem 0;
+    font-size: 12px;
+  }
+  .audit dt {
+    opacity: 0.7;
+  }
+  .audit dd {
+    margin: 0;
   }
   .rule {
     display: flex;

@@ -13,7 +13,7 @@
   let fitted = false;
   let cursorMm: [number, number] | null = $state(null);
 
-  type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; closedHoles?: boolean };
+  type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; closedHoles?: boolean; fill?: string };
   let items: Item[] = [];
   /** Heatmap images in document mm: drawn under the geometry when enabled. */
   type HeatImage = { key: string; canvas: HTMLCanvasElement; x: number; top: number; wMm: number; hMm: number };
@@ -120,6 +120,18 @@
         const p = await store.preview("pass", pass.id);
         if (p) next.push({ key: `pass:${pass.id}`, preview: p, color: g ? rgbCss(g.color) : "black", width: 1, dash: [] });
       }
+      // Coverage audit: missed area and spill of each visible audited pass, under the paths.
+      if (store.showAudit) {
+        for (const pass of ev.passes) {
+          if (!pass.audit || store.hiddenPasses.has(pass.id)) continue;
+          const g = store.group(pass.group);
+          if (g && !g.visible) continue;
+          const missed = await store.previewAudit(pass.id, false);
+          if (missed) next.unshift({ key: `missed:${pass.id}`, preview: missed, color: "rgba(220,30,30,0.9)", width: 0.5, dash: [], fill: "rgba(230,40,40,0.45)" });
+          const spill = await store.previewAudit(pass.id, true);
+          if (spill) next.unshift({ key: `spill:${pass.id}`, preview: spill, color: "rgba(230,140,0,0.9)", width: 0.5, dash: [], fill: "rgba(240,160,0,0.45)" });
+        }
+      }
       // Jumps and footprint heatmaps are per output group (planned order), preview only.
       for (const gs of ev.groups) {
         const g = store.group(gs.id);
@@ -169,6 +181,27 @@
       ctx.lineWidth = selected ? it.width + 1.5 : it.width;
       ctx.setLineDash(it.dash);
       const { coords, bulges, starts, closed } = it.preview;
+      if (it.fill) {
+        // A region: all loops in one path, filled even-odd so holes stay open.
+        ctx.beginPath();
+        for (let i = 0; i + 1 < starts.length; i++) {
+          const a = starts[i]!;
+          const b = starts[i + 1]!;
+          if (b - a < 2) continue;
+          const [x0, y0] = toScreen(coords[2 * a]!, coords[2 * a + 1]!, w, h);
+          ctx.moveTo(x0, y0);
+          for (let s = 0; s < b - a; s++) {
+            const k = a + s;
+            const n = s + 1 < b - a ? k + 1 : a;
+            segment(ctx, coords[2 * k]!, coords[2 * k + 1]!, coords[2 * n]!, coords[2 * n + 1]!, bulges[k]!, w, h);
+          }
+          ctx.closePath();
+        }
+        ctx.fillStyle = it.fill;
+        ctx.fill("evenodd");
+        ctx.stroke();
+        continue;
+      }
       for (let i = 0; i + 1 < starts.length; i++) {
         const a = starts[i]!;
         const b = starts[i + 1]!;
@@ -314,6 +347,7 @@
     void store.showLayers;
     void store.showJumps;
     void store.showHeatmap;
+    void store.showAudit;
     void store.hiddenSourceLayers;
     void store.hiddenLayers;
     void store.hiddenPasses;
@@ -348,6 +382,7 @@
     <label><input type="checkbox" bind:checked={store.showLayers} /> regions</label>
     <label title="hypothetical straight beam-off jumps of the planned order; never exported"><input type="checkbox" bind:checked={store.showJumps} /> jumps</label>
     <label title="jump footprint coverage over protected regions (relative, not a dose)"><input type="checkbox" bind:checked={store.showHeatmap} /> heatmap</label>
+    <label title="coverage audit: area the paths miss (red) and sweep outside the region (amber) at each group's assumed marking width"><input type="checkbox" bind:checked={store.showAudit} /> audit</label>
     {#if store.hiddenCount}<button onclick={() => store.showAll()} title="show every hidden source layer, region and pass">show all ({store.hiddenCount} hidden)</button>{/if}
     <span class="coords">
       {#if cursorMm}{cursorMm[0].toFixed(3)}, {cursorMm[1].toFixed(3)} mm{/if}

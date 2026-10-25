@@ -1,0 +1,247 @@
+{
+  "schemaVersion": 1,
+  "profileId": "builtin-pcb-negative-hatch",
+  "name": "PCB negative (background hatch)",
+  "sourceBindings": [
+    {
+      "id": "src-copper",
+      "name": "Copper",
+      "required": true,
+      "rules": [
+        {
+          "kind": "layerName",
+          "format": "dxf",
+          "name": "TOP_LAYER"
+        },
+        {
+          "kind": "function",
+          "pattern": "Copper,L1,Top"
+        },
+        {
+          "kind": "function",
+          "pattern": "CONDUCTOR,TOP"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*.gtl"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*-F_Cu.gbr"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*.cmp"
+        }
+      ]
+    },
+    {
+      "id": "src-outline",
+      "name": "Board outline",
+      "required": true,
+      "rules": [
+        {
+          "kind": "layerName",
+          "format": "dxf",
+          "name": "ROUTE_TOOL_PATH"
+        },
+        {
+          "kind": "function",
+          "pattern": "Profile*"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*.gko"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*.gm1"
+        },
+        {
+          "kind": "fileName",
+          "format": "gerber",
+          "pattern": "*-Edge_Cuts.gbr"
+        }
+      ]
+    }
+  ],
+  "workingLayers": [
+    {
+      "id": "wl-copper",
+      "name": "Copper",
+      "kind": "region",
+      "inputs": [
+        {
+          "source": "src-copper"
+        }
+      ],
+      "operands": [],
+      "op": "union",
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "original"
+      },
+      "passes": [],
+      "enabled": true,
+      "referenceOnly": true
+    },
+    {
+      "id": "wl-board",
+      "name": "Board interior",
+      "kind": "envelope",
+      "inputs": [
+        {
+          "source": "src-outline"
+        }
+      ],
+      "operands": [],
+      "op": "union",
+      "envelope": {
+        "provider": "namedBoundary"
+      },
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "none"
+      },
+      "passes": [],
+      "enabled": true,
+      "referenceOnly": true
+    },
+    {
+      "id": "wl-clearance",
+      "name": "Copper + 50 um clearance",
+      "kind": "envelope",
+      "inputs": [
+        {
+          "layer": "wl-copper"
+        }
+      ],
+      "operands": [],
+      "op": "union",
+      "envelope": {
+        "provider": "buffer",
+        "distanceMm": 0.05
+      },
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "original"
+      },
+      "passes": [],
+      "enabled": true,
+      "referenceOnly": true
+    },
+    {
+      "id": "wl-background",
+      "name": "Background",
+      "kind": "region",
+      "inputs": [
+        {
+          "layer": "wl-board"
+        }
+      ],
+      "operands": [
+        {
+          "layer": "wl-clearance"
+        }
+      ],
+      "op": "subtraction",
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "original"
+      },
+      "passes": [
+        {
+          "id": "pass-background-hatch",
+          "name": "Hatch 20 um at 45 deg",
+          "pattern": {
+            "kind": "hatch",
+            "pitchMm": 0.02,
+            "angleDeg": 45.0,
+            "phaseMm": 0.0,
+            "serpentine": true,
+            "insetMm": 0.0
+          },
+          "group": "grp-background",
+          "enabled": true
+        }
+      ],
+      "enabled": true,
+      "referenceOnly": false
+    },
+    {
+      "id": "wl-outline",
+      "name": "Outline",
+      "kind": "linework",
+      "inputs": [
+        {
+          "source": "src-outline"
+        }
+      ],
+      "operands": [],
+      "op": "union",
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "original"
+      },
+      "passes": [
+        {
+          "id": "pass-outline",
+          "name": "Outline passthrough",
+          "pattern": {
+            "kind": "passthrough",
+            "reverse": false
+          },
+          "group": "grp-outline",
+          "enabled": true
+        }
+      ],
+      "enabled": true,
+      "referenceOnly": false
+    }
+  ],
+  "outputGroups": [
+    {
+      "id": "grp-background",
+      "name": "Background",
+      "color": [
+        0,
+        0,
+        255
+      ],
+      "export": true,
+      "visible": true
+    },
+    {
+      "id": "grp-outline",
+      "name": "Outline",
+      "color": [
+        255,
+        0,
+        0
+      ],
+      "export": true,
+      "visible": true
+    }
+  ],
+  "export": {
+    "strokeWidthMm": 0.0254,
+    "marginMm": 5.0,
+    "separateFiles": false,
+    "flattenToleranceMm": 0.001
+  },
+  "optimizer": {
+    "mode": "bleedAware",
+    "footprintMm": 0.1,
+    "bleedWeight": 1.0,
+    "protected": [
+      "wl-copper"
+    ],
+    "cellMm": 0.05,
+    "maxSweeps": 20
+  }
+}

@@ -117,6 +117,20 @@ pub struct PassSummary {
     pub length_mm: f64,
     pub cached: bool,
     pub diagnostics: Vec<DiagnosticJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit: Option<AuditSummary>,
+}
+
+/// Coverage audit of a pass (spec §10) against the group's assumed marking width. Areas in
+/// mm²; a geometric surrogate, not a dose.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditSummary {
+    pub width_mm: f64,
+    pub region_mm2: f64,
+    pub missed_mm2: f64,
+    pub spill_mm2: f64,
+    pub short_segments: usize,
 }
 
 /// Path-order plan of one output group: what the planner changed and what it predicts
@@ -475,6 +489,13 @@ impl Project {
                     length_mm: pr.paths.iter().map(pline::length).sum(),
                     cached: pr.cached,
                     diagnostics: diags(&pr.diagnostics),
+                    audit: pr.audit.as_ref().map(|a| AuditSummary {
+                        width_mm: a.width_mm,
+                        region_mm2: a.region_mm2,
+                        missed_mm2: a.missed.area().max(0.0),
+                        spill_mm2: a.spill.area().max(0.0),
+                        short_segments: a.short_segments,
+                    }),
                 }
             })
             .collect();
@@ -526,6 +547,13 @@ impl Project {
             Geometry::Region(reg) => PreviewBuffer::from_plines(reg.loops.iter()),
             Geometry::Linework(ps) => PreviewBuffer::from_plines(ps.iter()),
         })
+    }
+
+    /// Missed (`spill == false`) or spill area of a pass's coverage audit.
+    pub fn preview_audit(&self, id: &PassId, spill: bool) -> Option<PreviewBuffer> {
+        let a = self.last.as_ref()?.0.pass(id)?.audit.as_ref()?;
+        let r = if spill { &a.spill } else { &a.missed };
+        Some(PreviewBuffer::from_plines(r.loops.iter()))
     }
 
     pub fn preview_pass(&self, id: &PassId) -> Option<PreviewBuffer> {

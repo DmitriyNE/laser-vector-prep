@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::region::LoopRule;
 
-/// Current profile schema version. Bump together with a migration in `profile` once a
-/// version has been deployed; until then the schema is redefined in place.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Current profile schema version. Every change after deployment bumps it together with a
+/// migration in `profile` (v1 was deployed on 2026-10-25; v2 adds the audit width).
+pub const SCHEMA_VERSION: u32 = 2;
 
 macro_rules! id_type {
     ($name:ident, $doc:literal) => {
@@ -435,6 +435,11 @@ pub struct OutputGroup {
     /// Per-group path-order mode; `None` follows the profile's optimizer mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_mode: Option<OptimizerMode>,
+    /// Effective marking width (mm) the coverage audit assumes each path sweeps: a
+    /// geometric surrogate set by the user, not an exposure model. `None` turns the audit
+    /// off for the group's passes. Schema v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_width_mm: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

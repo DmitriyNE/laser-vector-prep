@@ -8,8 +8,9 @@ Safari is not supported.
 
 Browser-only vector artwork and toolpath preprocessor for galvo laser software.
 Import DXF, Gerber, SVG, vector PDF, GDSII or IPC-2581, compose working layers
-(booleans, negative regions), generate fill/trace/hatch paths, plan the marking order,
-and export a 1:1 colour-separated vector PDF (or SVG/DXF). Nothing leaves the browser.
+(booleans, negative regions), generate fill/trace/hatch paths, audit their coverage, plan
+the marking order, and export a 1:1 colour-separated vector PDF (or SVG/DXF). Nothing
+leaves the browser.
 
 - License: Apache-2.0 ([`LICENSE`](LICENSE))
 - Requirements: [`docs/spec.md`](docs/spec.md)

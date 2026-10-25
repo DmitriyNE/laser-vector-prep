@@ -48,10 +48,21 @@ impl std::fmt::Display for ProfileError {
 
 impl std::error::Error for ProfileError {}
 
-/// One step migrations: `(from, f)` maps schema `from` to `from + 1`. Empty until a schema
-/// version has shipped; pre-deployment changes redefine the current version instead.
+/// One step migrations: `(from, f)` maps schema `from` to `from + 1`; the caller then sets
+/// `schemaVersion`. Version 1 is the first deployed schema (2026-10-25).
 type Migration = fn(Value) -> Result<Value, String>;
-const MIGRATIONS: &[(u32, Migration)] = &[];
+const MIGRATIONS: &[(u32, Migration)] = &[(1, v1_to_v2)];
+
+/// v2 adds the optional per-group `auditWidthMm`. A v1 profile has no audit widths, which is
+/// exactly "audit off", so the data carries over unchanged; only the shape is checked.
+fn v1_to_v2(value: Value) -> Result<Value, String> {
+    if let Some(groups) = value.get("outputGroups")
+        && !groups.is_array()
+    {
+        return Err("outputGroups is not a list".into());
+    }
+    Ok(value)
+}
 
 /// Parse (and migrate) a profile JSON document.
 pub fn parse_profile(json: &str) -> Result<Profile, ProfileError> {
@@ -155,6 +166,14 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
             out.push(Diagnostic::error(
                 "profile.stroke_width",
                 format!("output group {:?} has a non-positive stroke width", g.name),
+            ));
+        }
+        if let Some(w) = g.audit_width_mm
+            && !(w > 0.0 && w.is_finite())
+        {
+            out.push(Diagnostic::error(
+                "profile.audit_width",
+                format!("output group {:?} has a non-positive audit width", g.name),
             ));
         }
     }
@@ -517,7 +536,14 @@ fn group(id: &str, name: &str, color: Rgb) -> OutputGroup {
         export: true,
         visible: true,
         order_mode: None,
+        audit_width_mm: None,
     }
+}
+
+/// A group whose fills are audited at `width` mm (the presets use the fill pitch).
+fn audited(mut g: OutputGroup, width: f64) -> OutputGroup {
+    g.audit_width_mm = Some(width);
+    g
 }
 
 fn pass(id: &str, name: &str, pattern: Pattern, group: &str) -> Pass {
@@ -605,7 +631,7 @@ pub fn pcb_negative_hatch() -> Profile {
         slot("src-outline", "Board outline", true, outline_rules()),
     ];
     p.output_groups = vec![
-        group("grp-background", "Background", Rgb::BLUE),
+        audited(group("grp-background", "Background", Rgb::BLUE), 0.02),
         group("grp-outline", "Outline", Rgb::RED),
     ];
     let mut background = layer(
@@ -689,7 +715,7 @@ pub fn general_marking() -> Profile {
     ];
     p.output_groups = vec![
         group("grp-marks", "Marks", Rgb::BLACK),
-        group("grp-fill", "Fill", Rgb::BLUE),
+        audited(group("grp-fill", "Fill", Rgb::BLUE), 0.05),
     ];
     p.working_layers = vec![
         layer(
@@ -795,6 +821,8 @@ pub fn pcb_positive_ldi() -> Profile {
             export: true,
             visible: true,
             order_mode: None,
+            // Audit at the fill pitch: a mark exactly as wide as the pitch just covers.
+            audit_width_mm: Some(0.02),
         },
         OutputGroup {
             id: GroupId::new("grp-outline"),
@@ -804,6 +832,7 @@ pub fn pcb_positive_ldi() -> Profile {
             export: true,
             visible: true,
             order_mode: None,
+            audit_width_mm: None,
         },
     ];
     p.working_layers = vec![
@@ -900,7 +929,7 @@ mod tests {
             let json = to_json(p);
             let back = parse_profile(&json).unwrap();
             assert_eq!(&back, p, "{}", p.name);
-            assert!(json.contains("\"schemaVersion\": 1"));
+            assert!(json.contains("\"schemaVersion\": 2"));
             assert!(
                 p.working_layers
                     .iter()
@@ -968,6 +997,31 @@ mod tests {
                 message: "no migration path".into()
             }
         );
+    }
+
+    #[test]
+    fn v1_profiles_migrate_to_v2_unchanged_but_for_audit_widths() {
+        // The built-in presets exactly as the deployed v1 app wrote them.
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/profiles");
+        for mut preset in builtin_presets() {
+            let name = preset.profile_id.trim_start_matches("builtin-").to_string();
+            let json = std::fs::read_to_string(format!("{root}/v1-{name}.json")).unwrap();
+            assert!(json.contains("\"schemaVersion\": 1,"));
+            assert!(!json.contains("auditWidthMm"));
+            let migrated = parse_profile(&json).unwrap();
+            assert_eq!(migrated.schema_version, 2);
+            // v2 presets audit their fills; a migrated v1 profile has the audit off.
+            assert!(
+                migrated
+                    .output_groups
+                    .iter()
+                    .all(|g| g.audit_width_mm.is_none())
+            );
+            for g in &mut preset.output_groups {
+                g.audit_width_mm = None;
+            }
+            assert_eq!(migrated, preset, "{name}");
+        }
     }
 
     #[test]

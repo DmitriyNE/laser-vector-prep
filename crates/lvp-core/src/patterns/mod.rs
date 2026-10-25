@@ -394,12 +394,42 @@ pub fn missed_area(region: &Region, paths: &[Pline], width: f64) -> f64 {
     gapfill::uncovered(region, paths, width).area().max(0.0)
 }
 
+/// Coverage audit of a fill (spec §10): its paths swept at an assumed effective marking
+/// width, compared with the region they are meant to fill. A geometric surrogate set by the
+/// user, not an exposure or cutting model.
+#[derive(Clone, Debug)]
+pub struct Audit {
+    pub width_mm: f64,
+    pub region_mm2: f64,
+    /// Part of the region no path sweeps.
+    pub missed: Region,
+    /// Swept area outside the region.
+    pub spill: Region,
+    /// Paths shorter than the width: marks that are dots rather than strokes.
+    pub short_segments: usize,
+}
+
+pub fn audit(region: &Region, paths: &[Pline], width: f64) -> Audit {
+    let swept = crate::region::stroke_many(paths, width);
+    Audit {
+        width_mm: width,
+        region_mm2: region.area(),
+        missed: region.difference(&swept),
+        spill: swept.difference(region),
+        short_segments: paths
+            .iter()
+            .filter(|p| crate::pline::length(p) < width)
+            .count(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geom::Point;
     use crate::pline::{circle, rect};
     use crate::region::LoopRule;
+    use std::f64::consts::PI;
 
     #[test]
     fn passthrough_keeps_paths_and_reverses() {
@@ -507,6 +537,55 @@ mod tests {
         assert!(!sequential.paths.is_empty());
         assert_eq!(bits(&sequential), bits(&parallel));
         assert_eq!(sequential.stats.rings, parallel.stats.rings);
+    }
+
+    #[test]
+    fn audit_reports_missed_area_spill_and_short_segments() {
+        // A 10 x 4 mm bar filled with rings 0.2 mm apart, the first 0.1 mm inside.
+        let bar = Region::from_loops(
+            [rect(Point::new(0.0, 0.0), Point::new(10.0, 4.0))],
+            LoopRule::NonZero,
+        );
+        let fill = generate(
+            &Pattern::ContourFill {
+                pitch_mm: 0.2,
+                first_offset_mm: None,
+                gap_fill: true,
+                end_spacing_mm: None,
+                simplify_mm: None,
+            },
+            &Geometry::Region(bar.clone()),
+        );
+        // Swept exactly at the pitch: the rings tile the bar and nothing spills. Each ring's
+        // stroke rounds its outer corners while the ring outside it has sharp inner ones,
+        // so every ring leaves (1 - pi/4) r^2 unswept at each of the four corners.
+        let exact = audit(&bar, &fill.paths, 0.2);
+        assert!((exact.region_mm2 - 40.0).abs() < 1e-9);
+        let corners = fill.stats.rings as f64 * 4.0 * (1.0 - PI / 4.0) * 0.1 * 0.1;
+        assert!(
+            (exact.missed.area() - corners).abs() < 1e-3,
+            "missed {}",
+            exact.missed.area()
+        );
+        assert!(exact.spill.area() < 1e-6, "spill {}", exact.spill.area());
+        // Wider than the pitch: the outer ring reaches 0.05 mm beyond the 28 mm perimeter.
+        let wide = audit(&bar, &fill.paths, 0.3);
+        assert!(
+            (wide.spill.area() - 28.0 * 0.05).abs() < 0.02,
+            "spill {}",
+            wide.spill.area()
+        );
+        // Half the pitch: about half the bar stays unswept.
+        let narrow = audit(&bar, &fill.paths, 0.1);
+        assert!(
+            (narrow.missed.area() / 40.0 - 0.5).abs() < 0.05,
+            "missed {}",
+            narrow.missed.area()
+        );
+        // Paths shorter than the width count as short segments.
+        let dot = crate::pline::from_points([Point::new(1.0, 1.0), Point::new(1.05, 1.0)], false);
+        assert_eq!(audit(&bar, &[dot], 0.1).short_segments, 1);
+        assert_eq!(exact.short_segments, 0);
     }
 
     #[test]

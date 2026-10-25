@@ -3,6 +3,19 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: coverage audit and schema v2
+
+Fills are audited against a per-group assumed marking width (D32): missed area, spill and
+short segments with each pass, and a missed/spill overlay in the preview. The profile
+schema is now version 2, with the first migration and the v1 presets as its fixtures.
+
+The audit test first expected only the outer ring to leave corner gaps; every ring does,
+because a ring's stroke has rounded outer corners while the ring outside it has sharp
+inner ones, (1 − π/4)·r² per corner per ring. Making the audit affordable on panels
+produced `Region::union_all` and parallel cluster-wise booleans. This machine was running
+another project's test suite at a load average of about 100 meanwhile, so the timings in
+D32 compare runs made side by side rather than absolute numbers.
+
 ## 2026-10-25 — M4: Firefox
 
 The browser suite runs in Chrome and Firefox (D29). Firefox is Playwright's own build from

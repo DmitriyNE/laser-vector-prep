@@ -526,11 +526,7 @@ fn snap_vertices(loops: &mut Vec<Tagged>, join: f64, repeat: f64) {
 /// The general boolean. `inside(w_a, w_b)` decides membership from the winding numbers
 /// of the two operands. `Err` carries the loops that did close when some boundary chain
 /// could not (see [`Region::incomplete`]).
-fn resolve(
-    a: &[Pline],
-    b: &[Pline],
-    inside: &dyn Fn(i32, i32) -> bool,
-) -> Result<Vec<Pline>, Vec<Pline>> {
+fn resolve(a: &[Pline], b: &[Pline], inside: &Inside) -> Result<Vec<Pline>, Vec<Pline>> {
     let mut loops: Vec<Tagged> = tag(a, 0).into_iter().chain(tag(b, 1)).collect();
     if loops.is_empty() {
         return Ok(Vec::new());
@@ -550,6 +546,82 @@ fn resolve(
     snap_vertices(&mut loops, tol.snap, tol.join);
     merge_duplicates(&mut loops);
 
+    // Loops in different clusters can neither cross nor contain each other, so each cluster
+    // is an independent boolean: solved apart, in parallel where a pool exists.
+    let clusters = clusters(&loops, tol.join);
+    if clusters.len() > 1 && loops.len() >= MIN_LOOPS_TO_SPLIT {
+        let mut slots: Vec<Option<Tagged>> = loops.into_iter().map(Some).collect();
+        let parts: Vec<Vec<Tagged>> = clusters
+            .iter()
+            .map(|c| {
+                c.iter()
+                    .map(|&i| slots[i].take().expect("one cluster per loop"))
+                    .collect()
+            })
+            .collect();
+        let mut complete = true;
+        let mut out = Vec::new();
+        for r in crate::par::map(parts, |part| resolve_tagged(part, tol, inside)) {
+            match r {
+                Ok(l) => out.extend(l),
+                Err(l) => {
+                    out.extend(l);
+                    complete = false;
+                }
+            }
+        }
+        return if complete { Ok(out) } else { Err(out) };
+    }
+    resolve_tagged(loops, tol, inside)
+}
+
+/// Membership from the winding numbers of the two operands; `Sync` so clusters can be
+/// resolved on several threads.
+type Inside = dyn Fn(i32, i32) -> bool + Sync;
+
+/// Below this many loops a boolean is not worth splitting into clusters.
+const MIN_LOOPS_TO_SPLIT: usize = 32;
+
+/// Groups of loops whose bounding boxes (grown by `pad`) overlap, directly or through
+/// other loops of the group; each group sorted, groups ordered by their first loop.
+fn clusters(loops: &[Tagged], pad: f64) -> Vec<Vec<usize>> {
+    let boxes: Vec<BBox> = loops.iter().map(|l| l.bbox).collect();
+    let grid = BBoxGrid::new(boxes.clone());
+    let mut parent: Vec<usize> = (0..loops.len()).collect();
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for (i, bbox) in boxes.iter().enumerate() {
+        for j in grid.query_box(bbox, pad) {
+            let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+            if a != b {
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut slot: HashMap<usize, usize> = HashMap::new();
+    for i in 0..loops.len() {
+        let r = find(&mut parent, i);
+        let g = *slot.entry(r).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[g].push(i);
+    }
+    groups
+}
+
+/// The boolean over one set of tagged, snapped loops.
+fn resolve_tagged(
+    loops: Vec<Tagged>,
+    tol: Tolerances,
+    inside: &Inside,
+) -> Result<Vec<Pline>, Vec<Pline>> {
     let grid = BBoxGrid::new(loops.iter().map(|l| l.bbox).collect());
 
     // 1. Intersections -> split points per loop, including where a loop crosses itself.
@@ -705,7 +777,7 @@ impl Region {
     }
 
     pub fn boolean(&self, other: &Region, op: BoolOp) -> Region {
-        let f: &dyn Fn(i32, i32) -> bool = match op {
+        let f: &Inside = match op {
             BoolOp::Union => &|a, b| a > 0 || b > 0,
             BoolOp::Intersection => &|a, b| a > 0 && b > 0,
             BoolOp::Difference => &|a, b| a > 0 && b <= 0,
@@ -715,6 +787,24 @@ impl Region {
             resolve(&self.loops, &other.loops, f),
             self.incomplete || other.incomplete,
         )
+    }
+
+    /// Union of many regions in one boolean instead of one at a time. Their loops are
+    /// already oriented (outers counter-clockwise, holes clockwise), so the summed winding
+    /// number counts how many regions cover a point and the union is where it is positive.
+    pub fn union_all<I: IntoIterator<Item = Region>>(parts: I) -> Region {
+        let mut loops = Vec::new();
+        let mut incomplete = false;
+        let mut count = 0;
+        for p in parts {
+            incomplete |= p.incomplete;
+            loops.extend(p.loops);
+            count += 1;
+        }
+        if count <= 1 {
+            return Region { loops, incomplete };
+        }
+        Region::resolved(resolve(&loops, &[], &|a, _| a > 0), incomplete)
     }
 
     pub fn union(&self, other: &Region) -> Region {
@@ -1074,30 +1164,24 @@ pub fn stroke_many(paths: &[Pline], width: f64) -> Region {
         return Region::empty();
     }
     let clean: Vec<Pline> = paths.iter().filter_map(pline::sanitize).collect();
-    let mut parts: Vec<Region> = Vec::new();
-    for p in &clean {
+    // Each path's stroke is independent (and most of the work): built in parallel.
+    let parts = crate::par::map(clean, |p| {
         if p.is_closed() && p.area().abs() > 1e-18 {
-            let base = Region::from_loops([p.clone()], LoopRule::NonZero);
+            let base = Region::from_loops([p], LoopRule::NonZero);
             let outer = base.offset(r);
             let inner = base.offset(-r);
-            parts.push(if inner.is_empty() {
+            if inner.is_empty() {
                 outer
             } else {
                 outer.difference(&inner)
-            });
-        } else if let Some(region) = open_stroke(p, r) {
-            parts.push(region);
+            }
+        } else if let Some(region) = open_stroke(&p, r) {
+            region
         } else {
-            parts.push(stroke_capsules(std::slice::from_ref(p), r));
+            stroke_capsules(std::slice::from_ref(&p), r)
         }
-    }
-    parts.into_iter().fold(Region::empty(), |acc, part| {
-        if acc.is_empty() {
-            part
-        } else {
-            acc.union(&part)
-        }
-    })
+    });
+    Region::union_all(parts)
 }
 
 /// Stroke of an open path from its two side offsets plus end caps; `None` when an offset
@@ -1303,6 +1387,33 @@ mod tests {
             max: Point::new(f64::INFINITY, 0.5),
         };
         assert_eq!(grid.query_box(&everything, 0.0).len(), 2000);
+    }
+
+    proptest! {
+        /// One n-ary union equals folding pairwise unions, holes included.
+        #[test]
+        fn union_all_matches_pairwise_unions(
+            parts in prop::collection::vec((0.0f64..20.0, 0.0f64..20.0, 1.0f64..8.0, 0.0f64..0.8), 1..8)
+        ) {
+            let regions: Vec<Region> = parts
+                .iter()
+                .map(|&(x, y, s, hole)| {
+                    let outer = sq(x, y, s);
+                    if hole > 0.2 {
+                        let h = s * hole / 2.0;
+                        Region::from_loops([outer, circle(Point::new(x + s / 2.0, y + s / 2.0), h)], LoopRule::EvenOdd)
+                    } else {
+                        Region::from_loops([outer], LoopRule::NonZero)
+                    }
+                })
+                .collect();
+            let pairwise = regions
+                .iter()
+                .fold(Region::empty(), |acc, r| if acc.is_empty() { r.clone() } else { acc.union(r) });
+            let all = Region::union_all(regions);
+            prop_assert!((all.area() - pairwise.area()).abs() < 1e-6, "{} vs {}", all.area(), pairwise.area());
+            prop_assert!(all.xor(&pairwise).area() < 1e-6);
+        }
     }
 
     #[test]
