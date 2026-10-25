@@ -101,7 +101,7 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Gap fill refinements: end spacing, ring simplification, join styles (D25)
 - [x] User documentation of every format's supported subset (`docs/formats.md`)
 
-## M4 — robustness/release (D29)
+## M4 — robustness/release (done 2026-10-25; D29–D32; open items are follow-ups)
 
 - [x] cargo-fuzz targets (six readers + end to end), crasher regressions in `just test`,
       `just fuzz`
@@ -142,4 +142,6 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] Later: publish GitHub Releases (deferred by the owner)
 - [x] CI on GitHub Actions and deployment to GitHub Pages (D27)
 - [x] Bundle size: decided to leave it (D29)
-- [ ] Cache the Nix store in CI if fetching the dev shell becomes the slow step
+- [ ] Cache the Nix store in CI if fetching the dev shell becomes the slow step (33 s today)
+- [ ] UI polish pass (spec M4): only what came with this milestone's features (progress,
+      Cancel, audit numbers and overlay) has been done; ask the owner which rough edges matter
