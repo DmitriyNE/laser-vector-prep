@@ -23,7 +23,7 @@ test("a PDF exported by the app imports back as one colour layer per group", asy
   await expect(pdfSource.locator(".meta").first()).toContainText("Point");
   // Blue carries the copper fill's closed rings and open gap-fill centrelines, one to one.
   const copper = before.passes[0]!;
-  await expect(pdfSource.locator("li").first().locator(".counts")).toContainText(`${copper.closed}c ${copper.open}o`);
+  await expect(pdfSource.locator("li").first().locator(".name")).toHaveAttribute("title", new RegExp(`\\b${copper.closed} closed, ${copper.open} open`));
 });
 
 test("the features PDF fixture lists its optional-content layer and colour layers with diagnostics", async ({ page }) => {

@@ -21,8 +21,7 @@
 </script>
 
 <section class="panel">
-  <h2>Profile sources <button class="add" onclick={() => (store.selection = { kind: "binding", id: store.addBinding("New source", null) })}>+ slot</button></h2>
-  <p class="hint">The profile names the source layers it needs. Imported layers are mapped onto these slots by the slot's rules, or explicitly here; working layers read from slots.</p>
+  <h2 title="the source layers this profile needs: imported layers are mapped onto these slots by each slot's rules, or explicitly here; working layers read from the slots">Profile sources <button class="add" onclick={() => (store.selection = { kind: "binding", id: store.addBinding("New source", null) })}>+ slot</button></h2>
   {#if store.profile.sourceBindings.length === 0}
     <p class="hint">No slots yet. Import a file and use "+ new slot" on one of its layers.</p>
   {/if}
@@ -31,7 +30,11 @@
     {@const users = store.bindingUsers(b.id)}
     <div class="slot" class:selected={store.selection.kind === "binding" && store.selection.id === b.id}>
       <div class="row">
-        <button class="name" onclick={() => (store.selection = { kind: "binding", id: b.id })}>
+        <button
+          class="name"
+          title={`rules: ${b.rules.map(ruleText).join("; ") || "none"}\n${users.length ? `used by ${users.join(", ")}` : "not used by any working layer"}`}
+          onclick={() => (store.selection = { kind: "binding", id: b.id })}
+        >
           {b.name}{#if b.required}<span class="req" title="required: output is blocked while missing">*</span>{/if}
         </button>
         <span class="status {st?.status ?? ''}">{st?.status ?? "…"}</span>
@@ -40,11 +43,7 @@
           {#each imported as il (il.key)}<option value={il.key}>{il.file} : {il.layer}</option>{/each}
         </select>
       </div>
-      <div class="meta">
-        rules: {b.rules.map(ruleText).join(", ") || "none"}
-        · {users.length ? `used by ${users.join(", ")}` : "unused"}
-        {#if st?.status === "ambiguous"}<span class="err"> · {st.candidates.length} layers match, pick one above</span>{/if}
-      </div>
+      {#if st?.status === "ambiguous"}<div class="meta err">{st.candidates.length} layers match: pick one</div>{/if}
     </div>
   {/each}
   {#if store.evaluation?.unboundLayers.length}

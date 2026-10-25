@@ -64,7 +64,6 @@
   <h2>
     Layers <button class="add" onclick={() => store.addLayer("region")}>+ layer</button>
     <button class="add" onclick={() => store.addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button>
-    {#if store.hiddenCount}<button class="add quiet" onclick={() => store.showAll()} title="show everything in the preview again">show all</button>{/if}
   </h2>
   {#if store.profile.workingLayers.length === 0}
     <p class="hint">No working layers. Add one and pick its sources.</p>
@@ -87,6 +86,7 @@
           <button class="only" onclick={() => store.solo({ kind: "layer", key: layer.id })} title="show only this in preview">only</button>
           <button onclick={() => move(i, -1)} title="move up">↑</button>
           <button onclick={() => move(i, 1)} title="move down">↓</button>
+          <button onclick={() => store.addPass(layer.id)} title="add a pass">+</button>
           <button onclick={() => duplicateLayer(i)} title="duplicate">⧉</button>
           <button onclick={() => store.deleteLayer(layer.id)} title="delete layer">×</button>
         </span>
@@ -112,7 +112,6 @@
             </span>
           </li>
         {/each}
-        <li class="addrow"><button class="add" onclick={() => store.addPass(layer.id)}>+ pass</button></li>
       </ul>
     </div>
   {/each}
@@ -223,9 +222,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .quiet {
-    opacity: 0.6;
-  }
   .disabled > .row > .name,
   li.disabled > .name,
   .disabled > .row > .stats,
@@ -241,20 +237,6 @@
     list-style: none;
     margin: 0 0 0 1.1rem;
     padding: 0;
-  }
-  .addrow {
-    padding: 0 0 0 1.5rem;
-  }
-  .addrow .add {
-    background: none;
-    border: none;
-    padding: 0 2px;
-    color: inherit;
-    opacity: 0.55;
-    cursor: pointer;
-  }
-  .addrow .add:hover {
-    opacity: 1;
   }
   .swatch {
     width: 9px;

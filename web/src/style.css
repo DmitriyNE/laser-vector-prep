@@ -49,3 +49,17 @@ button {
   border-radius: 4px;
   box-shadow: 0 0 2px 1px rgba(0, 0, 0, 0.08);
 }
+
+/* A collapsed section of rarely changed settings inside a panel. */
+.panel details {
+  margin: 0.3rem 0 0;
+  font-size: 12px;
+}
+.panel summary {
+  cursor: pointer;
+  opacity: 0.75;
+  user-select: none;
+}
+.panel details[open] summary {
+  margin-bottom: 0.2rem;
+}

@@ -18,19 +18,22 @@
 </script>
 
 <section class="panel">
-  <h2>Output groups <button class="add" onclick={() => store.addGroup()}>+ group</button></h2>
+  <h2 title="colours let the laser software separate processes; they carry no laser settings">Output groups <button class="add" onclick={() => store.addGroup()}>+ group</button></h2>
   <ul>
     {#each store.profile.outputGroups as g (g.id)}
       <li class:selected={store.selection.kind === "group" && store.selection.id === g.id}>
         <span class="swatch" style:background={rgbCss(g.color)}></span>
-        <button class="name" onclick={() => (store.selection = { kind: "group", id: g.id })}>{g.name}</button>
-        <span class="meta">rgb({g.color.join(",")}) · {g.strokeWidthMm ?? store.profile.export.strokeWidthMm} mm · {usage(g.id)} pass(es){g.export ? "" : " · not exported"}</span>
+        <button
+          class="name"
+          title={`rgb(${g.color.join(", ")}) · PDF stroke ${g.strokeWidthMm ?? store.profile.export.strokeWidthMm} mm`}
+          onclick={() => (store.selection = { kind: "group", id: g.id })}>{g.name}</button
+        >
+        <span class="meta">{usage(g.id)} pass{usage(g.id) === 1 ? "" : "es"}{g.export ? "" : " · not exported"}</span>
         {#if collisions.has(g.id)}<span class="err" title="another exporting group has this exact colour">colour clash</span>{/if}
         <button onclick={() => remove(g.id)} title="delete">×</button>
       </li>
     {/each}
   </ul>
-  <p class="hint">Colours let the laser software separate processes. They carry no laser settings.</p>
 </section>
 
 <style>
@@ -80,9 +83,5 @@
   }
   .add {
     font-size: 11px;
-  }
-  .hint {
-    font-size: 11px;
-    opacity: 0.7;
   }
 </style>

@@ -208,9 +208,8 @@
         <button onclick={() => store.addLayer("envelope")}>+ envelope</button>
         <button onclick={() => selectedLayer && store.addPass(selectedLayer)} disabled={!selectedLayer} title="add a pass to the selected layer">+ pass</button>
         <button onclick={() => store.addGroup()}>+ group</button>
-        <span class="message" class:error={message?.error} role="status">
-          {message?.text ?? "Drag from a ● on a node's right to a ● on another's left to connect; × removes a connection."}
-        </span>
+        <span class="help" title="Drag from a ● on a node's right to a ● on another's left to connect; × on a connection removes it; Delete removes what is selected; double-click fits the view.">?</span>
+        {#if message}<span class="message" class:error={message.error} role="status">{message.text}</span>{/if}
     </div>
     <Background />
     <Controls showLock={false} />
@@ -259,6 +258,18 @@
   .tools button {
     flex: none;
     white-space: nowrap;
+  }
+  .help {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 16px;
+    height: 16px;
+    border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+    border-radius: 50%;
+    font-size: 11px;
+    opacity: 0.7;
+    cursor: help;
   }
   .message {
     margin-left: 6px;

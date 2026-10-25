@@ -41,7 +41,7 @@ test("coverage audit: preset numbers, overlays, and the width set per output gro
   await page.evaluate(() => {
     (globalThis as unknown as { lvp: { selection: unknown } }).lvp.selection = { kind: "pass", id: "pass-copper-fill" };
   });
-  await expect(page.locator("dl.audit")).toContainText("0.02 mm marking width");
+  await expect(page.locator("p.audit")).toContainText("Audit at 0.02 mm");
   await page.getByLabel("audit", { exact: true }).check();
   const loops = await page.evaluate(async () => {
     const p = await (globalThis as unknown as { lvp: Lvp }).lvp.previewAudit("pass-copper-fill", false);
@@ -52,7 +52,7 @@ test("coverage audit: preset numbers, overlays, and the width set per output gro
   // Twice the pitch: the outer rings sweep beyond the copper.
   const groups = page.locator("section.panel", { has: page.getByRole("heading", { name: /Output groups/ }) });
   await groups.locator("button.name", { hasText: "Copper" }).click();
-  const width = page.getByLabel("Audit width (mm, empty = no audit)");
+  const width = page.getByLabel("Audit width (mm)");
   await width.fill("0.04");
   await settled(page, (a) => a !== null && a.widthMm === 0.04 && a.spillMm2 > 0.1);
 

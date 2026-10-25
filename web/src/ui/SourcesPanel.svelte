@@ -33,13 +33,13 @@
 </script>
 
 <section class="panel">
-  <h2>
-    Sources
-    {#if store.hiddenCount}<button class="quiet" onclick={() => store.showAll()} title="show everything in the preview again">show all</button>{/if}
-  </h2>
+  <h2>Sources</h2>
+  <!-- Full size until something is imported, then a single line. -->
   <div
     class="drop"
+    class:compact={store.sources.length > 0}
     class:over={dragOver}
+    title="DXF, Gerber, SVG, PDF, GDSII or IPC-2581"
     role="button"
     tabindex="0"
     ondragover={(e) => {
@@ -49,8 +49,10 @@
     ondragleave={() => (dragOver = false)}
     ondrop={onDrop}
   >
-    Drop DXF, Gerber, SVG, PDF, GDSII or IPC-2581 files here or
-    <label class="pick">choose files<input type="file" accept={store.acceptedExtensions.map((e) => `.${e}`).join(",")} multiple onchange={onPick} /></label>
+    {#if store.sources.length === 0}Drop DXF, Gerber, SVG, PDF, GDSII or IPC-2581 files here or{/if}
+    <label class="pick"
+      >{store.sources.length ? "+ files" : "choose files"}<input type="file" accept={store.acceptedExtensions.map((e) => `.${e}`).join(",")} multiple onchange={onPick} /></label
+    >{#if store.sources.length}<span class="or">or drop here</span>{/if}
   </div>
   {#each store.sources as s (s.index)}
     <div class="source">
@@ -76,11 +78,14 @@
             class:selected={store.selection.kind === "source" && store.selection.file === s.index && store.selection.layer === l.name}
           >
             <Eye hidden={store.hiddenSourceLayers.has(key)} what="layer" onToggle={() => store.toggleSourceLayer(key)} onSolo={() => store.solo({ kind: "source", key })} />
-            <button class="name" title={l.function ? `${l.name} · ${l.function}` : l.name} onclick={() => (store.selection = { kind: "source", file: s.index, layer: l.name })}>
+            <button
+              class="name"
+              title={`${l.name}${l.function ? ` · ${l.function}` : ""}\n${l.closedPaths} closed, ${l.openPaths} open paths${l.hatches ? `, ${l.hatches} hatches` : ""}`}
+              onclick={() => (store.selection = { kind: "source", file: s.index, layer: l.name })}
+            >
               {l.name}{#if l.function}<span class="fn"> {l.function}</span>{/if}
             </button>
             <button class="only" onclick={() => store.solo({ kind: "source", key })} title="show only this in preview">only</button>
-            <span class="counts">{l.closedPaths}c {l.openPaths}o{#if l.hatches} {l.hatches}h{/if}</span>
             <select class="map" class:unbound={!b} value={b?.id ?? ""} title="profile slot this layer is mapped to" onchange={(e) => onMap(e, s.name, l.name)}>
               <option value="">{b ? "" : "unmapped"}</option>
               {#each store.profile.sourceBindings as pb (pb.id)}<option value={pb.id}>→ {pb.name}</option>{/each}
@@ -103,6 +108,11 @@
     text-align: center;
     border-radius: 4px;
     font-size: 12px;
+  }
+  .drop.compact {
+    padding: 0.25rem;
+    text-align: left;
+    opacity: 0.85;
   }
   .drop.over {
     border-color: #1f6feb;
@@ -151,8 +161,12 @@
     font-size: 10px;
   }
   .fn {
+    margin-left: 0.3em;
     opacity: 0.6;
     font-size: 11px;
+  }
+  .or {
+    margin-left: 0.3em;
   }
   ul {
     list-style: none;
@@ -196,21 +210,6 @@
   }
   li:hover .only {
     display: inline;
-  }
-  .quiet {
-    background: none;
-    border: none;
-    padding: 0 2px;
-    color: inherit;
-    cursor: pointer;
-    opacity: 0.6;
-    font-size: 11px;
-    text-transform: none;
-    letter-spacing: 0;
-  }
-  .counts {
-    font-family: ui-monospace, monospace;
-    opacity: 0.7;
   }
   .map {
     font: inherit;

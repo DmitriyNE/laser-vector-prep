@@ -60,6 +60,18 @@ share one style and place; the graph's Undo and Redo went, the profiles bar has 
 Playwright reports the leave prompt for navigations but not for `page.close`, so the test
 reloads; a first manual check clicked Save by accident, which cleared the unsaved state.
 
+A pass over every panel for bloat: eleven always-visible explanation paragraphs (profile
+sources, output groups, path order, export, and the properties of layers, envelopes,
+passes, slots and imported layers) became tooltips on the headings or fields they explain;
+labels such as "End spacing (mm beyond the last ring where gap fill starts, empty =
+pitch/2)" keep their unit and show the default as a placeholder, the rest in a tooltip.
+Data dumps went the same way: the slot list's rules, the groups' RGB and stroke width, the
+source layers' path counts, the path-order table's longest jump, crossings and coverage
+(each row's tooltip now), the audit's four lines (one line), the imported layer's raw
+bounds (a short fact list) and the core version and thread count. Optimizer and export
+settings sit in collapsed sections, the drop box shrinks to one line once a file is in,
+"show all" is only in the preview toolbar and "+ pass" is a button on the layer's row.
+
 ## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
 
 Layers, passes, audits and plans now run concurrently and the optimiser's scans use the

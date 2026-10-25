@@ -11,5 +11,5 @@ test("a GDSII stream imports with layer/datatype layers in micrometres", async (
   await expect(page.locator(".source li .name")).toHaveText(["1/0", "2/0", "3/0", "4/0"]);
   await expect(page.locator(".source .meta").first()).toContainText("Micrometre · 0.310 × 0.152 mm");
   // Eight pad placements on layer 1/0: 1 + 1 magnified + 6 in the array.
-  await expect(page.locator(".source li").first().locator(".counts")).toContainText("8h");
+  await expect(page.locator(".source li").first().locator(".name")).toHaveAttribute("title", /8 hatches/);
 });

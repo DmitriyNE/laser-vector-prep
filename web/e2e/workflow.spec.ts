@@ -45,7 +45,7 @@ test("profile slots: an unmapped layer becomes a slot and maps explicitly", asyn
   await expect(slots.nth(2)).toContainText("SHAPES");
   await expect(slots.nth(2).locator(".status")).toHaveText(/matched/i);
   // The slot editor opened for the new slot.
-  await expect(page.getByText("Matching rules (first match wins)")).toBeVisible();
+  await expect(page.getByText("Matching rules", { exact: true })).toBeVisible();
 });
 
 test("two operand groups: envelope minus copper, hatched", async ({ page }) => {

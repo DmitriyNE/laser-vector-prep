@@ -15,23 +15,24 @@
 
 <section class="panel">
   <h2>Export</h2>
-  <label>PDF stroke width (mm) <input type="number" step="0.0001" min="0.0001" bind:value={store.profile.export.strokeWidthMm} oninput={touch} /></label>
-  <label>Page margin (mm) <input type="number" step="0.1" min="0" bind:value={store.profile.export.marginMm} oninput={touch} /></label>
-  <label>Curve tolerance (mm, PDF arcs as Bézier curves) <input type="number" step="0.0001" min="0.00001" bind:value={store.profile.export.flattenToleranceMm} oninput={touch} /></label>
-  <p class="hint">
-    {totalPaths} trajectories, {totalLength.toFixed(1)} mm total, {size}. 1:1 scale, no fitting.
-    Stroke width is for the importer; it is not a kerf, pitch or exposure width.
+  <p class="stats" title="1:1 scale, no fitting; paths in the planned order (the laser software may still reorder them)">
+    {totalPaths} paths · {totalLength.toFixed(1)} mm · {size}
   </p>
   {#if ev?.hasErrors}<p class="err">Export is blocked until the errors in diagnostics are fixed.</p>{/if}
   <div class="buttons">
-    <button disabled={blocked} onclick={() => store.exportPdf()}>Export PDF</button>
+    <button disabled={blocked} onclick={() => store.exportPdf()} title="paths in the planned order (see Path order)">Export PDF</button>
     <button disabled={blocked} onclick={() => store.exportPdfPerGroup()}>Export one PDF per group</button>
   </div>
   <div class="buttons">
     <button disabled={blocked} onclick={() => store.exportSvg()} title="one Inkscape layer per group, same page as the PDF">Export SVG</button>
     <button disabled={blocked} onclick={() => store.exportDxf()} title="one layer per group, arcs kept, model coordinates">Export DXF</button>
   </div>
-  <p class="hint">Path order in the PDF follows the planned order (see Path order); the laser software may still reorder it.</p>
+  <details>
+    <summary>Settings</summary>
+    <label title="for the importer: not a kerf, pitch or exposure width">PDF stroke width (mm) <input type="number" step="0.0001" min="0.0001" bind:value={store.profile.export.strokeWidthMm} oninput={touch} /></label>
+    <label>Page margin (mm) <input type="number" step="0.1" min="0" bind:value={store.profile.export.marginMm} oninput={touch} /></label>
+    <label title="PDF arcs are written as Bézier curves within this tolerance">Curve tolerance (mm) <input type="number" step="0.0001" min="0.00001" bind:value={store.profile.export.flattenToleranceMm} oninput={touch} /></label>
+  </details>
 </section>
 
 <style>
@@ -47,9 +48,10 @@
     font: inherit;
     font-size: 12px;
   }
-  .hint {
-    font-size: 11px;
-    opacity: 0.7;
+  .stats {
+    font-size: 12px;
+    margin: 0 0 0.4rem;
+    opacity: 0.8;
   }
   .err {
     color: #d33;

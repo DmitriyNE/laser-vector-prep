@@ -41,6 +41,6 @@ test("the features Gerber composites clear polarity and macros into one region",
   await expect(page.locator(".extra .chip")).toContainText("features.gbr");
   await page.locator(".extra .chip button").click();
   await expect(page.locator(".slot").nth(2).locator(".status")).toHaveText(/matched/i);
-  await expect(page.getByText("Matching rules (first match wins)")).toBeVisible();
+  await expect(page.getByText("Matching rules", { exact: true })).toBeVisible();
   await expect(page.locator(".rule select").first()).toHaveValue("function");
 });

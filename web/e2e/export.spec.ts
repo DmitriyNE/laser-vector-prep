@@ -18,7 +18,7 @@ test("SVG and DXF exports download and import back as one layer per group", asyn
   const svgSource = page.locator(".source").nth(1);
   await expect(svgSource.locator(".format")).toHaveText("SVG");
   await expect(svgSource.locator("li .name")).toHaveText(["Copper", "Outline"]);
-  await expect(svgSource.locator("li").first().locator(".counts")).toContainText(`${copperPaths - before.passes[0]!.open}c`);
+  await expect(svgSource.locator("li").first().locator(".name")).toHaveAttribute("title", new RegExp(`\\b${copperPaths - before.passes[0]!.open} closed`));
 
   const dxfDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export DXF", exact: true }).click();

@@ -93,6 +93,7 @@ WebAssembly threads and a service worker or the isolation headers.
 Open the page and the browser's developer console:
 
 - `crossOriginIsolated` is `true`;
-- the profiles bar shows the core version and a thread count (`core 0.1.0 · 10 threads`);
+- hovering the app name in the profiles bar shows the core version and a thread count
+  (`core 0.1.0 · 10 threads`);
 - importing one of the repository's `fixtures/` files and exporting a PDF works, and keeps
   working after going offline and reloading.

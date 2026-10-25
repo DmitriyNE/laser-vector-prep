@@ -78,7 +78,7 @@
 </script>
 
 <div class="bar">
-  <strong>Laser Vector Prep</strong>
+  <strong title={`core ${store.coreVersion} · ${store.threads ?? "…"} threads`}>Laser Vector Prep</strong>
   <!-- An imported profile not saved yet is in neither list: the first entry names it. -->
   <select value={current} onchange={choose} title="profile" class:dirty={store.dirty}>
     <option value="" disabled>{current === "" ? label("", "") : "— choose profile —"}</option>
@@ -108,7 +108,6 @@
       {#if c.ambiguous}<span class="err">{c.ambiguous} ambiguous</span>{/if}
       {#if store.evaluation.unboundLayers.length}<span class="meta">{store.evaluation.unboundLayers.length} unbound</span>{/if}
     {/if}
-    <span class="meta">core {store.coreVersion} · {store.threads ?? "…"} threads</span>
   </span>
   {#if message}<span class="msg">{message} <button onclick={() => (message = null)}>×</button></span>{/if}
   {#if store.error}<span class="err">{store.error}</span>{/if}

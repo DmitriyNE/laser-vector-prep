@@ -14,6 +14,7 @@
   const sourceLayer = $derived(sourceFile && sourceSel ? sourceFile.layers.find((l) => l.name === sourceSel.layer) : undefined);
 
   const touch = () => store.update(() => {});
+  const CENTRELINE = "centreline distance, independent of the PDF stroke width";
 
   function hasInput(ops: Operand[], o: Operand) {
     return ops.some((x) => JSON.stringify(x) === JSON.stringify(o));
@@ -208,13 +209,8 @@
         )}
       {/if}
       <fieldset>
-        <legend>Reference set</legend>
+        <legend title="the envelope is a region built around everything checked here; use it as A in a subtraction layer (A − B) to get a negative of B; an empty reference set is an error, never a page-sized plane">Reference set</legend>
         {@render operandBoxes(layer.inputs)}
-        <p class="hint">
-          The envelope is a region built around everything checked here. Use it as A in a
-          subtraction layer (A − B) to get a negative of B. An empty reference set is an error,
-          never a page-sized plane.
-        </p>
       </fieldset>
     {:else}
     <label>Combine
@@ -238,14 +234,14 @@
     {/if}
     {/if}
     {#if layer.kind === "region"}
-      <label>Closed loops
+      <label title="applies to every source input of this layer (layer inputs are regions already)">Closed loops
         <select bind:value={layer.interpretation.loopRule} onchange={touch}>
           <option value="mergeThenNest">merge overlaps, nested = holes</option>
           <option value="evenOdd">even-odd</option>
           <option value="nonZero">non-zero (no holes)</option>
         </select>
       </label>
-      <label>Open paths
+      <label title="applies to every source input of this layer; to combine a filled layer with a stroked one, give the stroked geometry its own layer and use it as an input here">Open paths
         <select value={strokeMode(layer.interpretation.strokeWidth)} onchange={(e) => setStrokeMode((e.currentTarget as HTMLSelectElement).value)}>
           <option value="original">expand by source width</option>
           <option value="fixed">expand by fixed width</option>
@@ -255,14 +251,9 @@
       {#if typeof layer.interpretation.strokeWidth === "object"}
         <label>Width (mm) <input type="number" step="0.01" min="0.001" bind:value={layer.interpretation.strokeWidth.fixed.mm} oninput={touch} /></label>
       {/if}
-      <p class="hint">
-        The loop rule and stroke width apply to every source input of this layer (not to layer inputs,
-        which are already regions). To combine a filled layer with a stroked one, give the stroked
-        geometry its own layer and use it as an input here.
-      </p>
     {/if}
-    <label class="check"><input type="checkbox" bind:checked={layer.enabled} onchange={touch} /> enabled (runs its passes; a disabled layer still serves as an input)</label>
-    <label class="check"><input type="checkbox" bind:checked={layer.referenceOnly} onchange={touch} /> reference only (never marks)</label>
+    <label class="check" title="runs its passes; a disabled layer still serves as an input"><input type="checkbox" bind:checked={layer.enabled} onchange={touch} /> enabled</label>
+    <label class="check" title="never marks: only an input of other layers"><input type="checkbox" bind:checked={layer.referenceOnly} onchange={touch} /> reference only</label>
   {:else if passInfo}
     {@const pass = passInfo.pass}
     <label>Name <input bind:value={pass.name} oninput={touch} /></label>
@@ -277,20 +268,20 @@
       </select>
     </label>
     {#if pass.pattern.kind === "contourFill"}
-      <label>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
-      <label>First offset (mm, empty = pitch/2)
-        <input type="number" step="0.001" min="0" value={pass.pattern.firstOffsetMm ?? ""}
+      <label title={CENTRELINE}>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
+      <label title="depth of the first ring; empty = half the pitch">First offset (mm)
+        <input type="number" step="0.001" min="0" placeholder="pitch/2" value={pass.pattern.firstOffsetMm ?? ""}
           oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.firstOffsetMm = v === "" ? null : Number(v); }); }} />
       </label>
-      <label class="check"><input type="checkbox" bind:checked={pass.pattern.gapFill} onchange={touch} /> centreline gap fill for narrow cores</label>
+      <label class="check" title="centrelines in cores too narrow for another ring"><input type="checkbox" bind:checked={pass.pattern.gapFill} onchange={touch} /> gap fill</label>
       {#if pass.pattern.gapFill}
-        <label>End spacing (mm beyond the last ring where gap fill starts, empty = pitch/2)
-          <input type="number" step="0.001" min="0" value={pass.pattern.endSpacingMm ?? ""}
+        <label title="where gap fill starts beyond the last ring; empty = half the pitch">End spacing (mm)
+          <input type="number" step="0.001" min="0" placeholder="pitch/2" value={pass.pattern.endSpacingMm ?? ""}
             oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.endSpacingMm = v === "" ? null : Number(v); }); }} />
         </label>
       {/if}
-      <label>Simplify rings (mm, empty = off, at most pitch/4)
-        <input type="number" step="0.0005" min="0" value={pass.pattern.simplifyMm ?? ""}
+      <label title="tolerance for dropping ring vertices, at most a quarter of the pitch; empty = off">Simplify rings (mm)
+        <input type="number" step="0.0005" min="0" placeholder="off" value={pass.pattern.simplifyMm ?? ""}
           oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.simplifyMm = v === "" ? null : Number(v); }); }} />
       </label>
     {:else if pass.pattern.kind === "boundaryTrace"}
@@ -302,7 +293,7 @@
         </select>
       </label>
       <label>Offset from boundary (mm) <input type="number" step="0.01" min="0" bind:value={pass.pattern.offsetMm} oninput={touch} /></label>
-      <label>Kerf to compensate (mm, half applied outward) <input type="number" step="0.001" min="0" bind:value={pass.pattern.kerfMm} oninput={touch} /></label>
+      <label title="kerf to compensate; half of it is applied outward">Kerf (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.kerfMm} oninput={touch} /></label>
       <label>Rings <input type="number" step="1" min="1" bind:value={pass.pattern.rings} oninput={touch} /></label>
       {#if pass.pattern.rings > 1}
         <label>Ring spacing (mm) <input type="number" step="0.01" min="0.001" bind:value={pass.pattern.ringSpacingMm} oninput={touch} /></label>
@@ -311,36 +302,36 @@
         () => (pass.pattern.kind === "boundaryTrace" ? pass.pattern.join : undefined),
         (jn) => { if (pass.pattern.kind === "boundaryTrace") pass.pattern.join = jn; },
       )}
-      <label class="check"><input type="checkbox" bind:checked={pass.pattern.innerFirst} onchange={touch} /> holes before outer contours (cutting order)</label>
+      <label class="check" title="cutting order: inner contours first, so parts do not drop before their holes are cut"><input type="checkbox" bind:checked={pass.pattern.innerFirst} onchange={touch} /> holes first</label>
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
     {:else if pass.pattern.kind === "hatch"}
-      <label>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
-      <label>Angle (°, document coordinates) <input type="number" step="1" bind:value={pass.pattern.angleDeg} oninput={touch} /></label>
-      <label>Phase (mm, global lattice offset) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
+      <label title={CENTRELINE}>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
+      <label title="in document coordinates">Angle (°) <input type="number" step="1" bind:value={pass.pattern.angleDeg} oninput={touch} /></label>
+      <label title="offset of the global line lattice, so neighbouring regions line up">Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
       <label>Inset from boundary (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
-      <label class="check"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine (alternate row direction)</label>
+      <label class="check" title="alternate the direction of every other row"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
     {:else if pass.pattern.kind === "crossHatch"}
-      <label>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
-      <label>Angles (°, comma separated)
-        <input value={pass.pattern.anglesDeg.join(", ")} onchange={(e) => { const v = parseAngles((e.currentTarget as HTMLInputElement).value); store.update(() => { if (pass.pattern.kind === "crossHatch") pass.pattern.anglesDeg = v; }); }} />
+      <label title={CENTRELINE}>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
+      <label title="comma separated">Angles (°)
+        <input placeholder="0, 90" value={pass.pattern.anglesDeg.join(", ")} onchange={(e) => { const v = parseAngles((e.currentTarget as HTMLInputElement).value); store.update(() => { if (pass.pattern.kind === "crossHatch") pass.pattern.anglesDeg = v; }); }} />
       </label>
-      <label>Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
+      <label title="offset of the global line lattice, so neighbouring regions line up">Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
       <label>Inset from boundary (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
-      <label class="check"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
+      <label class="check" title="alternate the direction of every other row"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
     {:else if pass.pattern.kind === "boundaryHatch"}
       <label>Shells <input type="number" step="1" min="0" bind:value={pass.pattern.shells} oninput={touch} /></label>
       <label>Shell pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.shellPitchMm} oninput={touch} /></label>
       <label>Gap between shells and hatch (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
       <label>Hatch pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
-      <label>Hatch angles (°, comma separated)
-        <input value={pass.pattern.anglesDeg.join(", ")} onchange={(e) => { const v = parseAngles((e.currentTarget as HTMLInputElement).value); store.update(() => { if (pass.pattern.kind === "boundaryHatch") pass.pattern.anglesDeg = v; }); }} />
+      <label title="comma separated">Hatch angles (°)
+        <input placeholder="0, 90" value={pass.pattern.anglesDeg.join(", ")} onchange={(e) => { const v = parseAngles((e.currentTarget as HTMLInputElement).value); store.update(() => { if (pass.pattern.kind === "boundaryHatch") pass.pattern.anglesDeg = v; }); }} />
       </label>
-      <label>Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
-      <label class="check"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
+      <label title="offset of the global line lattice, so neighbouring regions line up">Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
+      <label class="check" title="alternate the direction of every other row"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
     {:else}
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
-      <label>Simplify (mm, empty = off)
-        <input type="number" step="0.001" min="0" value={pass.pattern.simplifyMm ?? ""}
+      <label title="tolerance for dropping vertices; empty = off">Simplify (mm)
+        <input type="number" step="0.001" min="0" placeholder="off" value={pass.pattern.simplifyMm ?? ""}
           oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "passthrough") pass.pattern.simplifyMm = v === "" ? null : Number(v); }); }} />
       </label>
     {/if}
@@ -350,17 +341,17 @@
       </select>
     </label>
     <label class="check"><input type="checkbox" bind:checked={pass.enabled} onchange={touch} /> enabled</label>
-    <p class="hint">Layer: {passInfo.layer.name}. Pitch and offsets are centreline distances in mm, independent of the PDF stroke width.</p>
     {@const audit = store.evaluation?.passes.find((p) => p.id === pass.id)?.audit}
     {#if audit}
-      <dl class="audit" title="paths swept at the group's assumed marking width against the region they fill; a geometric surrogate, not a dose">
-        <dt>Audit</dt><dd>at {audit.widthMm} mm marking width</dd>
-        <dt>Missed</dt><dd>{audit.missedMm2.toFixed(4)} mm² ({((100 * audit.missedMm2) / Math.max(audit.regionMm2, 1e-12)).toFixed(2)} % of {audit.regionMm2.toFixed(3)} mm²)</dd>
-        <dt>Spill</dt><dd>{audit.spillMm2.toFixed(4)} mm² outside the region</dd>
-        <dt>Short</dt><dd>{audit.shortSegments} path(s) shorter than the width</dd>
-      </dl>
+      {@const missed = (100 * audit.missedMm2) / Math.max(audit.regionMm2, 1e-12)}
+      <p
+        class="audit"
+        title={`Paths swept at an assumed ${audit.widthMm} mm marking width against the region they fill (a geometric surrogate, not a dose).\nMissed ${audit.missedMm2.toFixed(4)} mm² of ${audit.regionMm2.toFixed(3)} mm²; spill ${audit.spillMm2.toFixed(4)} mm² outside the region; ${audit.shortSegments} path(s) shorter than the width.`}
+      >
+        Audit at {audit.widthMm} mm: missed {missed.toFixed(2)} %, spill {audit.spillMm2.toFixed(3)} mm²{audit.shortSegments ? `, ${audit.shortSegments} short` : ""}
+      </p>
     {:else}
-      <p class="hint">No coverage audit: set an audit width on output group “{store.group(pass.group)?.name ?? pass.group}” (fills of region layers only).</p>
+      <p class="hint" title="the group's audit width; fills of region layers only">No coverage audit: set an audit width on group “{store.group(pass.group)?.name ?? pass.group}”.</p>
     {/if}
   {:else if group}
     <label>Name <input bind:value={group.name} oninput={touch} /></label>
@@ -368,12 +359,12 @@
       <input type="color" value={rgbHex(group.color)} oninput={(e) => store.update(() => { group.color = hexRgb((e.currentTarget as HTMLInputElement).value); })} />
       <code>rgb({group.color.join(", ")})</code>
     </label>
-    <label>PDF stroke width (mm, empty = export default)
-      <input type="number" step="0.0001" min="0.0001" value={group.strokeWidthMm ?? ""}
+    <label title="stroke width of this group's paths in the PDF, for the importer (not a kerf, pitch or exposure width); empty = the export default">PDF stroke width (mm)
+      <input type="number" step="0.0001" min="0.0001" placeholder="default" value={group.strokeWidthMm ?? ""}
         oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { group.strokeWidthMm = v === "" ? null : Number(v); }); }} />
     </label>
-    <label title="the effective width each path is assumed to sweep when auditing fills of this group (missed area, spill, short segments); a geometric surrogate, not a dose">Audit width (mm, empty = no audit)
-      <input type="number" step="0.001" min="0.001" value={group.auditWidthMm ?? ""}
+    <label title="the effective width each path is assumed to sweep when auditing fills of this group (missed area, spill, short segments); a geometric surrogate, not a dose; empty = no audit">Audit width (mm)
+      <input type="number" step="0.001" min="0.001" placeholder="off" value={group.auditWidthMm ?? ""}
         oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { group.auditWidthMm = v === "" ? null : Number(v); }); }} />
     </label>
     <label class="check"><input type="checkbox" bind:checked={group.export} onchange={touch} /> export</label>
@@ -388,9 +379,9 @@
     </label>
   {:else if binding}
     <label>Slot name <input bind:value={binding.name} oninput={touch} /></label>
-    <label class="check"><input type="checkbox" bind:checked={binding.required} onchange={touch} /> required (output is blocked while unmapped)</label>
+    <label class="check" title="output is blocked while no imported layer is mapped onto it"><input type="checkbox" bind:checked={binding.required} onchange={touch} /> required</label>
     <fieldset>
-      <legend>Matching rules (first match wins)</legend>
+      <legend title="the first rule that matches decides; layer-name, function and file-pattern rules travel with the profile to new designs, file + layer rules pin one imported file; patterns are case-insensitive globs (* and ?)">Matching rules</legend>
       {#each binding.rules as rule, i (i)}
         <div class="rule">
           <select value={rule.kind} onchange={(e) => setRuleKind(i, (e.currentTarget as HTMLSelectElement).value)}>
@@ -413,26 +404,23 @@
         </div>
       {/each}
       <button onclick={addRule}>+ rule</button>
-      <p class="hint">
-        Layer-name, function and file-pattern rules travel with the profile to new designs; file + layer rules pin one imported file.
-        Patterns are case-insensitive globs (* and ?).
-      </p>
     </fieldset>
     <p class="hint">Used by: {store.bindingUsers(binding.id).join(", ") || "no working layer"}</p>
     <button onclick={deleteBinding}>delete slot</button>
   {:else if sourceLayer && sourceFile}
     {@const mapped = store.bindingOf(sourceFile.name, sourceLayer.name)}
-    <p><strong>{sourceLayer.name}</strong> in {sourceFile.name}</p>
-    <p class="hint">
-      {#if sourceLayer.function}Declared function: {sourceLayer.function}.{/if}
-      {sourceLayer.closedPaths} closed, {sourceLayer.openPaths} open path(s), {sourceLayer.hatches} hatch(es).
-      {#if sourceLayer.boundsMm}Bounds {sourceLayer.boundsMm.map((v) => v.toFixed(3)).join(", ")} mm.{/if}
-      Imported layers are immutable; map them onto a profile slot in the Sources list ("→ slot"),
-      and working layers read from the slot.
+    {@const b = sourceLayer.boundsMm}
+    <p title="imported layers are read-only; map one onto a profile slot in the Sources list and working layers read from the slot">
+      <strong>{sourceLayer.name}</strong> in {sourceFile.name}
     </p>
-    <p class="hint">Mapped to: {mapped ? mapped.name : "nothing yet"}</p>
+    <dl class="facts">
+      {#if sourceLayer.function}<dt>Function</dt><dd>{sourceLayer.function}</dd>{/if}
+      <dt>Paths</dt><dd>{sourceLayer.closedPaths} closed, {sourceLayer.openPaths} open{sourceLayer.hatches ? `, ${sourceLayer.hatches} hatches` : ""}</dd>
+      {#if b}<dt>Size</dt><dd title={`from (${b[0].toFixed(3)}, ${b[1].toFixed(3)}) to (${b[2].toFixed(3)}, ${b[3].toFixed(3)}) mm`}>{(b[2] - b[0]).toFixed(3)} × {(b[3] - b[1]).toFixed(3)} mm</dd>{/if}
+      <dt>Slot</dt><dd>{mapped ? mapped.name : "not mapped"}</dd>
+    </dl>
   {:else}
-    <p class="hint">Select a source layer, working layer, pass or output group.</p>
+    <p class="hint">Select something to edit it.</p>
   {/if}
 </section>
 
@@ -467,16 +455,20 @@
     opacity: 0.7;
   }
   .audit {
+    margin: 0.4rem 0;
+    font-size: 12px;
+  }
+  .facts {
     display: grid;
     grid-template-columns: auto 1fr;
     gap: 0.1rem 0.6rem;
     margin: 0.4rem 0;
     font-size: 12px;
   }
-  .audit dt {
+  .facts dt {
     opacity: 0.7;
   }
-  .audit dd {
+  .facts dd {
     margin: 0;
   }
   .rule {
