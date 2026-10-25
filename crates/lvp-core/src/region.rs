@@ -581,6 +581,10 @@ fn snap_vertices(loops: &mut Vec<Tagged>, join: f64, repeat: f64) {
     let mut anchors: Anchors = HashMap::new();
     let mut moved = vec![false; loops.len()];
     for (li, l) in loops.iter_mut().enumerate() {
+        // A cancelled computation discards its result (see `crate::cancel`).
+        if li % 256 == 0 && crate::cancel::cancelled() {
+            return;
+        }
         for v in l.pline.vertex_data.iter_mut() {
             let (cx, cy) = cell(v.x, v.y);
             // The nearest anchor, not the first: a loop identical to an earlier one must snap
@@ -875,8 +879,29 @@ fn clusters(loops: &[Tagged], pad: f64) -> Vec<Vec<usize>> {
         }
         i
     }
-    for (i, bbox) in boxes.iter().enumerate() {
-        for j in grid.query_box(bbox, pad) {
+    // Everything that overlaps a box inside box `i` also overlaps `i`, so once `i` is
+    // united with its overlaps the boxes inside it add nothing. Largest boxes first, and
+    // the nested rings of a fill cost one query per island instead of one per pair.
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|&a, &b| {
+        (boxes[b].width() * boxes[b].height()).total_cmp(&(boxes[a].width() * boxes[a].height()))
+    });
+    let mut covered = vec![false; boxes.len()];
+    let inside = |inner: &BBox, outer: &BBox| {
+        outer.min.x <= inner.min.x
+            && outer.min.y <= inner.min.y
+            && inner.max.x <= outer.max.x
+            && inner.max.y <= outer.max.y
+    };
+    for (k, &i) in order.iter().enumerate() {
+        if covered[i] {
+            continue;
+        }
+        if k % 1024 == 0 && crate::cancel::cancelled() {
+            return vec![(0..loops.len()).collect()];
+        }
+        for j in grid.query_box(&boxes[i], pad) {
+            covered[j] |= j != i && inside(&boxes[j], &boxes[i]);
             let (a, b) = (find(&mut parent, i), find(&mut parent, j));
             if a != b {
                 parent[a.max(b)] = a.min(b);
@@ -1474,7 +1499,9 @@ pub fn stroke_many(paths: &[Pline], width: f64) -> Region {
     let clean: Vec<Pline> = paths.iter().filter_map(pline::sanitize).collect();
     // Each path's stroke is independent (and most of the work): built in parallel.
     let parts = crate::par::map(clean, |p| {
-        if p.is_closed() && p.area().abs() > 1e-18 {
+        if crate::cancel::cancelled() {
+            Region::empty()
+        } else if p.is_closed() && p.area().abs() > 1e-18 {
             let base = Region::from_loops([p], LoopRule::NonZero);
             let outer = base.offset(r);
             let inner = base.offset(-r);
@@ -1698,6 +1725,54 @@ mod tests {
     }
 
     proptest! {
+        /// Clusters are the connected groups of boxes that overlap (within the pad),
+        /// exactly as uniting every overlapping pair would find them, for nested, touching
+        /// and scattered boxes alike.
+        #[test]
+        fn clusters_match_pairwise_overlaps(
+            boxes in prop::collection::vec((0.0f64..50.0, 0.0f64..50.0, 0.0f64..20.0, 0.0f64..20.0, 0u8..4), 1..80),
+            pad in 0.0f64..1.0,
+        ) {
+            // Every fourth box is nested in the previous one, as fill rings are.
+            let mut bbs: Vec<BBox> = Vec::new();
+            for (x, y, w, h, k) in boxes {
+                let b = match (k, bbs.last()) {
+                    (0, Some(prev)) => bbox(prev.min.x + w.min(prev.width()) / 4.0, prev.min.y + h.min(prev.height()) / 4.0, prev.width() / 2.0, prev.height() / 2.0),
+                    _ => bbox(x, y, w, h),
+                };
+                bbs.push(b);
+            }
+            let loops: Vec<Tagged> = bbs
+                .iter()
+                .map(|b| Tagged { pline: rect(b.min, b.max), operand: 0, bbox: *b, count: 1, nudged: false })
+                .collect();
+            let mut expect: Vec<usize> = (0..bbs.len()).collect();
+            loop {
+                let mut changed = false;
+                for i in 0..bbs.len() {
+                    for j in 0..bbs.len() {
+                        if bbox_overlap(&bbs[i], &bbs[j], pad) && expect[i] != expect[j] {
+                            let m = expect[i].min(expect[j]);
+                            expect[i] = m;
+                            expect[j] = m;
+                            changed = true;
+                        }
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            let mut want: Vec<Vec<usize>> = Vec::new();
+            for i in 0..bbs.len() {
+                match want.iter_mut().find(|g| expect[g[0]] == expect[i]) {
+                    Some(g) => g.push(i),
+                    None => want.push(vec![i]),
+                }
+            }
+            prop_assert_eq!(clusters(&loops, pad), want);
+        }
+
         /// One n-ary union equals folding pairwise unions, holes included.
         #[test]
         fn union_all_matches_pairwise_unions(

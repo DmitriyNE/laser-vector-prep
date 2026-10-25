@@ -21,6 +21,12 @@ audit, whose booleans allocate heavily; nobody had timed the panel in a browser 
 Timings this session are rough: another project kept the machine at load averages of 20
 to 260, so old and new builds were always run alternately, side by side.
 
+The first CI run after that failed one browser test: Firefox took 5.02 s to cancel a 1 µm
+fill (the limit is 5 s). With the faster allocator the fill now finishes early and the
+cancel lands in its coverage audit, whose stroking and clustering never checked for
+cancellation (DEF-14); a native reproduction took 3.3 s to stop, a debug build 18 s.
+Sampling the stuck process (`sample <pid>` on macOS) pointed straight at the clustering.
+
 ## 2026-10-25 — After M4: near-coincident booleans, Nix cache measured
 
 Booleans no longer leave near-coincident boundaries unresolved (D34): the exact boolean

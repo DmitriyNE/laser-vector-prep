@@ -105,6 +105,66 @@ fn cancelling_a_running_evaluation_stops_it_promptly() {
     assert_eq!(paths(&again), paths(&fresh));
 }
 
+/// A fine fill cancelled at several moments while its passes run: the pattern, its coverage
+/// audit (stroking and uniting thousands of rings) and the plans all notice promptly.
+#[test]
+fn cancelling_a_fine_fill_stops_promptly_at_any_stage() {
+    let _guard = SERIAL.lock().unwrap();
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/dxf/board-islands.dxf"
+    );
+    let mut p = Project::new();
+    p.add_source("board-islands.dxf", &std::fs::read(path).unwrap())
+        .unwrap();
+    let mut profile = lvp_core::profile::pcb_positive_ldi();
+    p.set_profile(profile.clone());
+    p.evaluate(); // the layers are cached from here on
+    let layers_done = 1000 * profile.working_layers.len() as u32;
+    for (k, delay) in [0u64, 300, 1000, 2500].into_iter().enumerate() {
+        for l in &mut profile.working_layers {
+            for pass in &mut l.passes {
+                if let lvp_core::model::Pattern::ContourFill { pitch_mm, .. } = &mut pass.pattern {
+                    *pitch_mm = 0.002 + k as f64 * 1e-6;
+                }
+            }
+        }
+        p.set_profile(profile.clone());
+        let epoch = 30 + k as u32;
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let canceller = {
+            let finished = finished.clone();
+            std::thread::spawn(move || {
+                while !(cancel::CONTROL.running.load(Ordering::Acquire) == epoch
+                    && cancel::progress().0 >= layers_done)
+                {
+                    if finished.load(Ordering::Acquire) {
+                        return None;
+                    }
+                    std::hint::spin_loop();
+                }
+                std::thread::sleep(Duration::from_millis(delay));
+                cancel::cancel(epoch);
+                Some(Instant::now())
+            })
+        };
+        cancel::begin(epoch);
+        let result = p.try_evaluate();
+        let stopped = Instant::now();
+        finished.store(true, Ordering::Release);
+        cancel::end();
+        let cancelled_at = canceller.join().unwrap();
+        // A fast machine may finish before a late cancel.
+        if let (Err(_), Some(at)) = (result, cancelled_at) {
+            let reaction = stopped.saturating_duration_since(at);
+            assert!(
+                reaction < Duration::from_secs(2),
+                "{delay} ms in: took {reaction:?} to stop"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_cancelled_import_is_refused() {
     let _guard = SERIAL.lock().unwrap();
