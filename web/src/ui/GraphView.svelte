@@ -7,7 +7,7 @@
   // and Delete remove what can go, and a click on any other edge says how to change it.
   // Every edit goes through the store (and its undo history); the graph is redrawn from the
   // profile.
-  import { Background, Controls, MiniMap, Panel, SvelteFlow, type Connection, type Edge, type Node } from "@xyflow/svelte";
+  import { Background, Controls, MiniMap, SvelteFlow, type Connection, type Edge, type Node } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
   import { setContext, untrack } from "svelte";
   import {
@@ -24,6 +24,7 @@
   } from "../state/graph.js";
   import type { ProjectStore, Selection } from "../state/project.svelte.js";
   import { ruleText } from "../state/labels.js";
+  import GraphFit from "./GraphFit.svelte";
   import GraphLink from "./GraphLink.svelte";
   import GraphNode from "./GraphNode.svelte";
 
@@ -162,9 +163,16 @@
   }
 
   const selectedLayer = $derived(store.selection.kind === "layer" ? store.selection.id : null);
+
+  // Double-click on the background fits the graph, as on the preview.
+  let fit: (() => void) | undefined = $state();
+  function dblclick(e: MouseEvent) {
+    const t = e.target as Element;
+    if (!t.closest(".svelte-flow__node, .svelte-flow__edge, .svelte-flow__edge-label, .svelte-flow__panel, .overlay-bar")) fit?.();
+  }
 </script>
 
-<div class="graph">
+<div class="graph" role="presentation" ondblclick={dblclick}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -173,6 +181,7 @@
     connectionRadius={36}
     fitView
     fitViewOptions={{ maxZoom: 1, padding: 0.05 }}
+    zoomOnDoubleClick={false}
     colorMode="system"
     minZoom={0.1}
     deleteKey={["Backspace", "Delete"]}
@@ -192,21 +201,17 @@
       for (const n of moved) positions.set(n.id, n.position);
     }}
   >
-    <Panel position="top-left">
-      <div class="tools">
+    <GraphFit bind:fit />
+    <div class="tools overlay-bar nopan nodrag nowheel">
         <button onclick={() => store.addBinding(`Slot ${store.profile.sourceBindings.length + 1}`, null)}>+ slot</button>
         <button onclick={() => store.addLayer("region")}>+ layer</button>
         <button onclick={() => store.addLayer("envelope")}>+ envelope</button>
         <button onclick={() => selectedLayer && store.addPass(selectedLayer)} disabled={!selectedLayer} title="add a pass to the selected layer">+ pass</button>
         <button onclick={() => store.addGroup()}>+ group</button>
-        <span class="sep"></span>
-        <button onclick={() => store.undo()} disabled={!store.canUndo} title="undo (Ctrl/⌘ Z)">Undo</button>
-        <button onclick={() => store.redo()} disabled={!store.canRedo} title="redo (Ctrl/⌘ ⇧ Z)">Redo</button>
         <span class="message" class:error={message?.error} role="status">
           {message?.text ?? "Drag from a ● on a node's right to a ● on another's left to connect; × removes a connection."}
         </span>
-      </div>
-    </Panel>
+    </div>
     <Background />
     <Controls showLock={false} />
     <MiniMap pannable zoomable />
@@ -249,19 +254,11 @@
     box-shadow: 0 0 0 4px color-mix(in srgb, Highlight 35%, transparent);
   }
   .tools {
-    display: flex;
     gap: 4px;
-    align-items: center;
-    padding: 4px;
-    background: color-mix(in srgb, Canvas 92%, transparent);
-    border-radius: 4px;
   }
   .tools button {
     flex: none;
     white-space: nowrap;
-  }
-  .sep {
-    width: 8px;
   }
   .message {
     margin-left: 6px;

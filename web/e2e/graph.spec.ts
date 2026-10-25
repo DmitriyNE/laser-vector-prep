@@ -189,7 +189,7 @@ test("the graph edits the profile: connect, refuse, delete, undo and redo", asyn
   // Undoing everything returns to the preset as loaded: nothing left unsaved.
   while (await page.evaluate(() => (globalThis as unknown as { lvp: Lvp }).lvp.canUndo)) await undo();
   expect((await profile(page)).workingLayers.map((l) => l.id)).toEqual(before.workingLayers.slice(0, -1).map((l) => l.id));
-  await expect(page.locator(".bar .name")).not.toContainText("●");
+  await expect(page.locator('select[title="profile"] option:checked')).not.toContainText("●");
 
   // The preset's copper slot matches the layer by several rules, patterns among them: its
   // × removes every one of them, says which, and undo restores them.

@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Heatmap, Preview } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
-  import BusyIndicator from "./BusyIndicator.svelte";
 
   let { store }: { store: ProjectStore } = $props();
 
@@ -526,7 +525,7 @@
     onpointerup={onPointerUp}
     ondblclick={fit}
   ></canvas>
-  <div class="hud">
+  <div class="hud overlay-bar">
     <label><input type="checkbox" bind:checked={store.showSources} /> sources</label>
     <label><input type="checkbox" bind:checked={store.showLayers} /> regions</label>
     <label title="hypothetical straight beam-off jumps of the planned order; never exported"><input type="checkbox" bind:checked={store.showJumps} /> jumps</label>
@@ -537,7 +536,6 @@
       {#if cursorMm}{cursorMm[0].toFixed(3)}, {cursorMm[1].toFixed(3)} mm{/if}
       · {ppm.toFixed(1)} px/mm
     </span>
-    <BusyIndicator {store} />
   </div>
   <!-- Zoom controls as in the graph tab (Svelte Flow's Controls, with its icons). -->
   <div class="controls" role="group" aria-label="Zoom controls">
@@ -579,18 +577,6 @@
     display: block;
     cursor: grab;
     background: color-mix(in srgb, Canvas 97%, CanvasText 3%);
-  }
-  .hud {
-    position: absolute;
-    top: 0.4rem;
-    left: 0.4rem;
-    display: flex;
-    gap: 0.75rem;
-    align-items: center;
-    font-size: 12px;
-    background: color-mix(in srgb, Canvas 80%, transparent);
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
   }
   .coords {
     font-family: ui-monospace, monospace;

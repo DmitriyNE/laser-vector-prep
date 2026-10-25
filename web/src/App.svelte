@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { ProjectStore } from "./state/project.svelte.js";
   import BindingsPanel from "./ui/BindingsPanel.svelte";
+  import BusyIndicator from "./ui/BusyIndicator.svelte";
   import DiagnosticsPanel from "./ui/DiagnosticsPanel.svelte";
   import ExportPanel from "./ui/ExportPanel.svelte";
   import GroupsPanel from "./ui/GroupsPanel.svelte";
@@ -37,13 +38,22 @@
     e.preventDefault();
   }
 
+  /** Closing or reloading the page loses the imported files and unsaved profile edits. */
+  function beforeunload(e: BeforeUnloadEvent) {
+    if (store.sources.length > 0 || store.dirty) {
+      e.preventDefault();
+      // Some browsers still ask only when this is set (its text is never shown).
+      e.returnValue = "unsaved";
+    }
+  }
+
   onMount(() => {
     if (isolated) void store.init();
     return () => store.worker.dispose();
   });
 </script>
 
-<svelte:window onkeydown={keydown} />
+<svelte:window onkeydown={keydown} onbeforeunload={beforeunload} />
 
 {#if !isolated}
   <div class="gate">Waiting for cross-origin isolation (the page reloads once on first visit)…</div>
@@ -59,6 +69,8 @@
       <div class="tabs" role="tablist">
         <button role="tab" aria-selected={tab === "preview"} onclick={() => (tab = "preview")}>Preview</button>
         <button role="tab" aria-selected={tab === "graph"} onclick={() => (tab = "graph")}>Graph</button>
+        <!-- Progress and Cancel for either tab. -->
+        <span class="busy-slot"><BusyIndicator {store} /></span>
       </div>
       <div class="view" class:hidden={tab !== "preview"}><Preview {store} /></div>
       {#if graphMounted}
@@ -123,6 +135,11 @@
     border-radius: 4px 4px 0 0;
     cursor: pointer;
     opacity: 0.7;
+  }
+  .busy-slot {
+    margin-left: auto;
+    align-self: center;
+    font-size: 12px;
   }
   .tabs button[aria-selected="true"] {
     border-color: color-mix(in srgb, CanvasText 15%, transparent);

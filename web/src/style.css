@@ -33,3 +33,19 @@ button {
   font: inherit;
   font-size: 12px;
 }
+
+/* A toolbar floating over the preview or the graph: the same look and place on both tabs. */
+.overlay-bar {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  z-index: 5;
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: color-mix(in srgb, Canvas 88%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 2px 1px rgba(0, 0, 0, 0.08);
+}

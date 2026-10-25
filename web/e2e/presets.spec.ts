@@ -25,7 +25,7 @@ test("built-in presets switch from the profiles bar and evaluate the board fixtu
   // Negative: board interior minus buffered copper, hatched; outline passed through.
   await select.selectOption("preset:builtin-pcb-negative-hatch");
   await waitForLayer(page, "Background");
-  await expect(page.locator(".bar .name")).toContainText("PCB negative");
+  await expect(page.locator('select[title="profile"] option:checked')).toContainText("PCB negative");
   let ev = await summary(page);
   expect(ev.hasErrors).toBe(false);
   const background = ev.layers.find((l) => l.name === "Background")!;

@@ -6,6 +6,8 @@
   let message: string | null = $state(null);
 
   const current = $derived(store.activeSavedId ? `saved:${store.activeSavedId}` : store.basePresetId ? `preset:${store.basePresetId}` : "");
+  /** The selected entry names the profile being edited (renamed, or with unsaved edits). */
+  const label = (key: string, name: string) => (key === current ? `${store.profile.name}${store.dirty ? " ● unsaved" : ""}` : name);
   const bindingCounts = $derived(() => {
     const b = store.evaluation?.bindings ?? [];
     return {
@@ -77,16 +79,16 @@
 
 <div class="bar">
   <strong>Laser Vector Prep</strong>
-  <select value={current} onchange={choose} title="profile">
-    <option value="" disabled>— choose profile —</option>
+  <!-- An imported profile not saved yet is in neither list: the first entry names it. -->
+  <select value={current} onchange={choose} title="profile" class:dirty={store.dirty}>
+    <option value="" disabled>{current === "" ? label("", "") : "— choose profile —"}</option>
     <optgroup label="Built-in (read-only)">
-      {#each store.presets as p (p.profileId)}<option value={"preset:" + p.profileId}>{p.name}</option>{/each}
+      {#each store.presets as p (p.profileId)}<option value={"preset:" + p.profileId}>{label("preset:" + p.profileId, p.name)}</option>{/each}
     </optgroup>
     <optgroup label="Saved">
-      {#each store.saved as s (s.id)}<option value={"saved:" + s.id}>{s.name}</option>{/each}
+      {#each store.saved as s (s.id)}<option value={"saved:" + s.id}>{label("saved:" + s.id, s.name)}</option>{/each}
     </optgroup>
   </select>
-  <span class="name">{store.profile.name}{store.dirty ? " ●" : ""}</span>
   <button onclick={() => store.save()} title="save (built-ins are saved as a new profile)">Save</button>
   <button onclick={saveAs}>Save as…</button>
   <button onclick={rename} disabled={!store.activeSavedId && !store.dirty}>Rename</button>
@@ -123,9 +125,8 @@
     font-size: 12px;
     flex-wrap: wrap;
   }
-  .name {
+  select {
     font-weight: 600;
-    margin: 0 0.5rem;
   }
   .status {
     margin-left: auto;

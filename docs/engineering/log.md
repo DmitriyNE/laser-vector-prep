@@ -49,6 +49,17 @@ It also has the graph's zoom controls (+, −, fit) in the same corner with the 
 and colours; the fit button moved there from the preview's toolbar. Both minimaps carry the
 controls' faint shadow, because on the preview's grey background the mask hid the edge.
 
+Owner's next round: the profile name appeared twice in the title bar (the selector and a
+label beside it); the selector now names the profile being edited, with "● unsaved" while
+it has unsaved edits, and an imported profile not saved yet gets an entry of its own.
+Leaving the page asks first once files are loaded or edits are unsaved (the browser's own
+dialog; an empty app closes without a question). Progress and Cancel moved from the
+preview's toolbar to the tab row, so a long evaluation can be stopped from the graph too;
+double-click on the graph's background fits it, as on the preview; both tabs' toolbars
+share one style and place; the graph's Undo and Redo went, the profiles bar has them.
+Playwright reports the leave prompt for navigations but not for `page.close`, so the test
+reloads; a first manual check clicked Save by accident, which cleared the unsaved state.
+
 ## 2026-10-25 — After M4: parallel evaluation, a wasm allocator
 
 Layers, passes, audits and plans now run concurrently and the optimiser's scans use the
