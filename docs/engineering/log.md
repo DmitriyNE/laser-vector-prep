@@ -3,6 +3,21 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: Firefox
+
+The browser suite runs in Chrome and Firefox (D29). Firefox is Playwright's own build from
+nixpkgs, trimmed to Firefox alone (294 MB instead of 2.4 GB with Chromium and WebKit);
+`just check-playwright` keeps the npm and Nix Playwright releases equal. The installed
+Firefox 148 could not be used: its WebDriver BiDi lacks a command Playwright 1.64 sends
+for every new context.
+
+Every spec on the Vite preview server failed in Firefox with "navigation interrupted by
+another navigation", which looked like the service worker reloading a page that already
+had its isolation headers. It was the port: 4190 (ManageSieve) is on the Fetch standard's
+list of bad ports, Firefox replaces the navigation with an error page, and the servers
+now use 4180 and 4181. With that, all 18 specs pass in both browsers; Firefox evaluates
+the board about twice as slowly as Chrome.
+
 ## 2026-10-25 — M4: cancellation and progress
 
 The worker cannot read messages while a wasm call runs, but the page can write into the

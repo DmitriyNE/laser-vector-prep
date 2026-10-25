@@ -5,7 +5,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const port = Number(process.argv[2] ?? 4191);
+const port = Number(process.argv[2] ?? 4181);
 const root = fileURLToPath(new URL("../dist/", import.meta.url));
 const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".map": "application/json", ".json": "application/json" };
 

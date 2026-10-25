@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, summary, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 test("a PDF exported by the app imports back as one colour layer per group", async ({ page }) => {
   await page.goto(url);

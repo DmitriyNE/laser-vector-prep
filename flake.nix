@@ -28,6 +28,15 @@
       devShells = forAll (pkgs:
         let
           rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          # Playwright's own Firefox build for the browser tests (Chrome is the installed
+          # one). Its revision must match the npm @playwright/test version
+          # (`just check-playwright` enforces this).
+          playwrightFirefox = pkgs.playwright-driver.browsers.override {
+            withChromium = false;
+            withChromiumHeadlessShell = false;
+            withWebkit = false;
+            withFfmpeg = false;
+          };
         in
         {
           default = pkgs.mkShell {
@@ -43,6 +52,8 @@
             ];
 
             RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
+            PLAYWRIGHT_BROWSERS_PATH = "${playwrightFirefox}";
+            PLAYWRIGHT_NIX_VERSION = pkgs.playwright-driver.version;
 
             shellHook = ''
               echo "lvp dev shell: $(rustc --version | cut -d' ' -f2-4), node $(node --version), wasm-bindgen $(wasm-bindgen --version | cut -d' ' -f2)"

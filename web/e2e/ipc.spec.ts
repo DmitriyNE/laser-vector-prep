@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, summary, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 test("an IPC-2581 board binds the PCB preset through layer functions", async ({ page }) => {
   await page.goto(url);

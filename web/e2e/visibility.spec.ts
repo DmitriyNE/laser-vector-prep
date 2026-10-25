@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 type Hidden = { sources: string[]; layers: string[]; passes: string[] };
 const hidden = (page: import("@playwright/test").Page) =>

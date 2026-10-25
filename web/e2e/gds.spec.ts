@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 test("a GDSII stream imports with layer/datatype layers in micrometres", async ({ page }) => {
   await page.goto(url);

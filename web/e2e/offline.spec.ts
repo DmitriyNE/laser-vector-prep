@@ -3,7 +3,7 @@ import { waitForApp } from "./helpers.js";
 
 // Plain static server: no isolation headers, so the vendored coi-serviceworker must
 // install, add the headers and precache the bundle; then the app must work offline.
-const url = "http://127.0.0.1:4191/";
+const url = "http://127.0.0.1:4181/";
 
 test("service worker isolates the page and the app runs offline", async ({ page, context }) => {
   // Nothing may fail on the way, including the first, not yet isolated load.

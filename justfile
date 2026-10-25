@@ -29,10 +29,18 @@ test: deps wasm
     cargo test --workspace
     cd web && npm run typecheck && npm run test
 
-# Browser end-to-end tests of the production bundle (needs `just build` first and a local
-# Chrome; Playwright drives the installed browser, nothing is downloaded).
-e2e:
-    cd web && npx playwright test
+# Browser end-to-end tests of the production bundle in Chrome and Firefox (needs
+# `just build` first). Chrome is the installed one; Firefox is Playwright's build from the
+# Nix shell. Nothing is downloaded. `just e2e --project=firefox` runs one browser.
+e2e *args: check-playwright
+    cd web && npx playwright test {{args}}
+
+# The npm Playwright and the Nix-provided browser build must be the same release.
+check-playwright:
+    @npm_v="$(node -p 'require("./web/node_modules/@playwright/test/package.json").version')"; \
+    if [ "$npm_v" != "${PLAYWRIGHT_NIX_VERSION:-}" ]; then \
+        echo "Playwright version mismatch: npm=$npm_v nix=${PLAYWRIGHT_NIX_VERSION:-unset}. Pin @playwright/test to the nixpkgs version (or update flake.lock)." >&2; exit 1; \
+    fi
 
 # Fixture-based regression tests (slow / need fixtures/); these are `#[ignore]`d in `just test`.
 regression:

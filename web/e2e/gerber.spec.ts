@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, summary, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 test("Gerber X2 pair binds through layer functions and evaluates like the DXF board", async ({ page }) => {
   await page.goto(url);

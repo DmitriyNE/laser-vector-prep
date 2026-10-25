@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 type Layer = { name: string; areaMm2: number | null };
 const layerArea = (page: import("@playwright/test").Page, name: string) =>

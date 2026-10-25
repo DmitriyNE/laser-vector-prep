@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fixture, importDxf, summary, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 type Lvp = {
   evaluating: boolean;

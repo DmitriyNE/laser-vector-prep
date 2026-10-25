@@ -66,14 +66,23 @@ panic messages appear in the worker console (`console_error_panic_hook`).
 ## Browser end-to-end tests
 
 `just e2e` runs the Playwright suite in `web/e2e/` against the production bundle, so run
-`just build` first. It drives the Chrome installed on the machine (`channel: "chrome"` in
-`web/playwright.config.ts`); nothing is downloaded, and Chrome is the one thing the Nix
-shell does not provide. The suite starts two servers itself: Vite preview on port 4190
-(isolation headers sent by the server) and `web/e2e/static-server.mjs` on port 4191 (no
-headers, so the service worker has to provide them). Covered: import → evaluate → export
-of a colour-separated PDF, mapping an unmapped layer onto a new slot, a two-group
-subtraction with a hatch pass, and the service worker installing, isolating the page and
-serving the app offline.
+`just build` first. Every spec runs in two browsers (projects in
+`web/playwright.config.ts`): the Chrome installed on the machine (`channel: "chrome"`) and
+Playwright's own Firefox build, which the Nix shell provides through
+`PLAYWRIGHT_BROWSERS_PATH`. Nothing is downloaded. That Firefox must match the npm
+`@playwright/test` release; `just check-playwright` (run by `just e2e`) fails with a
+message when `flake.lock` and `web/package-lock.json` drift apart. `just e2e
+--project=firefox` runs one browser. Safari is not supported (the app does not start in
+WebKit) and not tested.
+
+The suite starts two servers itself: Vite preview on port 4180 (isolation headers sent by
+the server) and `web/e2e/static-server.mjs` on port 4181 (no headers, so the service
+worker has to provide them). Avoid ports on the Fetch standard's "bad ports" list: the
+suite used 4190 (ManageSieve) until Firefox refused it. Covered: import → evaluate →
+export of a colour-separated PDF, mapping an unmapped layer onto a new slot, a two-group
+subtraction with a hatch pass, cancelling and superseding a long evaluation, every input
+format, and the service worker installing, isolating the page and serving the app
+offline.
 
 A failure keeps a trace under `web/test-results/`; open it with
 `npx playwright show-trace <file>`. `npx playwright test --headed` (in `web/`) shows the

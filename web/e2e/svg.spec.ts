@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, summary, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 test("an Inkscape-style SVG imports as layers and drives the general-marking preset", async ({ page }) => {
   await page.goto(url);

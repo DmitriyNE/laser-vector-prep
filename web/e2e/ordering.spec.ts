@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fixture, importDxf, summary, waitForApp } from "./helpers.js";
 
-const url = "http://localhost:4190/";
+const url = "http://localhost:4180/";
 
 type Groups = { id: string; name: string; mode: string; paths: number; before: { jumpLengthMm: number; coveredMm2?: number }; after: { jumpLengthMm: number; coveredMm2?: number }; heatmap: boolean }[];
 const groups = (page: import("@playwright/test").Page) =>

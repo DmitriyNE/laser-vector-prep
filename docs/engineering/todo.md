@@ -121,8 +121,11 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Cooperative cancellation and progress through a control block in shared wasm
       memory; a new edit cancels the running evaluation; Cancel button and progress bar
       (spec §12 #19)
-- [ ] Firefox: Playwright Firefox from nixpkgs, e2e suite on Chrome and Firefox locally and
-      in CI; fix the extra service-worker reload with headers and the slow start
+- [x] Firefox: Playwright Firefox from nixpkgs, e2e suite on Chrome and Firefox locally and
+      in CI. The "extra reload" was Firefox refusing the test port (4190 is a Fetch "bad
+      port"); the slow start does not reproduce locally (0.8 s through the service worker).
+      Firefox evaluates the board about 2× slower than Chrome (wasm speed)
+- [ ] Re-check the live site's first visit in Firefox after deploying (14.6 s at kickoff)
 - [ ] Coverage audit (spec §10): spill, missed area, short segments against a per-group
       effective marking width; schema v2 with the first migration
 - [ ] JSON Schema of the profile format generated from the serde types, with a staleness test
