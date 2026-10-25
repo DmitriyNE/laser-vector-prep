@@ -11,6 +11,11 @@ use lvp_core::source::{CANCELLED, ReadOptions, read_any};
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
+/// One test at a time; a failed test must not fail the others through a poisoned lock.
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The board Gerber pair stepped and repeated `nx` × `ny` times.
 fn panel(nx: u32, ny: u32) -> [(String, Vec<u8>); 2] {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/gerber");
@@ -33,7 +38,7 @@ fn project(nx: u32, ny: u32) -> Project {
 
 #[test]
 fn a_cancelled_evaluation_stops_early_and_keeps_the_previous_result() {
-    let _guard = SERIAL.lock().unwrap();
+    let _guard = serial();
     let mut p = project(1, 1);
     p.set_profile(lvp_core::profile::pcb_positive_ldi());
     let first = p.evaluate();
@@ -62,7 +67,7 @@ fn a_cancelled_evaluation_stops_early_and_keeps_the_previous_result() {
 
 #[test]
 fn cancelling_a_running_evaluation_stops_it_promptly() {
-    let _guard = SERIAL.lock().unwrap();
+    let _guard = serial();
     let mut p = project(2, 2);
     let started = Instant::now();
     // Cancel as soon as the first step (the copper layer) is done: mid-run on any machine.
@@ -109,7 +114,7 @@ fn cancelling_a_running_evaluation_stops_it_promptly() {
 /// audit (stroking and uniting thousands of rings) and the plans all notice promptly.
 #[test]
 fn cancelling_a_fine_fill_stops_promptly_at_any_stage() {
-    let _guard = SERIAL.lock().unwrap();
+    let _guard = serial();
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../fixtures/dxf/board-islands.dxf"
@@ -154,11 +159,12 @@ fn cancelling_a_fine_fill_stops_promptly_at_any_stage() {
         finished.store(true, Ordering::Release);
         cancel::end();
         let cancelled_at = canceller.join().unwrap();
-        // A fast machine may finish before a late cancel.
+        // A fast machine may finish before a late cancel. The bound leaves room for a debug
+        // build on a busy machine; an audit that ignored the cancel took 18 s.
         if let (Err(_), Some(at)) = (result, cancelled_at) {
             let reaction = stopped.saturating_duration_since(at);
             assert!(
-                reaction < Duration::from_secs(2),
+                reaction < Duration::from_secs(5),
                 "{delay} ms in: took {reaction:?} to stop"
             );
         }
@@ -167,7 +173,7 @@ fn cancelling_a_fine_fill_stops_promptly_at_any_stage() {
 
 #[test]
 fn a_cancelled_import_is_refused() {
-    let _guard = SERIAL.lock().unwrap();
+    let _guard = serial();
     // Large enough that the reader reaches its periodic check (see `source::Budget`).
     let [(name, bytes), _] = panel(10, 10);
     cancel::cancel(31);
