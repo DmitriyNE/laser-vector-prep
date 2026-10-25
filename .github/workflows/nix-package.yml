@@ -40,6 +40,13 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # Binary cache for locally built store paths (toolchain, vendored sources, packages)
+      # on the repository's Actions cache; paths from cache.nixos.org are fetched as usual.
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-flakehub: false
+          diagnostic-endpoint: ""
+
       - name: Build the site
         run: nix build -L .#site
 

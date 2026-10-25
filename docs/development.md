@@ -103,7 +103,10 @@ It installs Nix, enters the same dev shell as above and runs, in order:
 4. `just e2e` (Playwright drives the Google Chrome preinstalled on the Ubuntu runner)
 
 Cargo and npm downloads and the `target/` directory are cached, keyed on `flake.lock`,
-`rust-toolchain.toml`, `Cargo.lock` and `web/package-lock.json`. A failed run keeps the
+`rust-toolchain.toml`, `Cargo.lock` and `web/package-lock.json`. Nix store paths built in
+CI (the Rust toolchain from rust-overlay, the vendored sources and packages of `nix build`)
+are kept by Magic Nix Cache in the same Actions cache; paths available from
+cache.nixos.org are fetched from there as usual. A failed run keeps the
 Playwright traces as the `playwright-results` artifact for a week.
 
 After a green run on `main` the `deploy` job publishes `web/dist` to GitHub Pages:
