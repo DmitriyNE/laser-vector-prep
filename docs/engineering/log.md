@@ -3,6 +3,20 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-25 — M4: packaging and deployment
+
+`just package` writes a reproducible tarball of the site (two builds of one commit gave the
+same SHA-256), and `nix build` builds the site hermetically: cargo sources vendored from
+`Cargo.lock` plus the standard library's lockfile for build-std, npm sources pinned by
+hash, and the same `just build` inside. The vendoring that D29 expected to be fiddly worked
+on the first try; the Nix-built site passed the full live check (isolation through the
+service worker, import, PDF export, offline reload, no console errors). GitHub Releases
+stay deferred. `docs/deployment.md` covers hosting with or without isolation headers,
+sub-paths, caching and offline use.
+
+The tarball recipe needed git inside the dev shell: on macOS `/usr/bin/git` is Apple's shim,
+which fails under the Nix developer environment ("tool 'git' not found").
+
 ## 2026-10-25 — M4: preview precision
 
 Preview buffers held absolute `f32` millimetres, which step by 8 µm at 100 m from the

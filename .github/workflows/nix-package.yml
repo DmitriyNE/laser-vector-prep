@@ -1,0 +1,47 @@
+# `nix build` of the static site (flake package), so the hermetic build cannot rot: its
+# vendored cargo and npm sources are pinned by hash and break when a lockfile changes
+# without the flake. Runs when those inputs change, weekly, and on demand; the regular CI
+# workflow covers everything else.
+name: Nix package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - flake.nix
+      - flake.lock
+      - Cargo.lock
+      - rust-toolchain.toml
+      - web/package-lock.json
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - Cargo.lock
+      - rust-toolchain.toml
+      - web/package-lock.json
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: nix build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the site
+        run: nix build -L .#site
+
+      - name: Check the output
+        run: test -f result/index.html && test -f result/coi-serviceworker.js && ls result/assets/*.wasm

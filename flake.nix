@@ -25,6 +25,88 @@
       }));
     in
     {
+      # `nix build`: the static site, built hermetically by the same `just build` developers
+      # run. Cargo sources are vendored from Cargo.lock and from the standard library's own
+      # lockfile (build-std compiles std for the shared-memory wasm target); npm sources come
+      # from package-lock.json: update the `npmDeps` hash when web/package-lock.json changes (the
+      # build prints the new one).
+      packages = forAll (pkgs:
+        let
+          lib = pkgs.lib;
+          rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          stdLock = "${rust}/lib/rustlib/src/rust/library/Cargo.lock";
+          vendored = pkgs.symlinkJoin {
+            name = "lvp-cargo-vendor";
+            paths = [
+              (pkgs.rustPlatform.importCargoLock { lockFile = ./Cargo.lock; })
+              (pkgs.rustPlatform.importCargoLock { lockFile = stdLock; })
+            ];
+          };
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+          site = pkgs.stdenv.mkDerivation {
+            pname = "laser-vector-prep-site";
+            inherit version;
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                ./Cargo.toml
+                ./Cargo.lock
+                ./.cargo
+                ./rust-toolchain.toml
+                ./justfile
+                ./LICENSE
+                ./crates
+                (lib.fileset.difference ./web (lib.fileset.unions [
+                  (lib.fileset.maybeMissing ./web/node_modules)
+                  (lib.fileset.maybeMissing ./web/dist)
+                  (lib.fileset.maybeMissing ./web/src/wasm)
+                ]))
+              ];
+            };
+            npmRoot = "web";
+            npmDeps = pkgs.fetchNpmDeps {
+              src = ./web;
+              hash = "sha256-Xr14VbI9Tyw3ADvoRr7ujeX3M8ClBoXkHLc8u3W4pyk=";
+            };
+            nativeBuildInputs = [
+              rust
+              pkgs.wasm-bindgen-cli
+              pkgs.binaryen
+              pkgs.nodejs_24
+              pkgs.npmHooks.npmConfigHook
+              pkgs.just
+            ];
+            CARGO_NET_OFFLINE = "true";
+            configurePhase = ''
+              runHook preConfigure
+              export CARGO_HOME="$TMPDIR/cargo-home"
+              mkdir -p "$CARGO_HOME"
+              cat > "$CARGO_HOME/config.toml" <<EOF
+              [source.crates-io]
+              replace-with = "vendored-sources"
+              [source.vendored-sources]
+              directory = "${vendored}"
+              EOF
+              runHook postConfigure
+            '';
+            buildPhase = ''
+              runHook preBuild
+              just build
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              cp -R web/dist "$out"
+              cp LICENSE "$out/"
+              runHook postInstall
+            '';
+          };
+        in
+        {
+          default = site;
+          inherit site;
+        });
+
       devShells = forAll (pkgs:
         let
           rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;

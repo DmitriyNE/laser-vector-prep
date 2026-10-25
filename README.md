@@ -18,6 +18,7 @@ leaves the browser.
 - Profile format: [`docs/profile-schema.json`](docs/profile-schema.json) (JSON Schema, generated
   from the code)
 - Building and running: [`docs/development.md`](docs/development.md)
+- Hosting your own copy: [`docs/deployment.md`](docs/deployment.md)
 - Engineering log, todo, decisions, defects: [`docs/engineering/`](docs/engineering/)
 
 Quick start (needs [Nix](https://nixos.org) with flakes):

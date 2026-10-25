@@ -46,7 +46,8 @@ or prefix each call with `nix develop -c`.
 | `just clean` | Remove build outputs |
 
 `web/dist/` is a self-contained static site: deploy it to any static host, no headers
-or server configuration required.
+or server configuration required ([`deployment.md`](deployment.md) has the details,
+`just package` a tarball, `nix build` a hermetic build).
 
 ## Reproducibility
 
@@ -133,6 +134,16 @@ its own workspace because of libFuzzer's instrumentation.
 - `.github/workflows/fuzz.yml` runs each target for five minutes every night (and on
   demand with a chosen duration), restoring and saving the corpus through the Actions
   cache. A failing target uploads its input as the `fuzz-<target>` artifact.
+
+## Nix package
+
+`nix build` (or `nix build .#site`) builds the static site into `result/` without a dev
+shell: one derivation runs `just build` with cargo sources vendored from `Cargo.lock` and
+from the standard library's own lockfile (build-std), and npm sources fetched from
+`web/package-lock.json`. That npm fetch is pinned by hash: after changing
+`package-lock.json`, run `nix build` once and copy the hash it reports into `npmDeps` in
+`flake.nix`. `.github/workflows/nix-package.yml` builds the package whenever the flake or a
+lockfile changes, and weekly.
 
 ## Shared-memory wasm and threads
 

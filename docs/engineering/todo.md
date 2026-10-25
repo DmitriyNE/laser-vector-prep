@@ -125,7 +125,10 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       in CI. The "extra reload" was Firefox refusing the test port (4190 is a Fetch "bad
       port"); the slow start does not reproduce locally (0.8 s through the service worker).
       Firefox evaluates the board about 2× slower than Chrome (wasm speed)
-- [ ] Re-check the live site's first visit in Firefox after deploying (14.6 s at kickoff)
+- [x] Re-checked the live site's first visit: Chrome 3.4–4.9 s, Firefox 6.1–6.4 s (about 4 s
+      of it after the service-worker reload), measured at a load average of 200–340
+- [ ] Firefox starts the app more slowly than Chrome after the service-worker reload on the
+      live site (about 4 s against 0.4 s); profile on an idle machine
 - [x] Coverage audit (spec §10): spill, missed area, short segments against a per-group
       effective marking width; schema v2 with the first migration (D32)
 - [x] JSON Schema of the profile format generated from the serde types (schemars), with a
@@ -133,9 +136,10 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Preview precision far from the origin: buffers carry their own `f64` origin and `f32`
       offsets
 - [x] `just package` builds a versioned, reproducible tarball of the site
-- [ ] `nix build` package of the static site
+- [x] `nix build` package of the static site (vendored cargo, std and npm sources), with a
+      workflow that builds it when the flake or a lockfile changes
+- [x] Deployment documentation (`docs/deployment.md`)
 - [ ] Later: publish GitHub Releases (deferred by the owner)
-- [ ] Deployment documentation (headers or service worker, sub-paths, offline)
 - [x] CI on GitHub Actions and deployment to GitHub Pages (D27)
 - [x] Bundle size: decided to leave it (D29)
 - [ ] Cache the Nix store in CI if fetching the dev shell becomes the slow step
