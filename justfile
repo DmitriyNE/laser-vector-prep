@@ -38,6 +38,47 @@ e2e:
 regression:
     cargo test --workspace -- --ignored
 
+# Fuzz one target (dxf gerber svg pdf gds ipc pipeline) for `secs` seconds, seeded from the
+# fixtures; the corpus grows in fuzz/corpus/<target>. Crashers land in fuzz/artifacts/<target>/:
+# minimise with `cd fuzz && cargo fuzz tmin <target> <file>` and save the result under
+# fixtures/fuzz/<target>/, where `just test` replays it.
+# Extra arguments go to libFuzzer, e.g. `-fork=2 -ignore_crashes=1` to keep going after a crash.
+fuzz target secs="60" *args: (fuzz-seeds target)
+    cd fuzz && cargo fuzz run --sanitizer none --debug-assertions {{target}} corpus/{{target}} seeds/{{target}} \
+        -- -max_total_time={{secs}} -timeout=10 -rss_limit_mb=2048 -print_final_stats=1 {{args}}
+
+# Every fuzz target in turn.
+fuzz-all secs="60":
+    for t in dxf gerber svg pdf gds ipc pipeline; do just fuzz "$t" {{secs}}; done
+
+# Seed inputs per target from fixtures/. The pipeline target's first byte selects the file
+# name and preset (lvp_core::fuzz::pipeline), so its seeds are fixtures behind such a byte.
+[private]
+fuzz-seeds target:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=fuzz/seeds/{{target}}
+    rm -rf "$dir" && mkdir -p "$dir" fuzz/corpus/{{target}}
+    case {{target}} in
+      dxf|gerber|svg|pdf|gds) cp fixtures/{{target}}/* "$dir"/ ;;
+      ipc) cp fixtures/ipc2581/* "$dir"/ ;;
+      pipeline)
+        # selector % 6 = name index (dxf gbr svg pdf gds xml), (selector / 8) % 4 = preset.
+        i=0
+        for sub in dxf gerber svg pdf gds ipc2581; do
+          for f in fixtures/$sub/*; do
+            for preset in 0 1 2 3; do
+              for s in $(seq 0 255); do
+                if (( s % 6 == i && (s / 8) % 4 == preset )); then break; fi
+              done
+              { printf "\\$(printf %03o "$s")"; cat "$f"; } > "$dir/$sub-$(basename "$f")-p$preset"
+            done
+          done
+          i=$((i + 1))
+        done ;;
+      *) echo "unknown fuzz target {{target}}" >&2; exit 1 ;;
+    esac
+
 # Regenerate fixtures/ from the deterministic generator (a test fails if they are stale).
 fixtures:
     cargo run -p lvp-fixtures

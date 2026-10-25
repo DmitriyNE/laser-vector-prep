@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/lvp-core", "crates/lvp-wasm", "crates/lvp-fixtures"]
+# Its own workspace (libFuzzer instrumentation); see fuzz/Cargo.toml.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

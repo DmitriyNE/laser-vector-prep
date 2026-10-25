@@ -11,6 +11,7 @@ pub mod dxf;
 pub mod eval;
 pub mod export;
 pub mod flatten;
+pub mod fuzz;
 pub mod gds;
 pub mod geom;
 pub mod gerber;

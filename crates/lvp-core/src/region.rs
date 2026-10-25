@@ -113,14 +113,25 @@ fn bbox_overlap(a: &BBox, b: &BBox, pad: f64) -> bool {
 }
 
 /// Uniform grid over loop bounding boxes: candidates for a box or point query in O(local).
+///
+/// Work and memory stay bounded whatever the input: a box spanning many cells is kept in a
+/// separate list checked on every query instead of being entered into each cell, and a
+/// query is clamped to the occupied cells and falls back to a linear scan when it would
+/// visit more cells than there are boxes (huge or far-away queries, extreme coordinates).
 struct BBoxGrid {
     origin: Point,
     cell: f64,
+    /// Occupied cell index range (x0, y0, x1, y1).
+    range: (i32, i32, i32, i32),
     cells: HashMap<(i32, i32), Vec<usize>>,
+    /// Boxes spanning more than `MAX_CELLS_PER_BOX` cells.
+    large: Vec<usize>,
     boxes: Vec<BBox>,
 }
 
 impl BBoxGrid {
+    const MAX_CELLS_PER_BOX: i64 = 64;
+
     fn new(boxes: Vec<BBox>) -> Self {
         let all = boxes
             .iter()
@@ -134,12 +145,18 @@ impl BBoxGrid {
         let mut g = BBoxGrid {
             origin: all.min,
             cell,
+            range: (0, 0, 0, 0),
             cells: HashMap::new(),
+            large: Vec::new(),
             boxes,
         };
+        g.range = g.span(&all);
         for i in 0..g.boxes.len() {
-            let b = g.boxes[i];
-            let (x0, y0, x1, y1) = g.span(&b);
+            let (x0, y0, x1, y1) = g.clamped_span(&g.boxes[i]);
+            if cell_count(x0, y0, x1, y1) > Self::MAX_CELLS_PER_BOX {
+                g.large.push(i);
+                continue;
+            }
             for cx in x0..=x1 {
                 for cy in y0..=y1 {
                     g.cells.entry((cx, cy)).or_default().push(i);
@@ -150,6 +167,7 @@ impl BBoxGrid {
     }
 
     fn span(&self, b: &BBox) -> (i32, i32, i32, i32) {
+        // `as` saturates (and maps NaN to 0), so this never overflows.
         let f = |v: f64, o: f64| ((v - o) / self.cell).floor() as i32;
         (
             f(b.min.x, self.origin.x),
@@ -159,22 +177,28 @@ impl BBoxGrid {
         )
     }
 
+    fn clamped_span(&self, b: &BBox) -> (i32, i32, i32, i32) {
+        let (x0, y0, x1, y1) = self.span(b);
+        let (rx0, ry0, rx1, ry1) = self.range;
+        (x0.max(rx0), y0.max(ry0), x1.min(rx1), y1.min(ry1))
+    }
+
     /// Indices whose box overlaps `b` (expanded by `pad`), each once, ascending.
     fn query_box(&self, b: &BBox, pad: f64) -> Vec<usize> {
         let q = BBox {
             min: Point::new(b.min.x - pad, b.min.y - pad),
             max: Point::new(b.max.x + pad, b.max.y + pad),
         };
-        let (x0, y0, x1, y1) = self.span(&q);
-        let mut out: Vec<usize> = Vec::new();
+        let overlaps = |i: &usize| bbox_overlap(&self.boxes[*i], &q, 0.0);
+        let (x0, y0, x1, y1) = self.clamped_span(&q);
+        if cell_count(x0, y0, x1, y1) > self.boxes.len() as i64 {
+            return (0..self.boxes.len()).filter(overlaps).collect();
+        }
+        let mut out: Vec<usize> = self.large.iter().copied().filter(overlaps).collect();
         for cx in x0..=x1 {
             for cy in y0..=y1 {
                 if let Some(ids) = self.cells.get(&(cx, cy)) {
-                    out.extend(
-                        ids.iter()
-                            .copied()
-                            .filter(|&i| bbox_overlap(&self.boxes[i], &q, 0.0)),
-                    );
+                    out.extend(ids.iter().copied().filter(overlaps));
                 }
             }
         }
@@ -187,6 +211,14 @@ impl BBoxGrid {
     fn query_point(&self, p: Point, pad: f64) -> Vec<usize> {
         self.query_box(&BBox::at(p), pad)
     }
+}
+
+/// Cells in an inclusive index range; 0 when the range is empty.
+fn cell_count(x0: i32, y0: i32, x1: i32, y1: i32) -> i64 {
+    if x1 < x0 || y1 < y0 {
+        return 0;
+    }
+    (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1)
 }
 
 /// Sum of winding numbers of the loops of one operand around `p`.
@@ -1029,6 +1061,55 @@ mod tests {
 
     fn assert_near(a: f64, b: f64, tol: f64) {
         assert!((a - b).abs() <= tol, "{a} vs {b}");
+    }
+
+    fn bbox(x: f64, y: f64, w: f64, h: f64) -> BBox {
+        BBox {
+            min: Point::new(x, y),
+            max: Point::new(x + w, y + h),
+        }
+    }
+
+    proptest! {
+        /// The grid finds exactly what a linear scan finds, for small, huge and far-away
+        /// boxes and queries alike.
+        #[test]
+        fn grid_query_matches_linear_scan(
+            boxes in prop::collection::vec(
+                (-1e3f64..1e3, -1e3f64..1e3, 0.0f64..50.0, 0.0f64..50.0, 0u8..10), 1..60),
+            queries in prop::collection::vec(
+                (-1e3f64..1e3, -1e3f64..1e3, 0.0f64..50.0, 0.0f64..50.0, 0u8..10), 1..20),
+            pad in 0.0f64..5.0,
+        ) {
+            // A tenth of the boxes and queries are blown up to extreme sizes.
+            let make = |(x, y, w, h, k): (f64, f64, f64, f64, u8)| {
+                if k == 0 { bbox(x * 1e12, y, w * 1e15, h) } else { bbox(x, y, w, h) }
+            };
+            let boxes: Vec<BBox> = boxes.into_iter().map(make).collect();
+            let grid = BBoxGrid::new(boxes.clone());
+            for q in queries.into_iter().map(make) {
+                let expect: Vec<usize> =
+                    (0..boxes.len()).filter(|&i| bbox_overlap(&boxes[i], &q, pad)).collect();
+                prop_assert_eq!(grid.query_box(&q, pad), expect);
+            }
+        }
+    }
+
+    #[test]
+    fn grid_stays_small_for_extreme_extents() {
+        // Many loops spanning everything plus one far away: no per-cell blow-up.
+        let mut boxes: Vec<BBox> = (0..2000)
+            .map(|i| bbox(-(i as f64), 0.0, 2.0 * i as f64, 1.0))
+            .collect();
+        boxes.push(bbox(1e300, 1e300, 1.0, 1.0));
+        let grid = BBoxGrid::new(boxes);
+        let entries: usize = grid.cells.values().map(Vec::len).sum();
+        assert!(entries <= 64 * 2001, "{entries} cell entries");
+        let everything = BBox {
+            min: Point::new(f64::NEG_INFINITY, 0.0),
+            max: Point::new(f64::INFINITY, 0.5),
+        };
+        assert_eq!(grid.query_box(&everything, 0.0).len(), 2000);
     }
 
     #[test]

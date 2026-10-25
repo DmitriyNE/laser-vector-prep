@@ -582,7 +582,10 @@ impl<'a> Reader<'a> {
         let Some(first) = statements.first() else {
             return Ok(());
         };
-        let (code, rest) = first.split_at(first.len().min(2));
+        // The code is the first two characters; split on a character boundary, the rest of
+        // a malformed file may be anything.
+        let split = first.char_indices().nth(2).map_or(first.len(), |(i, _)| i);
+        let (code, rest) = first.split_at(split);
         match code {
             "FS" => {
                 self.format = Some(Format::parse(rest)?);

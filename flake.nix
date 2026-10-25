@@ -37,6 +37,7 @@
               # (`just check-wasm-bindgen` enforces this).
               wasm-bindgen-cli
               binaryen # wasm-opt
+              cargo-fuzz # `just fuzz` (libFuzzer targets in fuzz/)
               nodejs_24
               just
             ];

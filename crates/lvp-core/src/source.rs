@@ -196,6 +196,61 @@ pub fn read_any(name: &str, bytes: &[u8], opts: &ReadOptions) -> Result<SourceDo
             ),
         });
     };
+    read_as(format, name, bytes, opts)
+}
+
+/// Coordinates further than this from the origin (1 km) are no drawing a galvo marks; the
+/// file is corrupt or mis-scaled. Such primitives are dropped at import so no later stage
+/// (booleans, offsets, ordering rasters, the `f32` preview) ever sees them.
+pub const MAX_COORDINATE_MM: f64 = 1e6;
+
+/// Read a file with the reader for `format`, without detection.
+pub fn read_as(
+    format: SourceFormat,
+    name: &str,
+    bytes: &[u8],
+    opts: &ReadOptions,
+) -> Result<SourceDocument, ReadError> {
+    let mut doc = read_unchecked(format, name, bytes, opts)?;
+    drop_out_of_range(&mut doc);
+    Ok(doc)
+}
+
+fn drop_out_of_range(doc: &mut SourceDocument) {
+    let pline_ok = |p: &Pline| {
+        p.vertex_data.iter().all(|v| {
+            v.x.abs() <= MAX_COORDINATE_MM && v.y.abs() <= MAX_COORDINATE_MM && v.bulge.is_finite()
+        })
+    };
+    for layer in &mut doc.layers {
+        let before = layer.primitives.len();
+        layer.primitives.retain(|prim| match prim {
+            Primitive::Path { pline, width } => {
+                pline_ok(pline) && width.is_none_or(|w| (0.0..=MAX_COORDINATE_MM).contains(&w))
+            }
+            Primitive::Hatch { loops, .. } => loops.iter().all(pline_ok),
+        });
+        let dropped = before - layer.primitives.len();
+        if dropped > 0 {
+            doc.diagnostics.push(
+                Diagnostic::error(
+                    "source.out_of_range",
+                    format!(
+                        "{dropped} primitive(s) dropped: coordinates or widths are not finite or lie more than 1 km from the origin"
+                    ),
+                )
+                .with_context(layer.name.clone()),
+            );
+        }
+    }
+}
+
+fn read_unchecked(
+    format: SourceFormat,
+    name: &str,
+    bytes: &[u8],
+    opts: &ReadOptions,
+) -> Result<SourceDocument, ReadError> {
     match format {
         SourceFormat::Dxf => dxf::read::read_bytes(bytes, opts).map_err(|e| ReadError {
             format: Some(format),
@@ -241,6 +296,34 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn out_of_range_primitives_are_dropped_with_an_error() {
+        let line = |layer: &str, x: &str| {
+            format!("  0\nLINE\n  8\n{layer}\n 10\n0\n 20\n0\n 11\n{x}\n 21\n1\n")
+        };
+        let dxf = format!(
+            "  0\nSECTION\n  2\nENTITIES\n{}{}{}  0\nENDSEC\n  0\nEOF\n",
+            line("ok", "5"),
+            line("far", "2e6"),
+            line("far", "1e400")
+        );
+        let doc = read_any("f.dxf", dxf.as_bytes(), &ReadOptions::default()).unwrap();
+        assert_eq!(doc.layer("ok").unwrap().primitives.len(), 1);
+        assert_eq!(doc.layer("far").unwrap().primitives.len(), 0);
+        let d: Vec<_> = doc
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "source.out_of_range")
+            .collect();
+        assert_eq!(d.len(), 1);
+        assert!(
+            d[0].message.starts_with("2 primitive(s)"),
+            "{}",
+            d[0].message
+        );
+        assert_eq!(d[0].context.as_deref(), Some("far"));
+    }
 
     #[test]
     fn glob_semantics() {
