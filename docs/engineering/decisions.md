@@ -436,3 +436,24 @@ overlap, directly or through other loops. Loops in different clusters can neithe
 nor contain each other, so each cluster is an independent boolean, solved in parallel
 where a thread pool exists. The audit of a 4×8 panel went from 2.9 s to 1.4–1.9 s
 (measured on a heavily loaded machine; the comparison held in every run).
+
+## D33 — After M4: Nix cache, exact booleans, parallel evaluation, graph view (2026-10-25)
+
+Owner's follow-ups to M4:
+
+- **CI caches the Nix store** with Magic Nix Cache (DeterminateSystems), a binary cache on
+  the repository's GitHub Actions cache: free, no account or secrets, per store path.
+- **Booleans must resolve near-coincident boundaries** (the case D30 only reports): snap
+  vertices onto nearby edges of other loops and make nearly identical segments identical,
+  so such boundaries become exact overlaps.
+- **Layer compositing and path optimization run in parallel**: independent layers, passes
+  and groups evaluate concurrently, the coverage raster and the optimizer's candidate
+  search use the thread pool. Results must not depend on the number of threads.
+- **A graph view of the model**, as a tab next to the preview: files and their layers →
+  profile slots → working layers → passes → output groups, with live status on each node.
+  It is also an editor: edges set operands, slot mappings and pass groups; layers,
+  passes, groups and slots can be added and deleted on the canvas; profile edits get
+  undo/redo. Drawn with Svelte Flow (@xyflow/svelte, MIT) and laid out left to right by
+  dagre (@dagrejs/dagre, MIT); Svelte Flow has no layout engine of its own.
+- Firefox start-up after the service-worker reload is not a focus for now.
+- UI polish is postponed.

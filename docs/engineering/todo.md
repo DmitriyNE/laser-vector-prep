@@ -128,7 +128,7 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Re-checked the live site's first visit: Chrome 3.4–4.9 s, Firefox 6.1–6.4 s (about 4 s
       of it after the service-worker reload), measured at a load average of 200–340
 - [ ] Firefox starts the app more slowly than Chrome after the service-worker reload on the
-      live site (about 4 s against 0.4 s); profile on an idle machine
+      live site (about 4 s against 0.4 s); not a focus for now (owner, D33)
 - [x] Coverage audit (spec §10): spill, missed area, short segments against a per-group
       effective marking width; schema v2 with the first migration (D32)
 - [x] JSON Schema of the profile format generated from the serde types (schemars), with a
@@ -143,5 +143,18 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] CI on GitHub Actions and deployment to GitHub Pages (D27)
 - [x] Bundle size: decided to leave it (D29)
 - [ ] Cache the Nix store in CI if fetching the dev shell becomes the slow step (33 s today)
-- [ ] UI polish pass (spec M4): only what came with this milestone's features (progress,
-      Cancel, audit numbers and overlay) has been done; ask the owner which rough edges matter
+- [ ] UI polish pass (spec M4): postponed by the owner (D33)
+
+## After M4 (D33)
+
+- [ ] Nix store cache in CI (Magic Nix Cache)
+- [ ] Booleans resolve near-coincident edges and arcs: vertex-to-edge snapping and identical
+      near-duplicate segments; no saved fuzz input or randomized near-coincident case may
+      leave a chain open
+- [ ] Parallel evaluation: independent layers, passes and groups; coverage raster;
+      optimizer candidate search; deterministic for any thread count
+- [ ] Graph view (Svelte Flow + dagre), tab next to the preview: files/layers → slots →
+      working layers → passes → groups with live status; click selects, eyes/solo
+- [ ] Graph editing: connect operands, slot mappings and pass groups; add/delete layers,
+      passes, groups, slots; undo/redo for profile edits
+
