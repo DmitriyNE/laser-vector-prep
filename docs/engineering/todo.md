@@ -14,6 +14,8 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 
 ## M1 — vertical slice
 
+Open M1 items on the profile schema, preview precision, cancellation and Firefox moved to M4.
+
 - [x] Choose geometry kernel (D7): cavalier_contours
 - [x] Kernel wrapper over cavalier_contours (n-loop booleans, offsets, strokes)
 - [x] DXF reader for the spec subset with diagnostics; fixture-driven tests
@@ -24,23 +26,14 @@ Decided: synthetic generated fixtures (D10), Svelte (D9), shared-memory wasm wit
 - [x] Profiles in IndexedDB, import/export JSON with conflict handling
 - [x] Svelte panels: sources, layers, properties, groups, profiles bar, export, diagnostics
 - [x] Offline after load via the vendored coi-serviceworker with precache
-- [ ] JSON Schema document for the profile format (serde types are the source of truth
-      today; generate or hand-write `docs/profile-schema.json`)
 - [x] Contour fill end spacing and ring simplification; join styles for traces and buffers
       (D25)
 - [x] Benchmark the pairwise-boolean kernel on flash-heavy inputs: a bounding-box grid in
       `resolve` was enough (D21), no kernel change needed
-- [ ] Preview: `f32` coordinates relative to the document origin lose precision far from
-      it; offset by the bounds minimum if large drawings appear
 - [x] Worker crash recovery: a wasm trap replaces the worker and re-imports sources
 - [x] Playwright e2e on the installed Chrome (D20): import → evaluate → export through the
       real worker protocol, slot mapping, two-group hatch, service worker + offline
-- [ ] Release wasm is 2.49 MB after usvg and lopdf (was 1.05 MB); try
-      `wasm-opt -Oz`, feature trimming and lazy-loading the readers as separate modules
-- [ ] Worker: cooperative cancellation / progress for long computations (today:
-      terminate-and-respawn only; with a shared-memory pool, cancellation must also
-      stop rayon work, e.g. via an atomic flag checked between chunks)
-- [ ] Check Firefox: module workers + SharedArrayBuffer + the coi-serviceworker reload
+- [x] Release wasm is 2.49 MB after usvg and lopdf (was 1.05 MB): left as is (D29)
 - [ ] Decide `--max-memory` (1 GiB today) once real fine-pitch workloads exist
 - [ ] Cold `just build` takes ~5 min on an M-series Mac: `-Z build-std` rebuilds the wasm
       std and the release profile uses fat LTO. Incremental rebuilds are seconds. Revisit
@@ -108,10 +101,25 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Gap fill refinements: end spacing, ring simplification, join styles (D25)
 - [x] User documentation of every format's supported subset (`docs/formats.md`)
 
-## M4 — robustness/release
+## M4 — robustness/release (D29)
 
-- [ ] Fuzzing of parsers, geometry audits, large-file performance
+- [ ] cargo-fuzz targets (six readers + end to end), crasher regressions in `just test`,
+      `just fuzz`, nightly fuzz workflow
+- [ ] Fix the spike's findings: Gerber panic on non-UTF-8 bytes, compositing hang on an
+      extreme coordinate, GDSII array blow-up (input limits)
+- [ ] Large inputs: a 4×8 panel of the board takes 4–6 s to evaluate natively against
+      20 ms for one board; profile and fix the superlinear stage
+- [ ] Cooperative cancellation and progress (shared-memory flag, rayon stops between
+      chunks); a new edit cancels the running evaluation; Cancel button (spec §12 #19)
+- [ ] Firefox: Playwright Firefox from nixpkgs, e2e suite on Chrome and Firefox locally and
+      in CI; fix the extra service-worker reload with headers and the slow start
+- [ ] Coverage audit (spec §10): spill, missed area, short segments against a per-group
+      effective marking width; schema v2 with the first migration
+- [ ] JSON Schema of the profile format generated from the serde types, with a staleness test
+- [ ] Preview precision far from the origin
+- [ ] `just package` builds a versioned tarball of the site; `nix build` package
+- [ ] Later: publish GitHub Releases (deferred by the owner)
+- [ ] Deployment documentation (headers or service worker, sub-paths, offline)
 - [x] CI on GitHub Actions and deployment to GitHub Pages (D27)
-- [ ] Cross-browser tests (Firefox in CI)
+- [x] Bundle size: decided to leave it (D29)
 - [ ] Cache the Nix store in CI if fetching the dev shell becomes the slow step
-- [ ] Optional: `nix build` package for the static site (D3)

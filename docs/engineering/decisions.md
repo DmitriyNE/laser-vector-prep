@@ -336,3 +336,27 @@ owner accepts either that or minimum jump. General marking, boundary cutting and
 profiles default to minimum jump (the model default changed from as-generated). Cost on
 the 20 µm board: about 0.5 s per full evaluation in bleed-aware mode against 60–90 ms
 otherwise; the plan is cached while the paths do not change.
+
+## D29 — M4 scope: fuzzing, browsers, schema v2, packaging (2026-10-25)
+
+Decided by the owner at the M4 kickoff, after spikes:
+
+- **Fuzzing:** cargo-fuzz (libFuzzer, coverage-guided) with one target per reader and one
+  end-to-end target, seeded from the fixtures. Every crasher is minimised into
+  `fixtures/fuzz/` and replayed by `just test`; `just fuzz` runs a target locally and a
+  scheduled CI workflow runs each target nightly. A 90 s throwaway mutation run over the
+  fixtures had already found a Gerber panic on non-UTF-8 input, a compositing hang at
+  2.5 GB on an extreme coordinate and a 5.8 M-primitive GDSII array.
+- **Browsers:** Chrome and Firefox, the spec's pair. Firefox is Playwright's build from
+  nixpkgs (`playwright-driver.browsers`), the same revision the npm Playwright expects; the
+  installed Firefox 148 cannot be driven over WebDriver BiDi yet. Safari/WebKit is
+  documented as unsupported (the app never becomes ready there).
+- **Schema v2:** the coverage audit's effective marking width is saved per output group;
+  this is the first schema change since deployment (2026-10-25), so it comes with the first
+  real migration (v1 → v2). The deployed v1 app rejects v2 profiles with its precise
+  "newer schema" message rather than dropping the field silently.
+- **Packaging:** a versioned tarball of the static site built by `just package`, and a
+  hermetic `nix build` package. Publishing GitHub Releases is deferred (owner, same day).
+- **Bundle size:** left as is. The release wasm is 2.6 MB, 1.05 MB gzipped; `wasm-opt -Oz`
+  saves nothing over `-O3` and `opt-level = "s"` saves 12 % gzipped at a speed cost. The
+  service worker caches it after the first visit.
