@@ -74,8 +74,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       objective before/after in the UI (D24)
 - [ ] Optimizer: seam choice is vertex-granular; splitting a line or arc at the closest
       point would be exact too and shorten the entry jump further
-- [ ] Optimizer: the improvement phase is single-threaded; the candidate evaluation is
-      embarrassingly parallel if large fills make it slow
+- [x] Optimizer: the improvement phase is single-threaded; the candidate evaluation is
+      embarrassingly parallel if large fills make it slow (parallel since D35)
 - [x] SVG reader via usvg (text refused, clip paths applied as intersections, masks/filters
       diagnosed)
 - [ ] SVG: clip paths apply to fills only; stroked and unpainted paths inside clipped groups
@@ -144,7 +144,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] Later: publish GitHub Releases (deferred by the owner)
 - [x] CI on GitHub Actions and deployment to GitHub Pages (D27)
 - [x] Bundle size: decided to leave it (D29)
-- [ ] Cache the Nix store in CI if fetching the dev shell becomes the slow step (33 s today)
+- [x] Cache the Nix store in CI if fetching the dev shell becomes the slow step (33 s today);
+      Magic Nix Cache since D33, no measurable gain so far (see log)
 - [ ] UI polish pass (spec M4): postponed by the owner (D33)
 
 ## After M4 (D33)
