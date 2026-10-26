@@ -563,7 +563,7 @@
           "type": "object"
         },
         {
-          "description": "Iterative inward offsets from the boundary; rings stay closed, collapsed cores get\nan open centreline when `gap_fill` is on.",
+          "description": "Iterative inward offsets from the boundary; rings stay closed, collapsed cores get\nan open centreline when `gap_fill` is on. Marked inward, outward, or in whatever\norder the path optimizer finds best (`ring_order`).",
           "properties": {
             "endSpacingMm": {
               "description": "How far beyond the innermost ring the centreline gap fill starts: the swept\nhalf-width credited to the last ring. Default `pitch / 2`. Larger values keep the\ngap-fill centrelines farther from the last ring (less double exposure); smaller\nvalues fill narrower cores.",
@@ -593,6 +593,10 @@
               "description": "Centreline distance between rings (mm).",
               "format": "double",
               "type": "number"
+            },
+            "ringOrder": {
+              "$ref": "#/$defs/RingOrder",
+              "description": "Order the rings are marked in. Schema v3."
             },
             "simplifyMm": {
               "description": "Simplifying tolerance for the rings' straight runs (mm, Douglas-Peucker; arcs are\nkept exactly); absent keeps every vertex. Clamped to a quarter of the pitch.",
@@ -827,6 +831,26 @@
       ],
       "type": "array"
     },
+    "RingOrder": {
+      "description": "The order of a contour fill's rings: a constraint every path order keeps, not a\npreference. Each ring (and gap-fill centreline) is tied to the ring just outside it.",
+      "oneOf": [
+        {
+          "const": "any",
+          "description": "Whatever order the path optimizer finds best.",
+          "type": "string"
+        },
+        {
+          "const": "inward",
+          "description": "From the boundary towards the core: each ring after the one outside it.",
+          "type": "string"
+        },
+        {
+          "const": "outward",
+          "description": "From the core towards the boundary: each ring before the one outside it.",
+          "type": "string"
+        }
+      ]
+    },
     "SourceBinding": {
       "properties": {
         "id": {
@@ -981,7 +1005,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Profile schema version 2. Older versions are migrated on import; newer ones are rejected. Lengths are millimetres, angles degrees.",
+  "description": "Profile schema version 3. Older versions are migrated on import; newer ones are rejected. Lengths are millimetres, angles degrees.",
   "properties": {
     "export": {
       "$ref": "#/$defs/ExportSettings",

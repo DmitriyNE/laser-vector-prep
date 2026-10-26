@@ -51,7 +51,7 @@ impl std::error::Error for ProfileError {}
 /// One step migrations: `(from, f)` maps schema `from` to `from + 1`; the caller then sets
 /// `schemaVersion`. Version 1 is the first deployed schema (2026-10-25).
 type Migration = fn(Value) -> Result<Value, String>;
-const MIGRATIONS: &[(u32, Migration)] = &[(1, v1_to_v2)];
+const MIGRATIONS: &[(u32, Migration)] = &[(1, v1_to_v2), (2, v2_to_v3)];
 
 /// v2 adds the optional per-group `auditWidthMm`. A v1 profile has no audit widths, which is
 /// exactly "audit off", so the data carries over unchanged; only the shape is checked.
@@ -60,6 +60,19 @@ fn v1_to_v2(value: Value) -> Result<Value, String> {
         && !groups.is_array()
     {
         return Err("outputGroups is not a list".into());
+    }
+    Ok(value)
+}
+
+/// v3 adds pattern kinds and optional pattern and pass fields (ring order, linking,
+/// centreline, dots, dashes); a v2 profile uses none of them, so it carries over unchanged.
+/// The version exists so that an app that knows only v2 rejects a v3 profile instead of
+/// silently dropping the fields it does not know.
+fn v2_to_v3(value: Value) -> Result<Value, String> {
+    if let Some(layers) = value.get("workingLayers")
+        && !layers.is_array()
+    {
+        return Err("workingLayers is not a list".into());
     }
     Ok(value)
 }
@@ -875,6 +888,7 @@ pub fn pcb_positive_ldi() -> Profile {
                     gap_fill: true,
                     end_spacing_mm: None,
                     simplify_mm: None,
+                    ring_order: RingOrder::Any,
                 },
                 group: GroupId::new("grp-copper"),
                 enabled: true,
@@ -950,7 +964,7 @@ mod tests {
             let json = to_json(p);
             let back = parse_profile(&json).unwrap();
             assert_eq!(&back, p, "{}", p.name);
-            assert!(json.contains("\"schemaVersion\": 2"));
+            assert!(json.contains("\"schemaVersion\": 3"));
             assert!(
                 p.working_layers
                     .iter()
@@ -1030,7 +1044,7 @@ mod tests {
             assert!(json.contains("\"schemaVersion\": 1,"));
             assert!(!json.contains("auditWidthMm"));
             let migrated = parse_profile(&json).unwrap();
-            assert_eq!(migrated.schema_version, 2);
+            assert_eq!(migrated.schema_version, SCHEMA_VERSION);
             // v2 presets audit their fills; a migrated v1 profile has the audit off.
             assert!(
                 migrated
@@ -1041,6 +1055,20 @@ mod tests {
             for g in &mut preset.output_groups {
                 g.audit_width_mm = None;
             }
+            assert_eq!(migrated, preset, "{name}");
+        }
+    }
+
+    #[test]
+    fn v2_profiles_migrate_to_v3_unchanged() {
+        // The built-in presets exactly as the deployed v2 app wrote them.
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/profiles");
+        for preset in builtin_presets() {
+            let name = preset.profile_id.trim_start_matches("builtin-").to_string();
+            let json = std::fs::read_to_string(format!("{root}/v2-{name}.json")).unwrap();
+            assert!(json.contains("\"schemaVersion\": 2,"));
+            let migrated = parse_profile(&json).unwrap();
+            assert_eq!(migrated.schema_version, 3);
             assert_eq!(migrated, preset, "{name}");
         }
     }
@@ -1077,6 +1105,7 @@ mod tests {
             gap_fill: true,
             end_spacing_mm: None,
             simplify_mm: None,
+            ring_order: RingOrder::Any,
         };
         let d = validate(&p);
         assert!(d.has_errors());

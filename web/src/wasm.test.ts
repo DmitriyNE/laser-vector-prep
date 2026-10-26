@@ -30,7 +30,7 @@ describe("lvp-wasm project API", () => {
       "builtin-general-marking",
       "builtin-boundary-cutting",
     ]);
-    expect(presets.every((p) => p.schemaVersion === 2)).toBe(true);
+    expect(presets.every((p) => p.schemaVersion === 3)).toBe(true);
     expect(presets[0]!.workingLayers[0]!.passes[0]!.pattern.kind).toBe("contourFill");
   });
 

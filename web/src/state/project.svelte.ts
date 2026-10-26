@@ -44,7 +44,7 @@ export class ProjectStore {
   acceptedExtensions: string[] = $state(["dxf"]);
   saved: SavedProfile[] = $state([]);
   profile: Profile = $state({
-    schemaVersion: 2,
+    schemaVersion: 3,
     profileId: "empty",
     name: "Empty",
     sourceBindings: [],

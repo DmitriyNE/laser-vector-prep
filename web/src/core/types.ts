@@ -67,6 +67,8 @@ export interface SourceBinding {
   rules: MatchRule[];
 }
 
+export type RingOrder = "any" | "inward" | "outward";
+
 export type Pattern =
   | { kind: "passthrough"; simplifyMm?: number | null; reverse: boolean }
   | {
@@ -78,6 +80,8 @@ export type Pattern =
       endSpacingMm?: number | null;
       /** Ring simplifying tolerance; null = off. */
       simplifyMm?: number | null;
+      /** Order the rings are marked in; absent = the optimizer's choice. */
+      ringOrder?: RingOrder;
     }
   | {
       kind: "boundaryTrace";

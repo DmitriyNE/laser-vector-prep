@@ -5,7 +5,7 @@
 use cavalier_contours::polyline::PlineSource;
 use lvp_core::eval::{Evaluator, Sources};
 use lvp_core::export::collect_paths;
-use lvp_core::model::{GroupId, LayerId, OptimizerMode, PassId, Pattern};
+use lvp_core::model::{GroupId, LayerId, OptimizerMode, PassId, Pattern, RingOrder};
 use lvp_core::profile::{boundary_cutting, pcb_negative_hatch, pcb_positive_ldi};
 use lvp_core::source::{ReadOptions, read_any};
 
@@ -125,6 +125,47 @@ fn cutting_keeps_holes_before_their_outer_under_optimisation() {
         );
     }
     assert!(plan.after.jump_length_mm <= plan.before.jump_length_mm + 1e-9);
+}
+
+#[test]
+fn ring_order_holds_under_optimisation() {
+    // Outward (core first) and inward contour fills of the islands board: the planner
+    // reorders freely within the constraints, and every ring keeps its place relative to
+    // the ring outside it.
+    let sources = sources(&["board-islands.dxf"]);
+    for order in [RingOrder::Outward, RingOrder::Inward] {
+        let mut profile = pcb_positive_ldi();
+        if let Pattern::ContourFill {
+            pitch_mm,
+            ring_order,
+            ..
+        } = &mut profile.working_layers[0].passes[0].pattern
+        {
+            *pitch_mm = 0.05;
+            *ring_order = order;
+        }
+        profile.optimizer.mode = OptimizerMode::MinimumJump;
+        let ev = Evaluator::new().evaluate(&profile, &sources);
+        assert!(!ev.has_errors(), "{:?}", ev.all_diagnostics());
+        let id = PassId::new("pass-copper-fill");
+        let pass = ev.pass(&id).unwrap();
+        assert!(
+            pass.precedence.len() > 100,
+            "{} constraints",
+            pass.precedence.len()
+        );
+        let plan = ev.group_plan(&GroupId::new("grp-copper")).unwrap();
+        let mut pos = vec![0; pass.paths.len()];
+        for (k, r) in plan.order.iter().enumerate() {
+            if r.pass == id {
+                pos[r.index] = k;
+            }
+        }
+        for &(a, b) in &pass.precedence {
+            assert!(pos[a] < pos[b], "{order:?}: {a} must come before {b}");
+        }
+        assert!(plan.after.jump_length_mm < plan.before.jump_length_mm);
+    }
 }
 
 #[test]

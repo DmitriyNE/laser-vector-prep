@@ -20,7 +20,7 @@ function layer(id: string, extra: Partial<WorkingLayer>): WorkingLayer {
 }
 
 const profile: Profile = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   profileId: "t",
   name: "t",
   sourceBindings: [

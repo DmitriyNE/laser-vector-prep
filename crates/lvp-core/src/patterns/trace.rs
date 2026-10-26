@@ -41,7 +41,7 @@ pub fn boundary_trace(region: &Region, p: &TraceParams) -> Vec<Pline> {
 }
 
 /// Boundary trace plus the ordering constraints `(hole index, outer index)` that a path
-/// optimiser must keep when `inner_first` is set: every hole before the island it belongs
+/// optimizer must keep when `inner_first` is set: every hole before the island it belongs
 /// to. Without `inner_first` there are no constraints.
 pub fn boundary_trace_ordered(
     region: &Region,

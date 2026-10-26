@@ -1,0 +1,52 @@
+import { expect, test, type Page } from "@playwright/test";
+import { fixture, importDxf, summary, waitForApp } from "./helpers.js";
+
+const url = "http://localhost:4180/";
+
+type Lvp = {
+  evaluating: boolean;
+  evaluation: { revision: number } | null;
+  profile: { workingLayers: { passes: { pattern: Record<string, unknown>; breaks?: Record<string, unknown> | null }[] }[] };
+};
+
+const revision = (page: Page) =>
+  page.evaluate(() => (globalThis as unknown as { lvp: Lvp }).lvp.evaluation?.revision ?? 0);
+
+/** Wait for an evaluation after `rev` to finish and return its summary. */
+async function evaluatedAfter(page: Page, rev: number) {
+  await page.waitForFunction(
+    (r) => {
+      const lvp = (globalThis as unknown as { lvp: Lvp }).lvp;
+      return !lvp.evaluating && (lvp.evaluation?.revision ?? 0) > r;
+    },
+    rev,
+    { timeout: 60_000 },
+  );
+  return summary(page);
+}
+
+/** The copper fill pass of the default profile, as stored. */
+const copperPass = (page: Page) =>
+  page.evaluate(() => {
+    const p = (globalThis as unknown as { lvp: Lvp }).lvp.profile.workingLayers[0]!.passes[0]!;
+    return JSON.parse(JSON.stringify(p)) as { pattern: Record<string, unknown>; breaks?: Record<string, unknown> | null };
+  });
+
+async function openCopperPass(page: Page) {
+  await page.goto(url);
+  await waitForApp(page);
+  await importDxf(page, fixture("board-islands.dxf"));
+  await page.locator(".row.pass").first().locator(".name").click();
+}
+
+test("contour fill marks its rings outward when asked, with the same paths", async ({ page }) => {
+  await openCopperPass(page);
+  const before = await summary(page);
+  const rev = await revision(page);
+  await page.getByLabel("Ring order").selectOption("outward");
+  const after = await evaluatedAfter(page, rev);
+  expect(after.hasErrors).toBe(false);
+  expect(after.passes[0]!.paths).toBe(before.passes[0]!.paths);
+  expect((await copperPass(page)).pattern.ringOrder).toBe("outward");
+  await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("outward");
+});

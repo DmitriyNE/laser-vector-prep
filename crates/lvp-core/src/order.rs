@@ -189,6 +189,36 @@ fn nodes_of(passes: &[PassPaths<'_>]) -> (Vec<Node>, Vec<(usize, usize)>) {
     (nodes, precedence)
 }
 
+/// Ordering constraints `(before, after)` between nodes, with each node's partners, so a
+/// move is checked against the constraints it can break rather than all of them.
+struct Precedence {
+    pairs: Vec<(usize, usize)>,
+    /// Nodes that must come after node `n`.
+    after: Vec<Vec<usize>>,
+    /// Nodes that must come before node `n`.
+    before: Vec<Vec<usize>>,
+}
+
+impl Precedence {
+    fn new(n: usize, pairs: Vec<(usize, usize)>) -> Precedence {
+        let mut after = vec![Vec::new(); n];
+        let mut before = vec![Vec::new(); n];
+        for &(a, b) in &pairs {
+            after[a].push(b);
+            before[b].push(a);
+        }
+        Precedence {
+            pairs,
+            after,
+            before,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Spatial index over entry points
 
@@ -658,14 +688,9 @@ impl Seq {
 }
 
 /// Greedy nearest-entry construction honouring precedence.
-fn construct(nodes: &[Node], precedence: &[(usize, usize)], start: Option<Point>) -> Seq {
+fn construct(nodes: &[Node], precedence: &Precedence, start: Option<Point>) -> Seq {
     let n = nodes.len();
-    let mut remaining_preds = vec![0usize; n];
-    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for &(a, b) in precedence {
-        remaining_preds[b] += 1;
-        successors[a].push(b);
-    }
+    let mut remaining_preds: Vec<usize> = precedence.before.iter().map(Vec::len).collect();
     let all_points = nodes.iter().flat_map(|nd| nd.verts.iter().copied());
     let bounds = BBox::of_points(all_points).unwrap_or(BBox {
         min: Point::new(0.0, 0.0),
@@ -722,7 +747,7 @@ fn construct(nodes: &[Node], precedence: &[(usize, usize)], start: Option<Point>
         seq.order.push(i);
         grid.remove_node(i, &entry_points(&nodes[i]));
         current = nodes[i].end(rev, seam);
-        for &s in &successors[i] {
+        for &s in &precedence.after[i] {
             remaining_preds[s] -= 1;
             if remaining_preds[s] == 0 {
                 for p in entry_points(&nodes[s]) {
@@ -999,7 +1024,7 @@ struct Scan<'a> {
     obj: &'a Objective<'a>,
     pos: &'a [usize],
     neighbours: &'a [Vec<usize>],
-    precedence: &'a [(usize, usize)],
+    precedence: &'a Precedence,
     /// Weight of a protected cell, in mm of jump length.
     scale: f64,
 }
@@ -1036,11 +1061,28 @@ impl Scan<'_> {
         }
     }
 
+    /// Whether `mv` keeps every constraint the current sequence keeps. Relocating a node
+    /// only changes its order against the others; reversing a run only the order of pairs
+    /// within the run.
     fn respects(&self, mv: &Move) -> bool {
-        let m = self.m();
-        self.precedence
-            .iter()
-            .all(|&(a, b)| mv.moved(self.pos[a], m) < mv.moved(self.pos[b], m))
+        let (m, prec) = (self.m(), self.precedence);
+        match *mv {
+            Move::Relocate { i, .. } => {
+                let n = self.seq.order[i];
+                let at = mv.moved(i, m);
+                prec.before[n]
+                    .iter()
+                    .all(|&a| self.pos[a] > i || mv.moved(self.pos[a], m) < at)
+                    && prec.after[n]
+                        .iter()
+                        .all(|&b| self.pos[b] < i || at < mv.moved(self.pos[b], m))
+            }
+            Move::Reverse { first, last } => (first..=last).all(|k| {
+                prec.after[self.seq.order[k]]
+                    .iter()
+                    .all(|&b| !(k < self.pos[b] && self.pos[b] <= last))
+            }),
+        }
     }
 
     /// Or-opt moves of the node at position `i` next to its spatial neighbours, in scan
@@ -1231,7 +1273,7 @@ fn try_apply(seq: &mut Seq, obj: &mut Objective<'_>, c: &Candidate, scale: f64) 
 /// Each sweep applies the first move, in scan order, that pays off. Positions are scanned
 /// in parallel blocks against the unchanged sequence and the candidates offered in scan
 /// order, so the result is that of a sequential scan whatever the number of threads.
-fn improve(seq: &mut Seq, obj: &mut Objective<'_>, precedence: &[(usize, usize)], max_sweeps: u32) {
+fn improve(seq: &mut Seq, obj: &mut Objective<'_>, precedence: &Precedence, max_sweeps: u32) {
     let m = seq.order.len();
     if m < 3 {
         return;
@@ -1349,7 +1391,8 @@ pub fn plan(
     settings: &OptimizerSettings,
     protected: Option<&Region>,
 ) -> GroupPlan {
-    let (nodes, precedence) = nodes_of(passes);
+    let (nodes, pairs) = nodes_of(passes);
+    let precedence = Precedence::new(nodes.len(), pairs);
     let start = settings.start_mm.map(|p| Point::new(p[0], p[1]));
     let end = settings.end_mm.map(|p| Point::new(p[0], p[1]));
     let empty = Stats::default();
@@ -1824,6 +1867,47 @@ mod tests {
             for (k, n) in before.iter().enumerate() {
                 proptest::prop_assert_eq!(seq.order[mv.moved(k, m)], *n);
             }
+        }
+
+        /// The indexed precedence check agrees with checking every constraint, for a
+        /// sequence that keeps them all.
+        #[test]
+        fn precedence_checks_only_what_a_move_can_break(
+            m in 3usize..30,
+            links in proptest::collection::vec((0usize..1000, 0usize..1000), 0..40),
+            x in 0usize..1000,
+            y in 0usize..1000,
+            reverse: bool,
+        ) {
+            let nodes: Vec<Node> = (0..m)
+                .map(|k| Node { pass: 0, index: k, closed: false, verts: vec![Point::new(k as f64, 0.0), Point::new(k as f64, 1.0)] })
+                .collect();
+            // Constraints between distinct nodes, kept by the identity order.
+            let mut pairs: Vec<(usize, usize)> = links
+                .iter()
+                .map(|&(a, b)| (a % m, b % m))
+                .filter(|(a, b)| a != b)
+                .map(|(a, b)| (a.min(b), a.max(b)))
+                .collect();
+            pairs.sort();
+            pairs.dedup();
+            let precedence = Precedence::new(m, pairs.clone());
+            let seq = Seq { order: (0..m).collect(), reversed: vec![false; m], seam: vec![0; m] };
+            let pos: Vec<usize> = (0..m).collect();
+            let obj = Objective { nodes: &nodes, start: None, end: None, bleed_weight: 0.0, raster: None };
+            let neighbours = vec![Vec::new(); m];
+            let scan = Scan { seq: &seq, obj: &obj, pos: &pos, neighbours: &neighbours, precedence: &precedence, scale: 0.0 };
+            let mv = if reverse {
+                let first = x % (m - 1);
+                Move::Reverse { first, last: first + 1 + y % (m - 1 - first) }
+            } else {
+                let i = x % m;
+                let a = (y % (m + 1)) as i64 - 1;
+                proptest::prop_assume!(a != i as i64 && a != i as i64 - 1);
+                Move::Relocate { i, a, rev: false, seam: 0 }
+            };
+            let every = pairs.iter().all(|&(a, b)| mv.moved(pos[a], m) < mv.moved(pos[b], m));
+            proptest::prop_assert_eq!(scan.respects(&mv), every);
         }
     }
 }

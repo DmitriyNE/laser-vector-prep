@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Operand, StrokeWidth, OptimizerMode, JoinStyle } from "../core/types.js";
+  import type { Operand, StrokeWidth, OptimizerMode, JoinStyle, RingOrder } from "../core/types.js";
   import { hexRgb, rgbHex, type ProjectStore } from "../state/project.svelte.js";
 
   let { store }: { store: ProjectStore } = $props();
@@ -259,7 +259,7 @@
     <label>Name <input bind:value={pass.name} oninput={touch} /></label>
     <label>Pattern
       <select value={pass.pattern.kind} onchange={(e) => setPatternKind((e.currentTarget as HTMLSelectElement).value)}>
-        <option value="contourFill">inward contour fill</option>
+        <option value="contourFill">contour fill</option>
         <option value="boundaryTrace">boundary trace / contour only</option>
         <option value="hatch">parallel hatch</option>
         <option value="crossHatch">crosshatch (several angles)</option>
@@ -272,6 +272,13 @@
       <label title="depth of the first ring; empty = half the pitch">First offset (mm)
         <input type="number" step="0.001" min="0" placeholder="pitch/2" value={pass.pattern.firstOffsetMm ?? ""}
           oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.firstOffsetMm = v === "" ? null : Number(v); }); }} />
+      </label>
+      <label title="inward: each ring after the one outside it; outward: from the core out, each ring before the one outside it; either way the path order keeps it">Ring order
+        <select value={pass.pattern.ringOrder ?? "any"} onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value as RingOrder; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.ringOrder = v === "any" ? undefined : v; }); }}>
+          <option value="any">any (optimizer)</option>
+          <option value="inward">inward</option>
+          <option value="outward">outward</option>
+        </select>
       </label>
       <label class="check" title="centrelines in cores too narrow for another ring"><input type="checkbox" bind:checked={pass.pattern.gapFill} onchange={touch} /> gap fill</label>
       {#if pass.pattern.gapFill}

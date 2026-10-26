@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 2,
+  "profileId": "builtin-general-marking",
+  "name": "General marking (lines + hatched fill)",
+  "sourceBindings": [
+    {
+      "id": "src-marks",
+      "name": "Marks",
+      "required": true,
+      "rules": [
+        {
+          "kind": "layerName",
+          "name": "MARK"
+        }
+      ]
+    },
+    {
+      "id": "src-fill",
+      "name": "Fill",
+      "required": false,
+      "rules": [
+        {
+          "kind": "layerName",
+          "name": "FILL"
+        }
+      ]
+    }
+  ],
+  "workingLayers": [
+    {
+      "id": "wl-marks",
+      "name": "Marks",
+      "kind": "linework",
+      "inputs": [
+        {
+          "source": "src-marks"
+        }
+      ],
+      "operands": [],
+      "op": "union",
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "original"
+      },
+      "passes": [
+        {
+          "id": "pass-marks",
+          "name": "Marks passthrough",
+          "pattern": {
+            "kind": "passthrough",
+            "reverse": false
+          },
+          "group": "grp-marks",
+          "enabled": true
+        }
+      ],
+      "enabled": true,
+      "referenceOnly": false
+    },
+    {
+      "id": "wl-fill",
+      "name": "Fill",
+      "kind": "region",
+      "inputs": [
+        {
+          "source": "src-fill"
+        }
+      ],
+      "operands": [],
+      "op": "union",
+      "interpretation": {
+        "loopRule": "mergeThenNest",
+        "strokeWidth": "original"
+      },
+      "passes": [
+        {
+          "id": "pass-fill",
+          "name": "Shell + hatch 50 um",
+          "pattern": {
+            "kind": "boundaryHatch",
+            "shells": 1,
+            "shellPitchMm": 0.05,
+            "insetMm": 0.025,
+            "pitchMm": 0.05,
+            "anglesDeg": [
+              45.0
+            ],
+            "phaseMm": 0.0,
+            "serpentine": true
+          },
+          "group": "grp-fill",
+          "enabled": true
+        }
+      ],
+      "enabled": true,
+      "referenceOnly": false
+    }
+  ],
+  "outputGroups": [
+    {
+      "id": "grp-marks",
+      "name": "Marks",
+      "color": [
+        0,
+        0,
+        0
+      ],
+      "export": true,
+      "visible": true
+    },
+    {
+      "id": "grp-fill",
+      "name": "Fill",
+      "color": [
+        0,
+        0,
+        255
+      ],
+      "export": true,
+      "visible": true,
+      "auditWidthMm": 0.05
+    }
+  ],
+  "export": {
+    "strokeWidthMm": 0.0254,
+    "marginMm": 5.0,
+    "separateFiles": false,
+    "flattenToleranceMm": 0.001
+  },
+  "optimizer": {
+    "mode": "minimumJump",
+    "footprintMm": 0.1,
+    "bleedWeight": 1.0,
+    "protected": [],
+    "cellMm": 0.05,
+    "maxSweeps": 20
+  }
+}

@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::region::LoopRule;
 
 /// Current profile schema version. Every change after deployment bumps it together with a
-/// migration in `profile` (v1 was deployed on 2026-10-25; v2 adds the audit width).
-pub const SCHEMA_VERSION: u32 = 2;
+/// migration in `profile` (v1 was deployed on 2026-10-25; v2 adds the audit width, v3 the
+/// patterns of 2026-10-26).
+pub const SCHEMA_VERSION: u32 = 3;
 
 macro_rules! id_type {
     ($name:ident, $doc:literal) => {
@@ -268,7 +269,8 @@ pub enum Pattern {
         reverse: bool,
     },
     /// Iterative inward offsets from the boundary; rings stay closed, collapsed cores get
-    /// an open centreline when `gap_fill` is on.
+    /// an open centreline when `gap_fill` is on. Marked inward, outward, or in whatever
+    /// order the path optimizer finds best (`ring_order`).
     #[serde(rename_all = "camelCase")]
     ContourFill {
         /// Centreline distance between rings (mm).
@@ -288,6 +290,9 @@ pub enum Pattern {
         /// kept exactly); absent keeps every vertex. Clamped to a quarter of the pitch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         simplify_mm: Option<f64>,
+        /// Order the rings are marked in. Schema v3.
+        #[serde(default, skip_serializing_if = "RingOrder::is_any")]
+        ring_order: RingOrder,
     },
     /// Trace the region boundary (outers and holes) at a geometric offset, optionally as
     /// several rings. Kerf compensation is a user-entered distance, applied outward from the
@@ -373,6 +378,26 @@ fn default_one() -> u32 {
 
 fn default_angles() -> Vec<f64> {
     vec![0.0]
+}
+
+/// The order of a contour fill's rings: a constraint every path order keeps, not a
+/// preference. Each ring (and gap-fill centreline) is tied to the ring just outside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RingOrder {
+    /// Whatever order the path optimizer finds best.
+    #[default]
+    Any,
+    /// From the boundary towards the core: each ring after the one outside it.
+    Inward,
+    /// From the core towards the boundary: each ring before the one outside it.
+    Outward,
+}
+
+impl RingOrder {
+    pub fn is_any(&self) -> bool {
+        *self == RingOrder::Any
+    }
 }
 
 /// Which side of the boundary a trace runs on.

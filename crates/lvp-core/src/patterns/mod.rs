@@ -12,7 +12,7 @@ use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 
 use crate::diag::Diagnostic;
 use crate::geom::Point;
-use crate::model::Pattern;
+use crate::model::{Pattern, RingOrder};
 use crate::pline::Pline;
 use crate::region::Region;
 
@@ -71,6 +71,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             gap_fill,
             end_spacing_mm,
             simplify_mm,
+            ring_order,
         } => contour_fill(
             geometry,
             &ContourParams {
@@ -79,6 +80,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
                 gap_fill: *gap_fill,
                 end_spacing_mm: *end_spacing_mm,
                 simplify_mm: *simplify_mm,
+                ring_order: *ring_order,
             },
         ),
         Pattern::BoundaryTrace {
@@ -245,25 +247,32 @@ struct FillSettings {
     end_spacing: f64,
     simplify: Option<f64>,
     gap_fill: bool,
+    order: RingOrder,
 }
 
 struct IslandFill {
     paths: Vec<Pline>,
+    /// Ordering constraints `(before, after)` between `paths`.
+    precedence: Vec<(usize, usize)>,
     rings: usize,
     gap_fills: usize,
     skipped: usize,
 }
 
-/// Rings of one island from depth `first` inward, then the gap-fill centrelines.
+/// Rings of one island from depth `first` inward, then the gap-fill centrelines (the
+/// other way round for an outward ring order).
 fn fill_island(region: &Region, s: &FillSettings) -> IslandFill {
     let mut fill = IslandFill {
         paths: Vec::new(),
+        precedence: Vec::new(),
         rings: 0,
         gap_fills: 0,
         skipped: 0,
     };
-    // The area inside each ring: `region` shrunk by the ring's depth.
+    // The area inside each ring (`region` shrunk by the ring's depth) and the indices of
+    // its paths.
     let mut levels: Vec<Region> = Vec::new();
+    let mut level_paths: Vec<Vec<usize>> = Vec::new();
     let mut depth = s.first;
     loop {
         if crate::cancel::cancelled() {
@@ -275,38 +284,171 @@ fn fill_island(region: &Region, s: &FillSettings) -> IslandFill {
         }
         // At exactly half a feature's width the ring runs into the feature and back along
         // its centreline: that stretch is drawn once, as an open path.
+        let mut here = Vec::new();
         for l in &ring.loops {
             let (loops, bridges) = crate::pline::split_retraced(l);
             for p in loops.into_iter().chain(bridges) {
                 fill.rings += 1;
+                here.push(fill.paths.len());
                 fill.paths.push(match s.simplify {
                     Some(t) => crate::pline::simplify(&p, t),
                     None => p,
                 });
             }
         }
+        level_paths.push(here);
         if s.gap_fill {
             levels.push(ring);
         }
         depth += s.pitch;
     }
+    // Gap-fill centrelines with the level of the ring outside them (-1: before the first).
+    let mut gaps: Vec<(isize, usize)> = Vec::new();
     if s.gap_fill {
         let opts = gapfill::GapFillOptions {
             assumed_width_mm: s.pitch,
             flatten_tolerance_mm: (s.pitch * 0.01).max(1e-5),
             min_length_mm: s.pitch / 2.0,
         };
-        for core in cores(region, &levels, s.first, s.pitch, s.end_spacing) {
+        for (level, core) in cores(region, &levels, s.first, s.pitch, s.end_spacing) {
             if crate::cancel::cancelled() {
                 return fill;
             }
             let (lines, skipped) = gapfill::centrelines(&core, &opts);
             fill.gap_fills += lines.len();
-            fill.paths.extend(lines);
+            for line in lines {
+                gaps.push((level, fill.paths.len()));
+                fill.paths.push(line);
+            }
             fill.skipped += skipped;
         }
     }
+    if s.order != RingOrder::Any {
+        let pairs = ring_parents(&fill.paths, &level_paths, &gaps, s.pitch);
+        if s.order == RingOrder::Inward {
+            fill.precedence = pairs;
+        } else {
+            // Core first: generated in reverse, every path before the ring outside it.
+            let n = fill.paths.len();
+            fill.paths.reverse();
+            fill.precedence = pairs
+                .into_iter()
+                .map(|(outer, inner)| (n - 1 - inner, n - 1 - outer))
+                .collect();
+        }
+    }
     fill
+}
+
+/// Ties every ring after the first level, and every gap-fill centreline, to the nearest path
+/// of the ring level just outside it: `(outer, inner)` pairs of indices into `paths`.
+fn ring_parents(
+    paths: &[Pline],
+    level_paths: &[Vec<usize>],
+    gaps: &[(isize, usize)],
+    pitch: f64,
+) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for (j, outer) in level_paths.iter().enumerate() {
+        let inner = level_paths
+            .get(j + 1)
+            .into_iter()
+            .flatten()
+            .copied()
+            .chain(gaps.iter().filter(|g| g.0 == j as isize).map(|g| g.1));
+        let index = NearestPath::new(paths, outer, 2.0 * pitch);
+        for c in inner {
+            let v = paths[c].at(0);
+            if let Some(p) = index.nearest(Point::new(v.x, v.y)) {
+                pairs.push((p, c));
+            }
+        }
+    }
+    pairs
+}
+
+/// The segments of some paths bucketed by a grid, for finding the path nearest a point.
+struct NearestPath<'a> {
+    paths: &'a [Pline],
+    members: &'a [usize],
+    cell: f64,
+    grid: std::collections::HashMap<(i64, i64), Vec<(usize, usize)>>,
+}
+
+impl<'a> NearestPath<'a> {
+    fn new(paths: &'a [Pline], members: &'a [usize], cell: f64) -> NearestPath<'a> {
+        let mut grid: std::collections::HashMap<(i64, i64), Vec<(usize, usize)>> =
+            std::collections::HashMap::new();
+        let key = |x: f64| (x / cell).floor() as i64;
+        for &m in members {
+            let p = &paths[m];
+            let n = p.vertex_count();
+            let segments = if p.is_closed() {
+                n
+            } else {
+                n.saturating_sub(1)
+            };
+            for i in 0..segments {
+                let b = cavalier_contours::polyline::seg_fast_approx_bounding_box(
+                    p.at(i),
+                    p.at((i + 1) % n),
+                );
+                for x in key(b.min_x)..=key(b.max_x) {
+                    for y in key(b.min_y)..=key(b.max_y) {
+                        grid.entry((x, y)).or_default().push((m, i));
+                    }
+                }
+            }
+        }
+        NearestPath {
+            paths,
+            members,
+            cell,
+            grid,
+        }
+    }
+
+    fn distance(&self, (m, i): (usize, usize), q: Point) -> f64 {
+        let p = &self.paths[m];
+        let c = cavalier_contours::polyline::seg_closest_point(
+            p.at(i),
+            p.at((i + 1) % p.vertex_count()),
+            cavalier_contours::core::math::Vector2::new(q.x, q.y),
+            1e-9,
+        );
+        (c.x - q.x).hypot(c.y - q.y)
+    }
+
+    /// The member nearest `q`: among the segments in the cells around it (all of them when
+    /// none is there, which a ring a pitch away never causes).
+    fn nearest(&self, q: Point) -> Option<usize> {
+        let (kx, ky) = (
+            (q.x / self.cell).floor() as i64,
+            (q.y / self.cell).floor() as i64,
+        );
+        let near = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dy| (kx + dx, ky + dy)))
+            .filter_map(|k| self.grid.get(&k))
+            .flatten()
+            .copied();
+        let best = |segments: &mut dyn Iterator<Item = (usize, usize)>| {
+            segments
+                .map(|s| (self.distance(s, q), s.0))
+                .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+                .map(|(_, m)| m)
+        };
+        best(&mut near.clone()).or_else(|| {
+            best(&mut self.members.iter().flat_map(|&m| {
+                let p = &self.paths[m];
+                let segments = if p.is_closed() {
+                    p.vertex_count()
+                } else {
+                    p.vertex_count().saturating_sub(1)
+                };
+                (0..segments).map(move |i| (m, i))
+            }))
+        })
+    }
 }
 
 /// The parts of `region` its rings leave unswept: the cores gap fill draws centrelines in.
@@ -332,7 +474,7 @@ fn cores(
     first: f64,
     pitch: f64,
     end_spacing: f64,
-) -> Vec<Region> {
+) -> Vec<(isize, Region)> {
     // Grows the next level slightly more than it must, so that its boundary passes outside
     // the coinciding stretches of the deeper boundary instead of onto them.
     let margin = pitch * 1e-3;
@@ -381,7 +523,7 @@ fn cores(
             _ => inner,
         };
         if !core.is_empty() {
-            out.push(core);
+            out.push((j, core));
         }
     }
     out
@@ -526,6 +668,7 @@ pub struct ContourParams {
     pub gap_fill: bool,
     pub end_spacing_mm: Option<f64>,
     pub simplify_mm: Option<f64>,
+    pub ring_order: RingOrder,
 }
 
 fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
@@ -535,6 +678,7 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
         gap_fill,
         end_spacing_mm,
         simplify_mm,
+        ring_order,
     } = *params;
     let mut out = PatternOutput::default();
     let Geometry::Region(region) = geometry else {
@@ -579,6 +723,7 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
         end_spacing,
         simplify,
         gap_fill,
+        order: ring_order,
     };
     // Islands are filled independently (in parallel where a thread pool exists): every
     // offset then only sees one island's loops, so the work grows linearly with their
@@ -594,6 +739,9 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
     });
     let mut skipped = 0;
     for f in fills {
+        let base = out.paths.len();
+        out.precedence
+            .extend(f.precedence.iter().map(|(a, b)| (base + a, base + b)));
         out.paths.extend(f.paths);
         out.stats.rings += f.rings;
         out.stats.gap_fills += f.gap_fills;
@@ -659,6 +807,15 @@ mod tests {
     }
 
     fn contour(pitch: f64, gap_fill: bool, region: &Region) -> PatternOutput {
+        ordered_contour(pitch, gap_fill, RingOrder::Any, region)
+    }
+
+    fn ordered_contour(
+        pitch: f64,
+        gap_fill: bool,
+        ring_order: RingOrder,
+        region: &Region,
+    ) -> PatternOutput {
         generate(
             &Pattern::ContourFill {
                 pitch_mm: pitch,
@@ -666,9 +823,80 @@ mod tests {
                 gap_fill,
                 end_spacing_mm: None,
                 simplify_mm: None,
+                ring_order,
             },
             &Geometry::Region(region.clone()),
         )
+    }
+
+    /// Distance from the start of `inner` to the nearest point of `outer`.
+    fn gap_between(inner: &Pline, outer: &Pline) -> f64 {
+        let v = inner.at(0);
+        let c = outer
+            .closest_point(cavalier_contours::core::math::Vector2::new(v.x, v.y), 1e-9)
+            .unwrap();
+        c.distance
+    }
+
+    #[test]
+    fn ring_order_ties_every_ring_to_the_ring_outside_it() {
+        // A square with a round hole and a thin finger (a neck core at depth): every path
+        // but the first rings has the ring just outside it as its partner, a pitch away
+        // (a gap-fill centreline at most a pitch).
+        let (finger_shape, _) = finger(0.45);
+        let shape = finger_shape.difference(&Region::from_loops(
+            [circle(Point::new(2.0, 2.0), 0.6)],
+            LoopRule::NonZero,
+        ));
+        let any = ordered_contour(0.1, true, RingOrder::Any, &shape);
+        assert!(any.precedence.is_empty());
+        let inward = ordered_contour(0.1, true, RingOrder::Inward, &shape);
+        let outward = ordered_contour(0.1, true, RingOrder::Outward, &shape);
+        let n = inward.paths.len();
+        assert_eq!(n, any.paths.len());
+        assert!(inward.stats.gap_fills > 0);
+        // Two first rings (outer and hole) have no partner; everything else has one.
+        assert_eq!(inward.precedence.len(), n - 2);
+        let mut seen = vec![false; n];
+        for &(outer, inner) in &inward.precedence {
+            assert!(!seen[inner], "path {inner} has two partners");
+            seen[inner] = true;
+            // The generated order already keeps the constraint.
+            assert!(outer < inner);
+            let d = gap_between(&inward.paths[inner], &inward.paths[outer]);
+            if inward.paths[inner].is_closed() {
+                assert!(
+                    (d - 0.1).abs() < 1e-6,
+                    "ring {inner} is {d} from its partner"
+                );
+            } else {
+                assert!(
+                    d <= 0.1 + 1e-6,
+                    "centreline {inner} is {d} from its partner"
+                );
+            }
+        }
+        // Outward: the same paths in reverse, each before the ring outside it.
+        assert_eq!(outward.paths.len(), n);
+        for (k, p) in outward.paths.iter().enumerate() {
+            assert_eq!(p.vertex_data, inward.paths[n - 1 - k].vertex_data);
+        }
+        let flipped: std::collections::HashSet<(usize, usize)> = inward
+            .precedence
+            .iter()
+            .map(|&(outer, inner)| (n - 1 - inner, n - 1 - outer))
+            .collect();
+        assert_eq!(
+            outward
+                .precedence
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
+            flipped
+        );
+        for &(a, b) in &outward.precedence {
+            assert!(a < b);
+        }
     }
 
     /// Two 4 mm squares joined by an 8 mm neck `w` wide, and the neck's middle 4 mm.
@@ -803,6 +1031,7 @@ mod tests {
                 gap_fill: false,
                 end_spacing_mm: None,
                 simplify_mm: None,
+                ring_order: RingOrder::Any,
             },
             &Geometry::Region(region.clone()),
         );
@@ -849,6 +1078,7 @@ mod tests {
             gap_fill: true,
             end_spacing_mm: None,
             simplify_mm: None,
+            ring_order: RingOrder::Any,
         };
         let geometry = Geometry::Region(region);
         let was = crate::par::enabled();
@@ -887,6 +1117,7 @@ mod tests {
                 gap_fill: true,
                 end_spacing_mm: None,
                 simplify_mm: None,
+                ring_order: RingOrder::Any,
             },
             &Geometry::Region(bar.clone()),
         );
@@ -935,6 +1166,7 @@ mod tests {
             gap_fill: gap,
             end_spacing_mm: None,
             simplify_mm: None,
+            ring_order: RingOrder::Any,
         };
         let plain = generate(&pattern(false), &Geometry::Region(bar.clone()));
         let filled = generate(&pattern(true), &Geometry::Region(bar.clone()));
@@ -1027,6 +1259,7 @@ mod tests {
                 gap_fill: false,
                 end_spacing_mm: None,
                 simplify_mm: None,
+                ring_order: RingOrder::Any,
             },
             &Geometry::Linework(vec![]),
         );
@@ -1050,6 +1283,7 @@ mod tests {
                     gap_fill: true,
                     end_spacing_mm: end,
                     simplify_mm: None,
+                    ring_order: RingOrder::Any,
                 },
                 &Geometry::Region(strip.clone()),
             )
@@ -1090,6 +1324,7 @@ mod tests {
                     gap_fill: false,
                     end_spacing_mm: None,
                     simplify_mm: simplify,
+                    ring_order: RingOrder::Any,
                 },
                 &Geometry::Region(wiggly.clone()),
             )
