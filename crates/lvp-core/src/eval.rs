@@ -372,17 +372,31 @@ impl Evaluator {
                     )
                     .with_context(b.id.to_string()),
                 ),
-                BindingStatus::Ambiguous(c) => ev.diagnostics.push(
-                    Diagnostic::error(
-                        "eval.binding_ambiguous",
-                        format!(
-                            "source {:?} matches {} layers; map it to one file explicitly",
-                            b.name,
-                            c.len()
-                        ),
+                BindingStatus::Ambiguous(c) => {
+                    let mut names: Vec<String> = c
+                        .iter()
+                        .take(3)
+                        .map(|(i, l)| match sources.files.get(*i) {
+                            Some(f) if sources.files.len() > 1 => format!("{l} in {}", f.name),
+                            _ => l.clone(),
+                        })
+                        .collect();
+                    if c.len() > 3 {
+                        names.push("…".into());
+                    }
+                    ev.diagnostics.push(
+                        Diagnostic::error(
+                            "eval.binding_ambiguous",
+                            format!(
+                                "source {:?} matches {} layers ({}); map the one it means explicitly",
+                                b.name,
+                                c.len(),
+                                names.join(", ")
+                            ),
+                        )
+                        .with_context(b.id.to_string()),
                     )
-                    .with_context(b.id.to_string()),
-                ),
+                }
                 BindingStatus::Matched(..) => {}
             }
         }

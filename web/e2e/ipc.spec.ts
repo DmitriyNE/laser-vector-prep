@@ -18,3 +18,53 @@ test("an IPC-2581 board binds the PCB preset through layer functions", async ({ 
   expect(copper.holes).toBe(1);
   expect(ev.passes[1]!.paths).toBe(1);
 });
+
+// As Altium writes IPC-2581 (`.cvg`): copper called SIGNAL, inner layers sharing one
+// function, traces grouped in UserSpecial with their line descriptions inline.
+const line = (y: number) => `<Line startX="2" startY="${y}" endX="18" endY="${y}"><LineDesc lineEnd="ROUND" lineWidth="0.5"/></Line>`;
+const altium = `<?xml version="1.0" encoding="utf-8"?>
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+ <Ecad name="b"><CadHeader units="MILLIMETER"/><CadData>
+  <Layer name="Top Layer" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="Layer 1" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+  <Layer name="Layer 2" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+  <Step name="s">
+   <Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="20" y="0"/><PolyStepSegment x="20" y="20"/><PolyStepSegment x="0" y="20"/><PolyStepSegment x="0" y="0"/></Polygon></Profile>
+   <LayerFeature layerRef="Top Layer"><Set><Features><UserSpecial>${line(2)}</UserSpecial></Features></Set></LayerFeature>
+   <LayerFeature layerRef="Layer 1"><Set><Features><UserSpecial>${line(5)}${line(6)}</UserSpecial></Features></Set></LayerFeature>
+   <LayerFeature layerRef="Layer 2"><Set><Features><UserSpecial>${line(8)}</UserSpecial></Features></Set>
+    <Set><Features><Xform rotation="90"/><Location x="10" y="12"/><RectCenter width="2" height="1"/></Features></Set></LayerFeature>
+  </Step>
+ </CadData></Ecad>
+</IPC-2581>`;
+
+test("inner layers that share a function map onto the copper slot one at a time", async ({ page }) => {
+  await page.goto(url);
+  await waitForApp(page);
+  await page.locator('input[type="file"][accept*="dxf"]').setInputFiles({ name: "board.cvg", mimeType: "application/xml", buffer: Buffer.from(altium) });
+  await page.waitForFunction(() => {
+    const lvp = (globalThis as unknown as { lvp: { sources: unknown[]; evaluating: boolean; evaluation: unknown } }).lvp;
+    return lvp.sources.length === 1 && !lvp.evaluating && lvp.evaluation !== null;
+  });
+  // The preset finds Altium's top copper (SIGNAL,TOP) by itself.
+  type Binding = { name: string; status: string; layer?: string };
+  const copper = async () => ((await summary(page)).bindings as Binding[]).find((b) => b.name === "Copper")!;
+  expect(await copper()).toMatchObject({ status: "matched", layer: "Top Layer" });
+  for (const [layer, count] of [["Layer 1", 2], ["Layer 2", 2]] as const) {
+    const row = page.locator(".source li").filter({ has: page.locator(".name", { hasText: new RegExp(`^${layer}`) }) });
+    const rev = await page.evaluate(() => (globalThis as unknown as { lvp: { evaluation: { revision: number } } }).lvp.evaluation.revision);
+    await row.locator("select.map").selectOption("src-copper");
+    await page.waitForFunction(
+      (r) => {
+        const lvp = (globalThis as unknown as { lvp: { evaluating: boolean; evaluation: { revision: number } } }).lvp;
+        return !lvp.evaluating && lvp.evaluation.revision > r;
+      },
+      rev,
+    );
+    expect(await copper()).toMatchObject({ status: "matched", layer });
+    const ev = await summary(page);
+    expect(ev.hasErrors).toBe(false);
+    // Each trace (and Layer 2's placed rectangle) is copper with its width.
+    expect(ev.layers.find((l) => l.name === "Copper")!.outers).toBe(count);
+  }
+});

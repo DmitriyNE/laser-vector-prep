@@ -524,15 +524,18 @@ export class ProjectStore {
   }
 
   /**
-   * The most portable rule that matches an imported layer: its declared function when the
-   * format has one (Gerber X2, IPC-2581), the file name for one-layer-per-file formats, the
-   * layer name otherwise, and an explicit file+layer rule when the same layer name exists
-   * in several files.
+   * The most portable rule that matches an imported layer and no other: its declared
+   * function when the format has one (Gerber X2, IPC-2581) and no other layer shares it
+   * (inner copper, drill and document layers often do), the file name for
+   * one-layer-per-file formats, the layer name otherwise, and an explicit file+layer rule
+   * when the same layer name exists in several files.
    */
   portableRule(file: string, layer: string): MatchRule {
     const src = this.sources.find((s) => s.name === file);
     const sl = src?.layers.find((l) => l.name === layer);
-    if (sl?.function) return { kind: "function", pattern: sl.function };
+    const fn = sl?.function?.toLowerCase();
+    const sharing = fn ? this.sources.reduce((n, s) => n + s.layers.filter((l) => l.function?.toLowerCase() === fn).length, 0) : 0;
+    if (sl?.function && sharing === 1) return { kind: "function", pattern: sl.function };
     if (src && src.format === "gerber") return { kind: "fileName", format: "gerber", pattern: file };
     const filesWithName = this.sources.filter((s) => s.layers.some((l) => l.name === layer)).length;
     if (filesWithName > 1) return { kind: "fileLayer", file, name: layer };

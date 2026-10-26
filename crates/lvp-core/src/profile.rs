@@ -577,6 +577,10 @@ fn copper_rules() -> Vec<MatchRule> {
         dxf_layer("TOP_LAYER"),
         function("Copper,L1,Top"),
         function("CONDUCTOR,TOP"),
+        // IPC-2581 also calls copper SIGNAL, PLANE or MIXED (Altium writes SIGNAL).
+        function("SIGNAL,TOP"),
+        function("PLANE,TOP"),
+        function("MIXED,TOP"),
         gerber_file("*.gtl"),
         gerber_file("*-F_Cu.gbr"),
         gerber_file("*.cmp"),
@@ -1083,11 +1087,20 @@ mod tests {
         );
     }
 
+    /// The profile a saved document holds, read as the current version without migrating.
+    fn as_saved(json: &str, version: u32) -> Profile {
+        let current = json.replace(
+            &format!("\"schemaVersion\": {version},"),
+            &format!("\"schemaVersion\": {SCHEMA_VERSION},"),
+        );
+        serde_json::from_str(&current).unwrap()
+    }
+
     #[test]
     fn v1_profiles_migrate_to_v2_unchanged_but_for_audit_widths() {
         // The built-in presets exactly as the deployed v1 app wrote them.
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/profiles");
-        for mut preset in builtin_presets() {
+        for preset in builtin_presets() {
             let name = preset.profile_id.trim_start_matches("builtin-").to_string();
             let json = std::fs::read_to_string(format!("{root}/v1-{name}.json")).unwrap();
             assert!(json.contains("\"schemaVersion\": 1,"));
@@ -1101,10 +1114,7 @@ mod tests {
                     .iter()
                     .all(|g| g.audit_width_mm.is_none())
             );
-            for g in &mut preset.output_groups {
-                g.audit_width_mm = None;
-            }
-            assert_eq!(migrated, preset, "{name}");
+            assert_eq!(migrated, as_saved(&json, 1), "{name}");
         }
     }
 
@@ -1118,7 +1128,7 @@ mod tests {
             assert!(json.contains("\"schemaVersion\": 2,"));
             let migrated = parse_profile(&json).unwrap();
             assert_eq!(migrated.schema_version, 3);
-            assert_eq!(migrated, preset, "{name}");
+            assert_eq!(migrated, as_saved(&json, 2), "{name}");
         }
     }
 

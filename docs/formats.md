@@ -134,11 +134,11 @@ Reported: TEXT and NODE (info), missing referenced structures (error).
 | Read | Notes |
 |---|---|
 | Units | `CadHeader` units (mm, in, µm, mil). |
-| Layers | Each `LayerFeature` is a layer; its function is `layerFunction,side` (for example `CONDUCTOR,TOP`). The board profile is a layer named `Profile` with function `PROFILE`. |
+| Layers | Each `LayerFeature` is a layer; its function is `layerFunction,side` (for example `CONDUCTOR,TOP`, or `SIGNAL,INTERNAL` for an inner layer, which several layers may share). The board profile is a layer named `Profile` with function `PROFILE`. Files with the `.cvg` extension (Altium's IPC-2581 export) are recognised by their content. |
 | Standard primitives | Circle, RectCenter, RectCorner, RectRound, RectCham, Oval, Donut, Octagon, Hexagon, Diamond, Triangle, Ellipse, Thermal, Contour, Polygon. |
 | User primitives | Polygons, contours and lines inside `UserSpecial`. |
-| Line descriptors | Round ends stay centrelines with width; square and flat ends become exact polygons. |
-| Features | Pads with `Xform` and `Location`, lines, arcs, polylines, contours, holes. |
+| Line descriptors | By reference (`LineDescRef`) or written inline (`LineDesc`, as Altium writes them). Round ends stay centrelines with width; square and flat ends become exact polygons. |
+| Features | Pads with `Xform` and `Location`, lines, arcs, polylines, contours, holes, standard primitives placed directly (after an `Xform` and `Location`), and `UserSpecial` groups of these (Altium writes a layer's traces this way). |
 | Polarity | Positive and negative sets composited in source order. |
 | Steps | Several steps prefix layer names with the step name. |
 

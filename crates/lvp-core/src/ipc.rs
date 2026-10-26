@@ -129,6 +129,18 @@ struct LineDesc {
     end: String,
 }
 
+impl LineDesc {
+    fn from_node(n: Node<'_, '_>, scale: f64) -> LineDesc {
+        LineDesc {
+            width: attr_f(n, "lineWidth").unwrap_or(0.0) * scale,
+            end: n
+                .attribute("lineEnd")
+                .unwrap_or("ROUND")
+                .to_ascii_uppercase(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Counts {
     unsupported: BTreeMap<String, usize>,
@@ -389,44 +401,19 @@ impl Reader<'_> {
                         let Some(id) = e.attribute("id") else {
                             continue;
                         };
-                        let mut region = Region::empty();
-                        for special in e.children().filter(|c| c.is_element()) {
-                            // UserSpecial wraps simple features; the same elements are
-                            // allowed directly.
-                            let items: Vec<Node> = if special.tag_name().name() == "UserSpecial" {
-                                special.children().filter(|c| c.is_element()).collect()
-                            } else {
-                                vec![special]
-                            };
-                            for item in items {
-                                match item.tag_name().name() {
-                                    "Polygon" => {
-                                        if let Some(l) = self.closed(item, scale) {
-                                            region = region
-                                                .union(&Region::from_loops([l], LoopRule::NonZero));
-                                        }
-                                    }
-                                    "Contour" => {
-                                        let c = self.contour(item, scale);
-                                        region = region.union(&c);
-                                    }
-                                    "Line" | "Arc" | "Polyline" => {
-                                        if let Some(Shape::Stroke { pline, width }) =
-                                            self.linework(item, scale, &Xform::IDENTITY)
-                                        {
-                                            region = region.union(&region::stroke(&pline, width));
-                                        }
-                                    }
-                                    other => {
-                                        if let Some(r) = self.standard_primitive(item, scale) {
-                                            region = region.union(&r);
-                                        } else {
-                                            let _ = other;
-                                        }
-                                    }
+                        // The entry's features (UserSpecial groups, or the same elements
+                        // directly), united into one area.
+                        let mut shapes = Vec::new();
+                        self.features(e, scale, Xform::IDENTITY, &mut shapes, true);
+                        let region = Region::union_all(shapes.into_iter().filter_map(
+                            |(_, shape)| match shape {
+                                Shape::Fill(r) => Some(r),
+                                Shape::Stroke { pline, width } => {
+                                    Some(region::stroke(&pline, width))
                                 }
-                            }
-                        }
+                                Shape::Centreline(_) => None,
+                            },
+                        ));
                         if !region.is_empty() {
                             self.user.insert(id.to_string(), region);
                         }
@@ -447,16 +434,8 @@ impl Reader<'_> {
                             .children()
                             .find(|c| c.is_element() && c.tag_name().name() == "LineDesc")
                         {
-                            self.lines.insert(
-                                id.to_string(),
-                                LineDesc {
-                                    width: attr_f(ld, "lineWidth").unwrap_or(0.0) * scale,
-                                    end: ld
-                                        .attribute("lineEnd")
-                                        .unwrap_or("ROUND")
-                                        .to_ascii_uppercase(),
-                                },
-                            );
+                            self.lines
+                                .insert(id.to_string(), LineDesc::from_node(ld, scale));
                         }
                     }
                 }
@@ -467,11 +446,16 @@ impl Reader<'_> {
 
     // ---- features ---------------------------------------------------------------------
 
-    fn line_desc(&self, n: Node<'_, '_>) -> Option<LineDesc> {
-        let r = n
-            .children()
-            .find(|c| c.is_element() && c.tag_name().name() == "LineDescRef")?;
-        self.lines.get(r.attribute("id")?).cloned()
+    /// A line's description: a reference into the dictionary, or written inline (as
+    /// Altium does for every line and arc).
+    fn line_desc(&self, n: Node<'_, '_>, scale: f64) -> Option<LineDesc> {
+        n.children()
+            .filter(|c| c.is_element())
+            .find_map(|c| match c.tag_name().name() {
+                "LineDescRef" => self.lines.get(c.attribute("id")?).cloned(),
+                "LineDesc" => Some(LineDesc::from_node(c, scale)),
+                _ => None,
+            })
     }
 
     /// Line, Arc or Polyline with a line descriptor.
@@ -499,7 +483,7 @@ impl Reader<'_> {
             _ => return None,
         }
         let p = pline::sanitize(&xf.apply_pline(&p))?;
-        let desc = self.line_desc(n);
+        let desc = self.line_desc(n, scale);
         match desc {
             Some(ld) if ld.width > 0.0 => {
                 if ld.end == "ROUND" {
@@ -649,10 +633,20 @@ impl Reader<'_> {
                         self.emit(out, dark, shape);
                     }
                 }
+                // A group of simple features: Altium writes a layer's traces, arcs and
+                // outlines this way, not only user dictionary entries.
+                "UserSpecial" => self.features(c, scale, xf, out, dark),
                 "Text" => self.unsupported("Text"),
                 "Marking" => self.unsupported("Marking"),
                 other if other.ends_with("Ref") || other == "Color" || other == "Property" => {}
-                other => self.unsupported(other),
+                // A standard primitive placed directly, positioned by the Xform and
+                // Location before it (unknown elements are counted as unsupported).
+                _ => {
+                    if let Some(r) = self.standard_primitive(c, scale) {
+                        let shape = self.flash(&r, &xf);
+                        self.emit(out, dark, shape);
+                    }
+                }
             }
         }
     }
@@ -1289,6 +1283,54 @@ mod tests {
         assert!(codes.contains(&"ipc.unsupported"));
         assert!(codes.contains(&"ipc.primitive_missing"));
         assert!(codes.contains(&"ipc.components"));
+    }
+
+    #[test]
+    fn features_grouped_in_user_specials_and_placed_primitives_are_read() {
+        // As Altium writes a layer: traces and arcs grouped in UserSpecial straight inside
+        // Features, and a standard primitive placed by the Xform and Location before it.
+        let xml = format!(
+            r#"{HEAD}
+    <LayerFeature layerRef="TOP">
+     <Set net="N1"><Features><UserSpecial>
+      <Line startX="0" startY="0" endX="10" endY="0"><LineDesc lineEnd="ROUND" lineWidth="0.2"/></Line>
+      <Arc startX="10" startY="0" endX="10" endY="0" centerX="11" centerY="0" clockwise="false"><LineDesc lineEnd="ROUND" lineWidth="0.2"/></Arc>
+      <Features><Xform rotation="90"/><Location x="5" y="5"/><RectCenter width="2" height="1"/></Features>
+     </UserSpecial></Features></Set>
+     <Set net="N2"><Features><Xform rotation="90"/><Location x="20" y="5"/><RectCenter width="2" height="1"/></Features></Set>
+    </LayerFeature>
+   </Step>
+  </CadData>
+ </Ecad>
+</IPC-2581>"#
+        );
+        let doc = read(&xml);
+        assert!(
+            !doc.diagnostics.iter().any(|d| d.code == "ipc.unsupported"),
+            "{:?}",
+            doc.diagnostics
+        );
+        let top = doc.layers.iter().find(|l| l.name == "TOP").unwrap();
+        let r = region_of(top);
+        // Two rectangles, turned upright, at (5, 5) and (20, 5).
+        for x in [5.0, 20.0] {
+            assert!(r.contains(Point::new(x, 5.9)) && !r.contains(Point::new(x + 0.6, 5.0)));
+        }
+        // The line and the full circle round (11, 0), both 0.2 wide strokes.
+        let strokes: Vec<f64> = top
+            .primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Path {
+                    pline,
+                    width: Some(w),
+                } if (*w - 0.2).abs() < 1e-12 => Some(pline::length(pline)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(strokes.len(), 2, "{:?}", top.primitives);
+        assert!(strokes.iter().any(|l| (l - 10.0).abs() < 1e-9));
+        assert!(strokes.iter().any(|l| (l - 2.0 * PI).abs() < 1e-9));
     }
 
     #[test]
