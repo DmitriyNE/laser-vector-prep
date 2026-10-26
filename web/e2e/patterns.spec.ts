@@ -116,3 +116,21 @@ test("dots fill the copper with small finite marks", async ({ page }) => {
   expect(stipple.hasErrors).toBe(false);
   expect(stipple.passes[0]!.paths).toBeGreaterThan(0);
 });
+
+test("tabs break every closed contour into evenly spaced pieces", async ({ page }) => {
+  await openCopperPass(page);
+  const before = await summary(page);
+  const rev = await revision(page);
+  await page.getByLabel(/^Breaks\b/).selectOption("tabs");
+  const tabbed = await evaluatedAfter(page, rev);
+  expect(tabbed.hasErrors).toBe(false);
+  const was = before.passes[0]!;
+  const now = tabbed.passes[0]!;
+  // Every ring opens into pieces (rings shorter than four tabs go, with a warning); the
+  // open gap-fill lines stay whole.
+  expect(now.closed).toBe(0);
+  expect(now.open).toBeGreaterThan(was.open);
+  expect(now.lengthMm).toBeLessThan(was.lengthMm);
+  expect((await copperPass(page)).breaks).toEqual({ kind: "tabs", count: 4, widthMm: 0.5 });
+  await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("4 tabs");
+});

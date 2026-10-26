@@ -1,5 +1,63 @@
 {
   "$defs": {
+    "Breaks": {
+      "description": "Breaks in a pass's paths. Geometry only: a break is where no path runs.",
+      "oneOf": [
+        {
+          "description": "Perforation: marks and gaps of fixed lengths along every path, from its start.",
+          "properties": {
+            "gapMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "dashes",
+              "type": "string"
+            },
+            "markMm": {
+              "format": "double",
+              "type": "number"
+            },
+            "offsetMm": {
+              "default": 0.0,
+              "description": "Shift of the dash pattern along the path (mm).",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "markMm",
+            "gapMm"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tabs: `count` gaps of `width_mm`, evenly spaced along every closed path, that keep\na cut part attached. Open paths are left whole.",
+          "properties": {
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "tabs",
+              "type": "string"
+            },
+            "widthMm": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "count",
+            "widthMm"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "DotShape": {
       "description": "The mark each dot of a dot pattern is.",
       "oneOf": [
@@ -540,6 +598,17 @@
     },
     "Pass": {
       "properties": {
+        "breaks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Breaks"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Dashes or tabs cut into the pattern's paths. Schema v3."
+        },
         "enabled": {
           "default": true,
           "type": "boolean"

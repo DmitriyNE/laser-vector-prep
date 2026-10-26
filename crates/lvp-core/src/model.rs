@@ -482,6 +482,25 @@ impl RingOrder {
     }
 }
 
+/// Breaks in a pass's paths. Geometry only: a break is where no path runs.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Breaks {
+    /// Perforation: marks and gaps of fixed lengths along every path, from its start.
+    #[serde(rename_all = "camelCase")]
+    Dashes {
+        mark_mm: f64,
+        gap_mm: f64,
+        /// Shift of the dash pattern along the path (mm).
+        #[serde(default)]
+        offset_mm: f64,
+    },
+    /// Tabs: `count` gaps of `width_mm`, evenly spaced along every closed path, that keep
+    /// a cut part attached. Open paths are left whole.
+    #[serde(rename_all = "camelCase")]
+    Tabs { count: u32, width_mm: f64 },
+}
+
 /// Which side of the boundary a trace runs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
@@ -498,6 +517,9 @@ pub struct Pass {
     pub id: PassId,
     pub name: String,
     pub pattern: Pattern,
+    /// Dashes or tabs cut into the pattern's paths. Schema v3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breaks: Option<Breaks>,
     pub group: GroupId,
     #[serde(default = "default_true")]
     pub enabled: bool,

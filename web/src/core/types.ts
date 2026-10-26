@@ -130,10 +130,14 @@ export type Pattern =
       linkMm?: number | null;
     };
 
+/** Dashes along every path, or tabs (gaps) in every closed path. */
+export type Breaks = { kind: "dashes"; markMm: number; gapMm: number; offsetMm?: number } | { kind: "tabs"; count: number; widthMm: number };
+
 export interface Pass {
   id: string;
   name: string;
   pattern: Pattern;
+  breaks?: Breaks | null;
   group: string;
   enabled: boolean;
 }

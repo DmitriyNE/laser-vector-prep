@@ -392,6 +392,24 @@
           oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "passthrough") pass.pattern.simplifyMm = v === "" ? null : Number(v); }); }} />
       </label>
     {/if}
+    <label title="dashes: marks and gaps along every path, from its start (perforation); tabs: evenly spaced gaps in every closed path that keep a cut part attached">Breaks
+      <select value={pass.breaks?.kind ?? "none"} onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; store.update(() => { pass.breaks = v === "dashes" ? { kind: "dashes", markMm: 1, gapMm: 0.5 } : v === "tabs" ? { kind: "tabs", count: 4, widthMm: 0.5 } : undefined; }); }}>
+        <option value="none">none</option>
+        <option value="dashes">dashes</option>
+        <option value="tabs">tabs</option>
+      </select>
+    </label>
+    {#if pass.breaks?.kind === "dashes"}
+      <label>Mark (mm) <input type="number" step="0.01" min="0.001" bind:value={pass.breaks.markMm} oninput={touch} /></label>
+      <label>Gap (mm) <input type="number" step="0.01" min="0" bind:value={pass.breaks.gapMm} oninput={touch} /></label>
+      <label title="shift of the dashes along each path">Offset (mm)
+        <input type="number" step="0.01" placeholder="0" value={pass.breaks.offsetMm ?? ""}
+          oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.breaks?.kind === "dashes") pass.breaks.offsetMm = v === "" ? undefined : Number(v); }); }} />
+      </label>
+    {:else if pass.breaks?.kind === "tabs"}
+      <label title="per closed path, evenly spaced from its start">Tabs <input type="number" step="1" min="1" bind:value={pass.breaks.count} oninput={touch} /></label>
+      <label title="length of each gap along the path">Tab width (mm) <input type="number" step="0.01" min="0.001" bind:value={pass.breaks.widthMm} oninput={touch} /></label>
+    {/if}
     <label>Output group
       <select bind:value={pass.group} onchange={touch}>
         {#each store.profile.outputGroups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}

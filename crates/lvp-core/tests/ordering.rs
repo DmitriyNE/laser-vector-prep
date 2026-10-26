@@ -5,7 +5,7 @@
 use cavalier_contours::polyline::PlineSource;
 use lvp_core::eval::{Evaluator, Sources};
 use lvp_core::export::collect_paths;
-use lvp_core::model::{GroupId, LayerId, OptimizerMode, PassId, Pattern, RingOrder};
+use lvp_core::model::{Breaks, GroupId, LayerId, OptimizerMode, PassId, Pattern, RingOrder};
 use lvp_core::profile::{boundary_cutting, pcb_negative_hatch, pcb_positive_ldi};
 use lvp_core::source::{ReadOptions, read_any};
 
@@ -125,6 +125,47 @@ fn cutting_keeps_holes_before_their_outer_under_optimisation() {
         );
     }
     assert!(plan.after.jump_length_mm <= plan.before.jump_length_mm + 1e-9);
+}
+
+#[test]
+fn tabs_keep_holes_before_their_outer_under_optimisation() {
+    // The cutting preset with four tabs per contour: four pieces per loop, and every piece
+    // of a hole still comes before every piece of the contour around it.
+    let sources = sources(&["nested-holes.dxf"]);
+    let mut profile = boundary_cutting();
+    profile.source_bindings[0].rules.insert(
+        0,
+        lvp_core::model::MatchRule::LayerName {
+            format: None,
+            name: "SHAPES".into(),
+        },
+    );
+    let whole = Evaluator::new().evaluate(&profile, &sources);
+    let loops = whole.pass(&PassId::new("pass-cut")).unwrap().paths.len();
+    profile.working_layers[0].passes[0].breaks = Some(Breaks::Tabs {
+        count: 4,
+        width_mm: 0.5,
+    });
+    profile.optimizer.mode = OptimizerMode::MinimumJump;
+    profile.optimizer.start_mm = Some([-50.0, -50.0]);
+    let ev = Evaluator::new().evaluate(&profile, &sources);
+    assert!(!ev.has_errors(), "{:?}", ev.all_diagnostics());
+    let pass = ev.pass(&PassId::new("pass-cut")).unwrap();
+    assert_eq!(pass.paths.len(), 4 * loops);
+    assert!(pass.paths.iter().all(|p| !p.is_closed()));
+    let plan = ev.group_plan(&GroupId::new("grp-cut")).unwrap();
+    let pos = |i: usize| plan.order.iter().position(|r| r.index == i).unwrap();
+    // The constraints of the whole loops, through the pieces: (k, j) for loop k before j.
+    let whole_pass = whole.pass(&PassId::new("pass-cut")).unwrap();
+    assert!(!whole_pass.precedence.is_empty());
+    for &(hole, outer) in &whole_pass.precedence {
+        let last_of_hole = (0..4).map(|i| pos(4 * hole + i)).max().unwrap();
+        let first_of_outer = (0..4).map(|i| pos(4 * outer + i)).min().unwrap();
+        assert!(
+            last_of_hole < first_of_outer,
+            "hole {hole} before outer {outer}"
+        );
+    }
 }
 
 #[test]

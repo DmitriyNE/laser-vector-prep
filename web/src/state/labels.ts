@@ -3,6 +3,12 @@
 import type { MatchRule, Pass, WorkingLayer } from "../core/types.js";
 
 export function patternLabel(p: Pass): string {
+  const b = p.breaks;
+  const breaks = !b ? "" : b.kind === "tabs" ? ` · ${b.count} tab${b.count === 1 ? "" : "s"}` : ` · dashed ${b.markMm}/${b.gapMm}`;
+  return baseLabel(p) + breaks;
+}
+
+function baseLabel(p: Pass): string {
   const pt = p.pattern;
   switch (pt.kind) {
     case "contourFill":

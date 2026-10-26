@@ -478,6 +478,7 @@ impl Evaluator {
             for pass in layer.passes.iter().filter(|p| p.enabled) {
                 let mut h = DefaultHasher::new();
                 hash_json(&mut h, &pass.pattern);
+                hash_json(&mut h, &pass.breaks);
                 lr.fingerprint.hash(&mut h);
                 let fp = h.finish();
                 let cached = self.pass_cache.get(&pass.id).filter(|c| c.0 == fp).cloned();
@@ -512,8 +513,14 @@ impl Evaluator {
         let computed = par::map(jobs, |job| {
             let generated = match job.cached {
                 Some((_, out)) => Some((true, out)),
-                None => unless_cancelled(|| patterns::generate(&job.pass.pattern, job.geometry))
-                    .map(|out| (false, out)),
+                None => unless_cancelled(|| {
+                    let out = patterns::generate(&job.pass.pattern, job.geometry);
+                    match &job.pass.breaks {
+                        Some(b) => patterns::breaks::apply(out, b),
+                        None => out,
+                    }
+                })
+                .map(|out| (false, out)),
             };
             // `Some(None)`: an audit was wanted but cancelled.
             let audit = match (&generated, job.geometry, &job.audit) {

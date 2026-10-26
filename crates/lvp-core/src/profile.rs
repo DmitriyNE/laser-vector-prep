@@ -309,6 +309,23 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                     .with_context(p.id.to_string()),
                 );
             }
+            let bad_breaks = match p.breaks {
+                Some(Breaks::Dashes {
+                    mark_mm, gap_mm, ..
+                }) => (mark_mm.is_nan() || mark_mm <= 0.0 || gap_mm.is_nan() || gap_mm < 0.0)
+                    .then_some("dashes need a positive mark length and no negative gap"),
+                Some(Breaks::Tabs { count, width_mm }) => {
+                    (count == 0 || width_mm.is_nan() || width_mm <= 0.0)
+                        .then_some("tabs need a count of at least one and a positive width")
+                }
+                None => None,
+            };
+            if let Some(why) = bad_breaks {
+                out.push(
+                    Diagnostic::error("profile.breaks", format!("pass {:?}: {why}", p.name))
+                        .with_context(p.id.to_string()),
+                );
+            }
             match &p.pattern {
                 Pattern::ContourFill {
                     pitch_mm,
@@ -611,6 +628,7 @@ fn pass(id: &str, name: &str, pattern: Pattern, group: &str) -> Pass {
         id: PassId::new(id),
         name: name.into(),
         pattern,
+        breaks: None,
         group: GroupId::new(group),
         enabled: true,
     }
@@ -919,6 +937,7 @@ pub fn pcb_positive_ldi() -> Profile {
                     ring_order: RingOrder::Any,
                     link: false,
                 },
+                breaks: None,
                 group: GroupId::new("grp-copper"),
                 enabled: true,
             }],
@@ -941,6 +960,7 @@ pub fn pcb_positive_ldi() -> Profile {
                     simplify_mm: None,
                     reverse: false,
                 },
+                breaks: None,
                 group: GroupId::new("grp-outline"),
                 enabled: true,
             }],

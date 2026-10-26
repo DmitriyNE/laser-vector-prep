@@ -4,6 +4,7 @@
 //! never a machine process; cosmetic PDF stroke width and assumed mark width are not
 //! inputs here (except where a coverage audit asks for them explicitly).
 
+pub mod breaks;
 pub mod gapfill;
 pub mod hatch;
 pub mod trace;
