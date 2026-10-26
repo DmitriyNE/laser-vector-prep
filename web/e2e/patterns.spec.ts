@@ -81,3 +81,18 @@ test("centreline engraving draws single lines along the copper", async ({ page }
   const longer = await evaluatedAfter(page, rev2);
   expect(longer.passes[0]!.paths).toBeLessThan(pass.paths);
 });
+
+test("hatch rows link along the boundary into zigzags", async ({ page }) => {
+  await openCopperPass(page);
+  let rev = await revision(page);
+  await page.getByLabel("Pattern").selectOption("hatch");
+  const rows = await evaluatedAfter(page, rev);
+  rev = await revision(page);
+  await page.getByLabel("Link rows up to (mm)").fill("0.1");
+  const linked = await evaluatedAfter(page, rev);
+  expect(linked.hasErrors).toBe(false);
+  expect(linked.passes[0]!.paths).toBeLessThan(rows.passes[0]!.paths / 3);
+  expect(linked.passes[0]!.lengthMm).toBeGreaterThan(rows.passes[0]!.lengthMm);
+  expect((await copperPass(page)).pattern.linkMm).toBe(0.1);
+  await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("linked");
+});

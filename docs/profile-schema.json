@@ -720,6 +720,14 @@
               "const": "hatch",
               "type": "string"
             },
+            "linkMm": {
+              "description": "Join consecutive rows into zigzag paths where a stretch of the boundary at most\nthis long leads from the end of one to the start of the next (mm); absent\nkeeps every row separate. Schema v3.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
             "phaseMm": {
               "default": 0.0,
               "description": "Lines lie at `phase + k * pitch` across the rotated frame: a global lattice, so\nadjacent layers with the same parameters stay aligned.",
@@ -760,6 +768,14 @@
             "kind": {
               "const": "crossHatch",
               "type": "string"
+            },
+            "linkMm": {
+              "description": "Join consecutive rows into zigzag paths where a stretch of the boundary at most\nthis long leads from the end of one to the start of the next (mm); absent\nkeeps every row separate. Schema v3.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
             },
             "phaseMm": {
               "default": 0.0,
@@ -804,6 +820,14 @@
             "kind": {
               "const": "boundaryHatch",
               "type": "string"
+            },
+            "linkMm": {
+              "description": "Join consecutive rows into zigzag paths where a stretch of the boundary at most\nthis long leads from the end of one to the start of the next (mm); absent\nkeeps every row separate. Schema v3.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
             },
             "phaseMm": {
               "default": 0.0,

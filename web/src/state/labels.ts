@@ -12,11 +12,11 @@ export function patternLabel(p: Pass): string {
     case "centreline":
       return `centreline${pt.minLengthMm ? ` ≥ ${pt.minLengthMm} mm` : ""}`;
     case "hatch":
-      return `hatch ${pt.pitchMm} mm @ ${pt.angleDeg}°`;
+      return `hatch ${pt.pitchMm} mm @ ${pt.angleDeg}°${pt.linkMm ? " linked" : ""}`;
     case "crossHatch":
-      return `crosshatch ${pt.pitchMm} mm @ ${pt.anglesDeg.join("/")}°`;
+      return `crosshatch ${pt.pitchMm} mm @ ${pt.anglesDeg.join("/")}°${pt.linkMm ? " linked" : ""}`;
     case "boundaryHatch":
-      return `${pt.shells} shell${pt.shells === 1 ? "" : "s"} + hatch ${pt.pitchMm} mm`;
+      return `${pt.shells} shell${pt.shells === 1 ? "" : "s"} + hatch ${pt.pitchMm} mm${pt.linkMm ? " linked" : ""}`;
     default:
       return "passthrough";
   }

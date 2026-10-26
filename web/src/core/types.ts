@@ -102,8 +102,8 @@ export type Pattern =
       minLengthMm?: number | null;
       simplifyMm?: number | null;
     }
-  | { kind: "hatch"; pitchMm: number; angleDeg: number; phaseMm: number; serpentine: boolean; insetMm: number }
-  | { kind: "crossHatch"; pitchMm: number; anglesDeg: number[]; phaseMm: number; serpentine: boolean; insetMm: number }
+  | { kind: "hatch"; pitchMm: number; angleDeg: number; phaseMm: number; serpentine: boolean; insetMm: number; linkMm?: number | null }
+  | { kind: "crossHatch"; pitchMm: number; anglesDeg: number[]; phaseMm: number; serpentine: boolean; insetMm: number; linkMm?: number | null }
   | {
       kind: "boundaryHatch";
       shells: number;
@@ -113,6 +113,8 @@ export type Pattern =
       anglesDeg: number[];
       phaseMm: number;
       serpentine: boolean;
+      /** Join rows along the boundary where the link is at most this long; null = off. */
+      linkMm?: number | null;
     };
 
 export interface Pass {

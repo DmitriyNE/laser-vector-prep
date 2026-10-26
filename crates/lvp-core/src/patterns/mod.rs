@@ -132,6 +132,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             phase_mm,
             serpentine,
             inset_mm,
+            link_mm,
         } => with_region(geometry, "hatch", |region| {
             let area = if *inset_mm != 0.0 {
                 region.offset(-inset_mm)
@@ -146,6 +147,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
                         angle_deg: *angle_deg,
                         phase_mm: *phase_mm,
                         serpentine: *serpentine,
+                        link_mm: *link_mm,
                     },
                 ),
                 ..Default::default()
@@ -157,6 +159,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             phase_mm,
             serpentine,
             inset_mm,
+            link_mm,
         } => with_region(geometry, "crosshatch", |region| {
             let area = if *inset_mm != 0.0 {
                 region.offset(-inset_mm)
@@ -172,6 +175,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
                         angle_deg: *angle,
                         phase_mm: *phase_mm,
                         serpentine: *serpentine,
+                        link_mm: *link_mm,
                     },
                 ));
             }
@@ -185,6 +189,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             angles_deg,
             phase_mm,
             serpentine,
+            link_mm,
         } => with_region(geometry, "boundary + hatch", |region| {
             let mut out = PatternOutput::default();
             // Shells at pitch/2, 3 pitch/2, ... inward (centreline semantics, like contour fill).
@@ -202,6 +207,7 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
                         angle_deg: *angle,
                         phase_mm: *phase_mm,
                         serpentine: *serpentine,
+                        link_mm: *link_mm,
                     },
                 ));
             }
@@ -1551,6 +1557,7 @@ mod tests {
                     phase_mm: 0.0,
                     serpentine: true,
                     inset_mm: 0.0,
+                    link_mm: None,
                 },
                 &Geometry::Region(region.clone()),
             )
@@ -1564,6 +1571,7 @@ mod tests {
                 phase_mm: 0.0,
                 serpentine: true,
                 inset_mm: 0.0,
+                link_mm: None,
             },
             &Geometry::Region(region.clone()),
         );
@@ -1578,6 +1586,7 @@ mod tests {
                 angles_deg: vec![45.0],
                 phase_mm: 0.0,
                 serpentine: true,
+                link_mm: None,
             },
             &Geometry::Region(region.clone()),
         );

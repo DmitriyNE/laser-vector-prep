@@ -149,6 +149,16 @@
   }
 </script>
 
+{#snippet linkEditor()}
+  {#if passInfo && (passInfo.pass.pattern.kind === "hatch" || passInfo.pass.pattern.kind === "crossHatch" || passInfo.pass.pattern.kind === "boundaryHatch")}
+    {@const pattern = passInfo.pass.pattern}
+    <label title="join each row to the next along the boundary, as a zigzag, where that stretch of boundary is at most this long; the links are marked (shown and audited); empty = separate rows">Link rows up to (mm)
+      <input type="number" step="0.01" min="0" placeholder="off" value={pattern.linkMm ?? ""}
+        oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { pattern.linkMm = v === "" ? null : Number(v); }); }} />
+    </label>
+  {/if}
+{/snippet}
+
 {#snippet joinEditor(get: () => JoinStyle | undefined, set: (j: JoinStyle) => void)}
   {@const j = get() ?? { kind: "round" }}
   <label>Corner joins
@@ -331,6 +341,7 @@
       <label title="offset of the global line lattice, so neighbouring regions line up">Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
       <label>Inset from boundary (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
       <label class="check" title="alternate the direction of every other row"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
+      {@render linkEditor()}
     {:else if pass.pattern.kind === "crossHatch"}
       <label title={CENTRELINE}>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
       <label title="comma separated">Angles (°)
@@ -339,6 +350,7 @@
       <label title="offset of the global line lattice, so neighbouring regions line up">Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
       <label>Inset from boundary (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
       <label class="check" title="alternate the direction of every other row"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
+      {@render linkEditor()}
     {:else if pass.pattern.kind === "boundaryHatch"}
       <label>Shells <input type="number" step="1" min="0" bind:value={pass.pattern.shells} oninput={touch} /></label>
       <label>Shell pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.shellPitchMm} oninput={touch} /></label>
@@ -349,6 +361,7 @@
       </label>
       <label title="offset of the global line lattice, so neighbouring regions line up">Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
       <label class="check" title="alternate the direction of every other row"><input type="checkbox" bind:checked={pass.pattern.serpentine} onchange={touch} /> serpentine</label>
+      {@render linkEditor()}
     {:else}
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
       <label title="tolerance for dropping vertices; empty = off">Simplify (mm)

@@ -359,6 +359,11 @@ pub enum Pattern {
         /// Shrink the region by this much before hatching (edge coverage control).
         #[serde(default)]
         inset_mm: f64,
+        /// Join consecutive rows into zigzag paths where a stretch of the boundary at most
+        /// this long leads from the end of one to the start of the next (mm); absent
+        /// keeps every row separate. Schema v3.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link_mm: Option<f64>,
     },
     /// Independent hatches at several angles.
     #[serde(rename_all = "camelCase")]
@@ -371,6 +376,11 @@ pub enum Pattern {
         serpentine: bool,
         #[serde(default)]
         inset_mm: f64,
+        /// Join consecutive rows into zigzag paths where a stretch of the boundary at most
+        /// this long leads from the end of one to the start of the next (mm); absent
+        /// keeps every row separate. Schema v3.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link_mm: Option<f64>,
     },
     /// Perimeter shells followed by a hatch of the remaining interior.
     #[serde(rename_all = "camelCase")]
@@ -388,6 +398,11 @@ pub enum Pattern {
         phase_mm: f64,
         #[serde(default = "default_true")]
         serpentine: bool,
+        /// Join consecutive rows into zigzag paths where a stretch of the boundary at most
+        /// this long leads from the end of one to the start of the next (mm); absent
+        /// keeps every row separate. Schema v3.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link_mm: Option<f64>,
     },
 }
 
