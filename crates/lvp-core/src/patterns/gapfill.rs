@@ -337,7 +337,13 @@ fn chain(chords: Vec<Chord>, min_length: f64) -> Vec<Pline> {
             pts.push(np);
             cur = nv;
         }
-        let p = pline::from_points(pts, false);
+        // A chain that comes back to where it began is a closed centreline (the core of a
+        // ring around a hole), and the readers would close it on import anyway.
+        let closed = cur == origin && pts.len() > 3;
+        if closed {
+            pts.pop();
+        }
+        let p = pline::from_points(pts, closed);
         if pline::length(&p) >= min_length {
             out.push(p);
         }
@@ -383,6 +389,37 @@ mod tests {
         for v in l.iter_vertexes() {
             assert!((v.y - 0.125).abs() < 2e-3, "centreline y {}", v.y);
         }
+    }
+
+    #[test]
+    fn a_thin_ring_gets_a_closed_centreline() {
+        // A square annulus 0.2 mm wide: its medial axis is one loop, emitted closed.
+        let ring = Region::from_loops(
+            [rect(Point::new(0.0, 0.0), Point::new(4.0, 4.0))],
+            LoopRule::NonZero,
+        )
+        .difference(&Region::from_loops(
+            [rect(Point::new(0.2, 0.2), Point::new(3.8, 3.8))],
+            LoopRule::NonZero,
+        ));
+        let (lines, skipped) = centrelines(
+            &ring,
+            &GapFillOptions {
+                assumed_width_mm: 0.2,
+                flatten_tolerance_mm: 0.001,
+                min_length_mm: 0.1,
+            },
+        );
+        assert_eq!(skipped, 0);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].is_closed());
+        // The axis bends around the inner corners, so it is a little shorter than the
+        // square through the middle of the band.
+        let len = pline::length(&lines[0]);
+        assert!(
+            len > 0.97 * 4.0 * 3.8 && len <= 4.0 * 3.8 + 1e-9,
+            "length {len}"
+        );
     }
 
     #[test]

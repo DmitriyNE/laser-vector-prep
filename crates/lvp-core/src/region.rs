@@ -1500,23 +1500,47 @@ pub fn stroke_many(paths: &[Pline], width: f64) -> Region {
     // Each path's stroke is independent (and most of the work): built in parallel.
     let parts = crate::par::map(clean, |p| {
         if crate::cancel::cancelled() {
-            Region::empty()
-        } else if p.is_closed() && p.area().abs() > 1e-18 {
-            let base = Region::from_loops([p], LoopRule::NonZero);
-            let outer = base.offset(r);
-            let inner = base.offset(-r);
-            if inner.is_empty() {
-                outer
-            } else {
-                outer.difference(&inner)
-            }
-        } else if let Some(region) = open_stroke(&p, r) {
-            region
-        } else {
-            stroke_capsules(std::slice::from_ref(&p), r)
+            return Region::empty();
         }
+        if !p.is_closed() {
+            return stroke_open(&p, r);
+        }
+        // The offsets of a loop's filled area lose any zero-width bridge in it (a stretch
+        // the loop runs back along): those are stroked as open paths.
+        let (loops, bridges) = pline::split_retraced(&p);
+        if bridges.is_empty() {
+            return stroke_closed(p, r);
+        }
+        Region::union_all(loops.into_iter().map(|l| stroke_closed(l, r)).chain(
+            bridges.into_iter().map(|b| {
+                if b.is_closed() {
+                    stroke_closed(b, r)
+                } else {
+                    stroke_open(&b, r)
+                }
+            }),
+        ))
     });
     Region::union_all(parts)
+}
+
+/// The ring between the outward and inward offsets of a loop's filled area.
+fn stroke_closed(p: Pline, r: f64) -> Region {
+    if p.area().abs() <= 1e-18 {
+        return stroke_open(&p, r);
+    }
+    let base = Region::from_loops([p], LoopRule::NonZero);
+    let outer = base.offset(r);
+    let inner = base.offset(-r);
+    if inner.is_empty() {
+        outer
+    } else {
+        outer.difference(&inner)
+    }
+}
+
+fn stroke_open(p: &Pline, r: f64) -> Region {
+    open_stroke(p, r).unwrap_or_else(|| stroke_capsules(std::slice::from_ref(p), r))
 }
 
 /// Stroke of an open path from its two side offsets plus end caps; `None` when an offset
@@ -2116,6 +2140,38 @@ mod tests {
         assert!(s.contains(Point::new(5.0, 0.4)));
         assert!(!s.contains(Point::new(5.0, 0.6)));
         assert!(s.contains(Point::new(10.4, 0.0)));
+    }
+
+    #[test]
+    fn stroke_of_a_loop_that_runs_back_along_itself_covers_the_bridge() {
+        // Two unit squares joined by a 3 mm zero-width bridge, as an offset at exactly half
+        // a neck's width leaves them: the offsets of the loop's area lost the bridge.
+        let lp = pline::from_points(
+            [
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (1.0, 0.5),
+                (4.0, 0.5),
+                (4.0, 0.0),
+                (5.0, 0.0),
+                (5.0, 1.0),
+                (4.0, 1.0),
+                (4.0, 0.5),
+                (1.0, 0.5),
+                (1.0, 1.0),
+                (0.0, 1.0),
+            ]
+            .map(|(x, y)| Point::new(x, y)),
+            true,
+        );
+        let s = stroke(&lp, 0.2);
+        assert!(s.contains(Point::new(2.5, 0.5)));
+        assert!(s.contains(Point::new(2.5, 0.59)));
+        assert!(!s.contains(Point::new(2.5, 0.61)));
+        // Two rings of perimeter 4 swept 0.2 wide (less their rounded corners) and the
+        // 3 mm bridge, less its ends inside the rings.
+        let expected = 2.0 * 4.0 * 0.2 + 3.0 * 0.2 - 2.0 * 0.1 * 0.2;
+        assert_near(s.area(), expected, 0.02);
     }
 
     #[test]

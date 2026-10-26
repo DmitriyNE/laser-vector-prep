@@ -64,8 +64,13 @@ fn minimum_jump_shortens_travel_and_orders_the_export() {
         plan.before.jump_length_mm
     );
     assert!(plan.after.objective <= plan.before.objective);
-    // Contour rings are closed: seams rotate but nothing reverses.
-    assert!(plan.order.iter().all(|r| !r.reversed));
+    // Contour rings are closed: their seams rotate but they never reverse (only the open
+    // gap-fill centrelines may).
+    assert!(
+        plan.order
+            .iter()
+            .all(|r| { !r.reversed || !planned.pass(&r.pass).unwrap().paths[r.index].is_closed() })
+    );
 
     // Export follows the plan: same number of copper paths, first exported path is the
     // first planned one.

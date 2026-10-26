@@ -11,6 +11,7 @@ pub mod trace;
 use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 
 use crate::diag::Diagnostic;
+use crate::geom::Point;
 use crate::model::Pattern;
 use crate::pline::Pline;
 use crate::region::Region;
@@ -236,6 +237,16 @@ fn passthrough(geometry: &Geometry, simplify_mm: Option<f64>, reverse: bool) -> 
     out
 }
 
+/// Contour fill settings with the defaults applied and the tolerance clamped.
+#[derive(Clone, Copy)]
+struct FillSettings {
+    pitch: f64,
+    first: f64,
+    end_spacing: f64,
+    simplify: Option<f64>,
+    gap_fill: bool,
+}
+
 struct IslandFill {
     paths: Vec<Pline>,
     rings: usize,
@@ -244,21 +255,16 @@ struct IslandFill {
 }
 
 /// Rings of one island from depth `first` inward, then the gap-fill centrelines.
-fn fill_island(
-    region: &Region,
-    pitch_mm: f64,
-    first: f64,
-    end_spacing: f64,
-    simplify: Option<f64>,
-    gap_fill: bool,
-) -> IslandFill {
+fn fill_island(region: &Region, s: &FillSettings) -> IslandFill {
     let mut fill = IslandFill {
         paths: Vec::new(),
         rings: 0,
         gap_fills: 0,
         skipped: 0,
     };
-    let mut depth = first;
+    // The area inside each ring: `region` shrunk by the ring's depth.
+    let mut levels: Vec<Region> = Vec::new();
+    let mut depth = s.first;
     loop {
         if crate::cancel::cancelled() {
             return fill;
@@ -267,41 +273,249 @@ fn fill_island(
         if ring.is_empty() || fill.rings >= MAX_RINGS {
             break;
         }
-        fill.rings += ring.loops.len();
-        match simplify {
-            Some(t) => fill
-                .paths
-                .extend(ring.loops.iter().map(|l| crate::pline::simplify(l, t))),
-            None => fill.paths.extend(ring.loops),
+        // At exactly half a feature's width the ring runs into the feature and back along
+        // its centreline: that stretch is drawn once, as an open path.
+        for l in &ring.loops {
+            let (loops, bridges) = crate::pline::split_retraced(l);
+            for p in loops.into_iter().chain(bridges) {
+                fill.rings += 1;
+                fill.paths.push(match s.simplify {
+                    Some(t) => crate::pline::simplify(&p, t),
+                    None => p,
+                });
+            }
         }
-        depth += pitch_mm;
+        if s.gap_fill {
+            levels.push(ring);
+        }
+        depth += s.pitch;
     }
-    if gap_fill {
-        // Rings sit at depths first, first + pitch, ...; each sweeps ±pitch/2. The cores they
-        // miss are the region deeper than the last ring plus the end spacing (pitch/2 by
-        // default), which an offset gives directly (and exactly, for offset-based rings)
-        // without stroking thousands of ring segments.
-        let covered_depth = if fill.rings == 0 {
-            (first - end_spacing).max(0.0)
-        } else {
-            depth - pitch_mm + end_spacing
+    if s.gap_fill {
+        let opts = gapfill::GapFillOptions {
+            assumed_width_mm: s.pitch,
+            flatten_tolerance_mm: (s.pitch * 0.01).max(1e-5),
+            min_length_mm: s.pitch / 2.0,
         };
-        let gaps = region.offset(-covered_depth);
-        if !gaps.is_empty() {
-            let (lines, skipped) = gapfill::centrelines(
-                &gaps,
-                &gapfill::GapFillOptions {
-                    assumed_width_mm: pitch_mm,
-                    flatten_tolerance_mm: (pitch_mm * 0.01).max(1e-5),
-                    min_length_mm: pitch_mm / 2.0,
-                },
-            );
-            fill.gap_fills = lines.len();
+        for core in cores(region, &levels, s.first, s.pitch, s.end_spacing) {
+            if crate::cancel::cancelled() {
+                return fill;
+            }
+            let (lines, skipped) = gapfill::centrelines(&core, &opts);
+            fill.gap_fills += lines.len();
             fill.paths.extend(lines);
-            fill.skipped = skipped;
+            fill.skipped += skipped;
         }
     }
     fill
+}
+
+/// The parts of `region` its rings leave unswept: the cores gap fill draws centrelines in.
+///
+/// Ring `j` lies at depth `d_j = first + j * pitch` and `levels[j]` is the area inside it
+/// (`region` shrunk by `d_j`). Each ring sweeps half a pitch to either side, except that the
+/// last ring of any part is credited only `end_spacing` beyond itself. So the points deeper
+/// than `d_j + end_spacing` are missed unless ring `j + 1` passes within half a pitch, that
+/// is, unless they lie within `pitch - end_spacing` of `levels[j + 1]`. Where the region is
+/// wide that distance reaches back to the swept band; in necks and fingers that run out of
+/// rings before the rest of the island, and in sharp corners, it does not, and what is left
+/// is a core at that depth. The innermost level has no next ring: its core is everything
+/// deeper than `d_last + end_spacing`; parts too thin for the first ring are cores before it.
+///
+/// A round sweep also misses a sliver at every convex corner, `(tan(φ/2) - φ/2) r²` for a
+/// turn of `φ`. Corners of 60° or wider (a mitre at most twice the sweep's reach) count as
+/// swept, as if the next ring's sweep were mitred there: a centreline in such a sliver
+/// would be shorter than about a pitch and is not worth a stroke. Sharper corners are cores.
+/// (The audit, which strokes the paths themselves, still reports these corner slivers.)
+fn cores(
+    region: &Region,
+    levels: &[Region],
+    first: f64,
+    pitch: f64,
+    end_spacing: f64,
+) -> Vec<Region> {
+    // Grows the next level slightly more than it must, so that its boundary passes outside
+    // the coinciding stretches of the deeper boundary instead of onto them.
+    let margin = pitch * 1e-3;
+    let mut out = Vec::new();
+    for j in -1..levels.len() as isize {
+        let deeper = if j < 0 {
+            (first - end_spacing).max(0.0)
+        } else {
+            first + j as f64 * pitch + end_spacing
+        };
+        let next = levels.get((j + 1) as usize);
+        let reach = first + (j + 1) as f64 * pitch - deeper;
+        if next.is_some() && reach <= 0.0 {
+            continue; // the next ring is no deeper than where its core would start
+        }
+        let kites = next.map(|next| Kites::new(next, reach + margin));
+        // Cores only form where something collapses between the two rings: an edge or arc
+        // vanishes, a loop splits or disappears. Inner offsets of a boundary whose reflex
+        // corners are already rounded add no vertices otherwise, so two rings with the
+        // same number of loops and of vertices have no core between them, except in a
+        // corner sharper than the kites take.
+        if j >= 0
+            && let (Some(next), Some(kites)) = (next, &kites)
+            && !kites.sharp
+            && same_structure(&levels[j as usize], next)
+        {
+            continue;
+        }
+        let inner = region.offset(-deeper);
+        if inner.is_empty() {
+            break; // every later level is deeper still
+        }
+        let core = match (next, kites) {
+            (Some(next), Some(kites)) => {
+                let missed = inner.difference(&next.offset(reach + margin));
+                Region {
+                    incomplete: missed.incomplete,
+                    loops: missed
+                        .islands()
+                        .into_iter()
+                        .filter(|island| !kites.covers(island))
+                        .flat_map(|island| island.loops)
+                        .collect(),
+                }
+            }
+            _ => inner,
+        };
+        if !core.is_empty() {
+            out.push(core);
+        }
+    }
+    out
+}
+
+/// Same number of loops and of vertices.
+fn same_structure(a: &Region, b: &Region) -> bool {
+    let vertices = |r: &Region| r.loops.iter().map(|l| l.vertex_count()).sum::<usize>();
+    a.loops.len() == b.loops.len() && vertices(a) == vertices(b)
+}
+
+/// The mitre kites of a region grown by `r`: for each convex corner whose mitre reaches at
+/// most twice `r` (a turn of at most 120°), the quadrilateral between the corner, the ends
+/// of the round join and the mitre tip (from the tangents, for arcs). Bucketed by a grid.
+struct Kites {
+    kites: Vec<[Point; 4]>,
+    cell: f64,
+    grid: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    /// Some convex corner turns by more than the limit allows (sharper than 60°).
+    sharp: bool,
+}
+
+impl Kites {
+    /// Largest mitre length, as a multiple of the grown distance.
+    const LIMIT: f64 = 2.0;
+
+    fn new(region: &Region, r: f64) -> Kites {
+        let mut kites = Vec::new();
+        let mut sharp = false;
+        for l in &region.loops {
+            let n = l.vertex_count();
+            if n < 2 {
+                continue;
+            }
+            for i in 0..n {
+                let (p, c, q) = (l.at((i + n - 1) % n), l.at(i), l.at((i + 1) % n));
+                let unit = |t: cavalier_contours::core::math::Vector2<f64>| {
+                    let h = t.x.hypot(t.y);
+                    (h > 0.0).then(|| (t.x / h, t.y / h))
+                };
+                let (Some(t_in), Some(t_out)) = (
+                    unit(cavalier_contours::polyline::seg_tangent_vector(
+                        p,
+                        c,
+                        c.pos(),
+                    )),
+                    unit(cavalier_contours::polyline::seg_tangent_vector(
+                        c,
+                        q,
+                        c.pos(),
+                    )),
+                ) else {
+                    continue;
+                };
+                // Filled area on the left: a convex corner turns left.
+                if t_in.0 * t_out.1 - t_in.1 * t_out.0 <= 1e-12 {
+                    continue;
+                }
+                let cos_half = ((1.0 + t_in.0 * t_out.0 + t_in.1 * t_out.1) / 2.0).sqrt();
+                if cos_half * Self::LIMIT < 1.0 {
+                    sharp = true;
+                    continue;
+                }
+                let (n_in, n_out) = ((t_in.1, -t_in.0), (t_out.1, -t_out.0));
+                let Some(u) = unit(cavalier_contours::core::math::Vector2::new(
+                    n_in.0 + n_out.0,
+                    n_in.1 + n_out.1,
+                )) else {
+                    continue;
+                };
+                let reach = r / cos_half;
+                kites.push([
+                    Point::new(c.x, c.y),
+                    Point::new(c.x + r * n_in.0, c.y + r * n_in.1),
+                    Point::new(c.x + reach * u.0, c.y + reach * u.1),
+                    Point::new(c.x + r * n_out.0, c.y + r * n_out.1),
+                ]);
+            }
+        }
+        let cell = (Self::LIMIT * r).max(1e-9);
+        let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (k, kite) in kites.iter().enumerate() {
+            let key = (
+                (kite[0].x / cell).floor() as i64,
+                (kite[0].y / cell).floor() as i64,
+            );
+            grid.entry(key).or_default().push(k);
+        }
+        Kites {
+            kites,
+            cell,
+            grid,
+            sharp,
+        }
+    }
+
+    /// Whether `island` lies within one kite (its vertices and arc midpoints do).
+    fn covers(&self, island: &Region) -> bool {
+        let Some(first) = island.loops.first().map(|l| l.at(0)) else {
+            return true;
+        };
+        let (kx, ky) = (
+            (first.x / self.cell).floor() as i64,
+            (first.y / self.cell).floor() as i64,
+        );
+        let points: Vec<Point> = island
+            .loops
+            .iter()
+            .flat_map(|l| {
+                l.iter_segments().flat_map(|(a, b)| {
+                    let mid = cavalier_contours::polyline::seg_midpoint(a, b);
+                    [Point::new(a.x, a.y), Point::new(mid.x, mid.y)]
+                })
+            })
+            .collect();
+        (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                self.grid.get(&(kx + dx, ky + dy)).is_some_and(|ks| {
+                    ks.iter()
+                        .any(|&k| points.iter().all(|p| in_convex(&self.kites[k], *p)))
+                })
+            })
+        })
+    }
+}
+
+/// Whether `p` lies in the convex quadrilateral `q` (counter-clockwise), within rounding.
+fn in_convex(q: &[Point; 4], p: Point) -> bool {
+    (0..4).all(|i| {
+        let (a, b) = (q[i], q[(i + 1) % 4]);
+        let cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        cross >= -1e-12 * (1.0 + (b.x - a.x).hypot(b.y - a.y))
+    })
 }
 
 /// Contour fill parameters (see [`Pattern::ContourFill`]).
@@ -359,7 +573,13 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
         }
         t.min(pitch_mm / 4.0)
     });
-    let first = first_offset_mm.unwrap_or(pitch_mm / 2.0);
+    let settings = FillSettings {
+        pitch: pitch_mm,
+        first: first_offset_mm.unwrap_or(pitch_mm / 2.0),
+        end_spacing,
+        simplify,
+        gap_fill,
+    };
     // Islands are filled independently (in parallel where a thread pool exists): every
     // offset then only sees one island's loops, so the work grows linearly with their
     // number instead of offsetting the whole layer at every depth.
@@ -367,7 +587,7 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
     let count = islands.len().max(1) as f64;
     let filled = std::sync::atomic::AtomicUsize::new(0);
     let fills = crate::par::map(islands, |island| {
-        let fill = fill_island(&island, pitch_mm, first, end_spacing, simplify, gap_fill);
+        let fill = fill_island(&island, &settings);
         let n = filled.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         crate::cancel::step(n as f64 / count);
         fill
@@ -426,10 +646,124 @@ pub fn audit(region: &Region, paths: &[Pline], width: f64) -> Audit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::Point;
     use crate::pline::{circle, rect};
     use crate::region::LoopRule;
+    use proptest::prelude::*;
     use std::f64::consts::PI;
+
+    fn rect_region(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
+        Region::from_loops(
+            [rect(Point::new(x0, y0), Point::new(x1, y1))],
+            LoopRule::NonZero,
+        )
+    }
+
+    fn contour(pitch: f64, gap_fill: bool, region: &Region) -> PatternOutput {
+        generate(
+            &Pattern::ContourFill {
+                pitch_mm: pitch,
+                first_offset_mm: None,
+                gap_fill,
+                end_spacing_mm: None,
+                simplify_mm: None,
+            },
+            &Geometry::Region(region.clone()),
+        )
+    }
+
+    /// Two 4 mm squares joined by an 8 mm neck `w` wide, and the neck's middle 4 mm.
+    fn dumbbell(w: f64) -> (Region, Region) {
+        let (lo, hi) = (2.0 - w / 2.0, 2.0 + w / 2.0);
+        let shape = rect_region(0.0, 0.0, 4.0, 4.0)
+            .union(&rect_region(10.0, 0.0, 14.0, 4.0))
+            .union(&rect_region(3.0, lo, 11.0, hi));
+        (shape, rect_region(5.0, lo, 9.0, hi))
+    }
+
+    /// A 4 mm square with a 5 mm finger `w` wide, and the finger's middle 3 mm.
+    fn finger(w: f64) -> (Region, Region) {
+        let (lo, hi) = (2.0 - w / 2.0, 2.0 + w / 2.0);
+        let shape = rect_region(0.0, 0.0, 4.0, 4.0).union(&rect_region(3.0, lo, 9.0, hi));
+        (shape, rect_region(5.0, lo, 8.0, hi))
+    }
+
+    #[test]
+    fn gap_fill_reaches_necks_that_run_out_of_rings_before_the_island() {
+        // DEF-15. At pitch 0.1 the rings at depths 0.05 and 0.15 run through the 0.45 mm
+        // neck and the third does not; the 0.05 mm core between them stayed unmarked, as
+        // gap fill only looked past the squares' last ring.
+        let (shape, neck) = dumbbell(0.45);
+        let plain = contour(0.1, false, &shape);
+        let filled = contour(0.1, true, &shape);
+        assert!((missed_area(&neck, &plain.paths, 0.1) - 0.2).abs() < 1e-3);
+        let missed = missed_area(&neck, &filled.paths, 0.1);
+        assert!(missed < 1e-6, "neck missed {missed}");
+    }
+
+    #[test]
+    fn a_ring_at_exactly_half_a_width_marks_the_centreline_once() {
+        // A 0.3 mm neck at pitch 0.1: the ring at depth 0.15 collapses onto the neck's
+        // centreline, so it is two square rings and one open path along the neck.
+        let (shape, neck) = dumbbell(0.3);
+        let out = contour(0.1, false, &shape);
+        for p in out.paths.iter().filter(|p| p.is_closed()) {
+            assert!(
+                crate::pline::split_retraced(p).1.is_empty(),
+                "a ring retraces itself"
+            );
+        }
+        let open: Vec<&Pline> = out.paths.iter().filter(|p| !p.is_closed()).collect();
+        assert_eq!(open.len(), 1);
+        let b = crate::pline::bounds(open[0]).unwrap();
+        assert!((b.min.y - 2.0).abs() < 1e-9 && (b.max.y - 2.0).abs() < 1e-9);
+        assert!(b.min.x <= 4.0 + 1e-9 && b.max.x >= 10.0 - 1e-9, "{b:?}");
+        // The audit sweeps it like any other path: nothing in the neck is missed.
+        let missed = missed_area(&neck, &out.paths, 0.1);
+        assert!(missed < 1e-9, "neck missed {missed}");
+    }
+
+    #[test]
+    fn gap_fill_leaves_right_angles_to_the_rings_and_fills_sharp_corners() {
+        // A 3.06 x 5 mm rectangle: the corners turn by 90°, so the only gap fill is the
+        // 0.06 mm core past the last ring.
+        let block = rect_region(0.0, 0.0, 3.06, 5.0);
+        let out = contour(0.1, true, &block);
+        assert_eq!(out.stats.gap_fills, 1);
+        // A 20° spike: every ring leaves a sliver ahead of its tip, too long to sweep.
+        let spike = Region::from_loops(
+            [crate::pline::from_points(
+                [
+                    Point::new(0.0, 0.0),
+                    Point::new(10.0, -1.76),
+                    Point::new(10.0, 1.76),
+                ],
+                true,
+            )],
+            LoopRule::NonZero,
+        );
+        let out = contour(0.1, true, &spike);
+        let near_tip = out.paths[out.stats.rings..]
+            .iter()
+            .filter(|p| crate::pline::bounds(p).unwrap().max.x < 5.0)
+            .count();
+        assert!(near_tip >= 3, "{near_tip} centrelines near the tip");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        #[test]
+        fn necks_and_fingers_are_swept_end_to_end(
+            w in 0.15..1.5f64,
+            pitch in 0.04..0.2f64,
+            is_finger in any::<bool>(),
+        ) {
+            let (shape, middle) = if is_finger { finger(w) } else { dumbbell(w) };
+            let out = contour(pitch, true, &shape);
+            let missed = missed_area(&middle, &out.paths, pitch);
+            prop_assert!(missed <= 1e-6 * middle.area().max(1.0), "missed {} of {}", missed, middle.area());
+        }
+    }
 
     #[test]
     fn passthrough_keeps_paths_and_reverses() {

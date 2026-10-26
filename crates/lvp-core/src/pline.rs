@@ -198,6 +198,158 @@ pub fn sanitize(p: &Pline) -> Option<Pline> {
     (q.vertex_count() >= 2).then_some(q)
 }
 
+/// Split a closed loop wherever it runs back along itself: an offset taken at exactly half
+/// a feature's width keeps the collapsed feature as a zero-width bridge, one segment there
+/// and the same segment reversed on the way back (vertices within [`REPEAT_EPS`]). Returns
+/// the closed loops either side of the bridges and each bridge once, as an open path
+/// (consecutive bridge segments joined; one that closes on itself, a circle run round once
+/// each way, as a loop). A loop without bridges comes back unchanged; an open path is
+/// returned as it is, among the open paths.
+pub fn split_retraced(p: &Pline) -> (Vec<Pline>, Vec<Pline>) {
+    if !p.is_closed() {
+        return (Vec::new(), vec![p.clone()]);
+    }
+    let mut loops = Vec::new();
+    let mut bridges: Vec<(Point, Point, f64)> = Vec::new();
+    let mut todo = vec![p.clone()];
+    while let Some(lp) = todo.pop() {
+        let n = lp.vertex_count();
+        let Some((i, j)) = retraced_pair(&lp) else {
+            loops.push(lp);
+            continue;
+        };
+        let v = |k: usize| lp.at(k % n);
+        bridges.push((point(v(i).pos()), point(v(i + 1).pos()), v(i).bulge));
+        // The two loops either side: segments i+1..j-1 and j+1..i-1 (cyclically).
+        for (from, to) in [(i + 1, j), (j + 1, i + n)] {
+            if to <= from {
+                continue;
+            }
+            let mut piece = Pline::new_closed();
+            for k in from..to {
+                piece.add(v(k).x, v(k).y, v(k).bulge);
+            }
+            // A single vertex is no loop (and a one-vertex circle is never produced).
+            if piece.vertex_count() >= 2 {
+                todo.push(piece);
+            }
+        }
+    }
+    (loops, join_segments(bridges))
+}
+
+/// A pair of segments `(i, j)`, `i < j`, of closed loop `p` where `j` is `i` reversed.
+fn retraced_pair(p: &Pline) -> Option<(usize, usize)> {
+    let n = p.vertex_count();
+    if n < 2 {
+        return None;
+    }
+    let cell = |q: Vector2<f64>| {
+        (
+            (q.x / REPEAT_EPS).round() as i64,
+            (q.y / REPEAT_EPS).round() as i64,
+        )
+    };
+    // Segments by the cell of their start.
+    let mut starts: std::collections::HashMap<(i64, i64), Vec<usize>> =
+        std::collections::HashMap::with_capacity(n);
+    for k in 0..n {
+        starts.entry(cell(p.at(k).pos())).or_default().push(k);
+    }
+    for i in 0..n {
+        let (a, b) = (p.at(i), p.at((i + 1) % n));
+        let (cx, cy) = cell(b.pos());
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &j in starts.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    if j <= i {
+                        continue;
+                    }
+                    let (c, d) = (p.at(j), p.at((j + 1) % n));
+                    if c.pos().fuzzy_eq_eps(b.pos(), REPEAT_EPS)
+                        && d.pos().fuzzy_eq_eps(a.pos(), REPEAT_EPS)
+                        && (c.bulge + a.bulge).abs() <= 1e-9
+                    {
+                        return Some((i, j));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Join single segments `(from, to, bulge)` that meet end to end into polylines, only
+/// through points where exactly two of them meet; a chain that comes back to its start is
+/// closed.
+fn join_segments(segments: Vec<(Point, Point, f64)>) -> Vec<Pline> {
+    let key = |p: Point| {
+        (
+            (p.x / REPEAT_EPS).round() as i64,
+            (p.y / REPEAT_EPS).round() as i64,
+        )
+    };
+    let mut at: std::collections::HashMap<(i64, i64), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (k, s) in segments.iter().enumerate() {
+        at.entry(key(s.0)).or_default().push(k);
+        at.entry(key(s.1)).or_default().push(k);
+    }
+    let other = |k: usize, p: Point| -> Option<usize> {
+        let ks = at.get(&key(p))?;
+        (ks.len() == 2).then(|| if ks[0] == k { ks[1] } else { ks[0] })
+    };
+    let mut used = vec![false; segments.len()];
+    let mut out = Vec::new();
+    for start in 0..segments.len() {
+        if used[start] {
+            continue;
+        }
+        // Walk back to the beginning of the chain, then forward along it.
+        let (mut k, mut head) = (start, segments[start].0);
+        let mut steps = 0;
+        while let Some(prev) = other(k, head) {
+            if prev == start || steps > segments.len() {
+                break;
+            }
+            let s = segments[prev];
+            head = if key(s.1) == key(head) { s.0 } else { s.1 };
+            k = prev;
+            steps += 1;
+        }
+        let mut vertices = Vec::new();
+        let mut at_point = head;
+        loop {
+            used[k] = true;
+            let s = segments[k];
+            let (to, bulge) = if key(s.0) == key(at_point) {
+                (s.1, s.2)
+            } else {
+                (s.0, -s.2)
+            };
+            vertices.push((at_point, bulge));
+            at_point = to;
+            match other(k, to) {
+                Some(next) if !used[next] => k = next,
+                _ => break,
+            }
+        }
+        // A bridge can close on itself (a circle run round once each way): a loop.
+        let closed = vertices.len() >= 2 && key(at_point) == key(head);
+        let mut chain = if closed {
+            Pline::new_closed()
+        } else {
+            vertices.push((at_point, 0.0));
+            Pline::new()
+        };
+        for (q, bulge) in vertices {
+            chain.add(q.x, q.y, bulge);
+        }
+        out.push(chain);
+    }
+    out
+}
+
 /// Outline of a stroked polyline with flat ends and mitred joins (bevelled where the mitre
 /// would exceed twice the width): the exact area a square-ended path covers. `ext_begin`
 /// and `ext_end` extend the ends along the path (half the width for square ends). Returns
@@ -583,7 +735,117 @@ mod tests {
         assert!(n.y > 0.99); // left of +x travel is +y, i.e. into the rectangle
     }
 
+    /// A loop around square A, out along `bridge` to square B, around B, and back along the
+    /// bridge (reversed): what an offset at exactly half a trace's width produces.
+    fn bridged(bridge: &[(f64, f64, f64)]) -> Pline {
+        let (s, e) = (bridge[0], bridge[bridge.len() - 1]);
+        let mut p = Pline::new_closed();
+        // Square A below the bridge start, counter-clockwise, ending at the bridge start.
+        p.add(s.0, s.1, 0.0);
+        p.add(s.0 - 1.0, s.1, 0.0);
+        p.add(s.0 - 1.0, s.1 - 2.0, 0.0);
+        p.add(s.0 + 1.0, s.1 - 2.0, 0.0);
+        p.add(s.0 + 1.0, s.1, 0.0);
+        // Out along the bridge.
+        p.add(s.0, s.1, bridge[0].2);
+        for w in &bridge[1..bridge.len() - 1] {
+            p.add(w.0, w.1, w.2);
+        }
+        // Square B above the bridge end.
+        p.add(e.0, e.1, 0.0);
+        p.add(e.0 + 1.0, e.1, 0.0);
+        p.add(e.0 + 1.0, e.1 + 2.0, 0.0);
+        p.add(e.0 - 1.0, e.1 + 2.0, 0.0);
+        p.add(e.0 - 1.0, e.1, 0.0);
+        // Back along the bridge.
+        p.add(e.0, e.1, -bridge[bridge.len() - 2].2);
+        for k in (1..bridge.len() - 1).rev() {
+            p.add(bridge[k].0, bridge[k].1, -bridge[k - 1].2);
+        }
+        p
+    }
+
+    #[test]
+    fn retraced_bridges_split_into_loops_and_one_open_path() {
+        let p = bridged(&[
+            (0.0, 0.0, 0.0),
+            (0.0, 3.0, 0.3),
+            (0.5, 4.0, 0.0),
+            (0.5, 6.0, 0.0),
+        ]);
+        let (loops, open) = split_retraced(&p);
+        assert_eq!(loops.len(), 2);
+        assert_eq!(open.len(), 1, "the bridge comes out once, as one path");
+        for l in &loops {
+            assert!(l.is_closed());
+            assert!((l.area() - 4.0).abs() < 1e-9, "area {}", l.area());
+        }
+        assert_eq!(open[0].vertex_count(), 4);
+        let total: f64 = loops.iter().map(length).sum::<f64>() + 2.0 * length(&open[0]);
+        assert!((total - length(&p)).abs() < 1e-9);
+        // A loop without a bridge is left alone; an open path is passed through.
+        let square = rect(Point::new(0.0, 0.0), Point::new(1.0, 1.0));
+        let (loops, open) = split_retraced(&square);
+        assert!(open.is_empty());
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].vertex_data, square.vertex_data);
+        let line = from_points([Point::new(0.0, 0.0), Point::new(1.0, 0.0)], false);
+        let (loops, open) = split_retraced(&line);
+        assert!(loops.is_empty());
+        assert_eq!(open[0].vertex_data, line.vertex_data);
+        // A spike: out and straight back.
+        let spike = from_points(
+            [
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (1.0, 0.5),
+                (3.0, 0.5),
+                (1.0, 0.5),
+                (1.0, 1.0),
+                (0.0, 1.0),
+            ]
+            .map(|(x, y)| Point::new(x, y)),
+            true,
+        );
+        let (loops, open) = split_retraced(&spike);
+        assert_eq!((loops.len(), open.len()), (1, 1));
+        assert!((loops[0].area() - 1.0).abs() < 1e-12);
+        assert!((length(&open[0]) - 2.0).abs() < 1e-12);
+        // A circle run round once each way (a ring at exactly half an annulus's width):
+        // the circle once, closed.
+        let mut twice = Pline::new_closed();
+        for (x, b) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+            twice.add(x, 0.0, b);
+        }
+        let (loops, bridges) = split_retraced(&twice);
+        assert!(loops.is_empty());
+        assert_eq!(bridges.len(), 1);
+        assert!(bridges[0].is_closed());
+        assert!((length(&bridges[0]) - 2.0 * PI).abs() < 1e-12);
+    }
+
     proptest! {
+        #[test]
+        fn splitting_retraced_loops_keeps_area_and_length(
+            steps in prop::collection::vec((-1.0..1.0f64, 0.2..2.0f64, -0.5..0.5f64), 1..6)
+        ) {
+            // A bridge of random straight and arc steps, heading up.
+            let mut bridge = vec![(0.0, 0.0, 0.0)];
+            for (dx, dy, b) in &steps {
+                let last = *bridge.last().unwrap();
+                bridge.last_mut().unwrap().2 = *b;
+                bridge.push((last.0 + dx, last.1 + dy, 0.0));
+            }
+            let p = bridged(&bridge);
+            let (loops, open) = split_retraced(&p);
+            prop_assert_eq!(loops.len(), 2);
+            prop_assert_eq!(open.len(), 1);
+            let area: f64 = loops.iter().map(|l| l.area()).sum();
+            prop_assert!((area - p.area()).abs() < 1e-9);
+            let total: f64 = loops.iter().map(length).sum::<f64>() + 2.0 * length(&open[0]);
+            prop_assert!((total - length(&p)).abs() < 1e-9);
+        }
+
         #[test]
         fn flattened_circle_stays_on_circle(cx in -100.0..100.0f64, cy in -100.0..100.0f64,
                                             r in 0.01..50.0f64, tol in 1e-4..0.1f64) {
