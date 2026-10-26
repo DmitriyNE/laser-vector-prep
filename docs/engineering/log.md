@@ -3,6 +3,49 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-26 — Padstack pads, and what they uncovered
+
+The owner saw the Altium board's teardrops without its pads (DEF-21): Altium writes most
+pads only in the step's padstacks, which the reader skipped. With them read (1,548 pads,
+each once where a layer's features also carry it), Layer 1 took 15.7 s to evaluate instead
+of 5.6 s. Its coverage audit had tripled, and following that led through three defects.
+
+A round via pad on Layer 1 came out as a 100-gon. The polygon fallback had flattened it:
+the whole inner layer was one cluster (a coil's bounding box covers the board) and the
+exact boolean could not close it. The smallest failing case was a round pad and a
+polygonal one with a vertex 9.5 nm inside the circle, which the kernel reported crossing
+three times: it replaced the true crossing, 70 µm along the polygon's edge, by that vertex
+(DEF-22). The kernel is now vendored with a fix (D38), and a cluster that still fails is
+split into the groups of loops that cross or wind round one another, so the rest keeps its
+arcs. Most remaining fallbacks are near-coincident differences inside the fill, whose
+results are slivers.
+
+The audit then still reported 3.9 mm² of spill on Layer 2. A fill ring that touches itself
+where the pour narrows was stroked as the ring between the offsets of its area, and the
+kernel's offset of the self-touching loop lost a lobe, which the stroke then covered
+(DEF-23). Paths are now cut where they cross or touch themselves. A new proptest (every
+point within half the width of a path is in its stroke, every point further is not) then
+found two older stroke bugs, trimmed offsets at hairpins and tight arcs, both fixed. The
+swept area of 20 µm rings a pitch apart is full of specks where neighbouring strokes just
+touch; the audit now ignores those below 1 µm² (D38), which took its two differences from
+4.1 s to 1.1 s on Layer 1 without changing the missed area.
+
+The owner also saw one slot shown on several layers in the Sources list (DEF-24): the list
+read the mapping of the last finished evaluation. Bindings are now resolved before each
+evaluation and updated as soon as a layer is mapped.
+
+With all the pads, natively: Top Layer 3.9 s, Layer 1 4.5 s, Bottom Layer 9.5 s, Layer 2
+26 s (a plane with 553 holes, see todo), under a machine load of 8 to 12. In Chrome the
+import takes 6.1 s (was 6.9 s) and remapping to Layer 1 6.5 s (was 8.6 s).
+
+Learned:
+
+- An odd number of crossings between two closed loops is impossible, and is the first thing
+  to look for when the exact boolean cannot close a boundary.
+- A proptest of an operation against its definition (here: distance to the path) finds
+  more than tests of the cases one thought of; it found two stroke bugs in code that had
+  tests.
+
 ## 2026-10-26 — The owner's test files: an Altium IPC-2581 board and a DXF
 
 The owner could not map the inner copper layers of an Altium IPC-2581 export (`.cvg`) onto

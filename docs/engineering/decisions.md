@@ -604,3 +604,29 @@ pattern.
   constrained path's pieces kept in order; pieces of a directed path stay directed.
 - **Schema v3** with an identity migration: the deployed v2 app would otherwise read a v3
   profile and silently drop the fields it does not know (dashes on a cut, for one).
+
+## D38 — A patched copy of the polyline kernel; fallback per crossing group (2026-10-26)
+
+DEF-22 is a bug in cavalier_contours' segment intersection (`pline_seg_intr`): an end
+point lying on the other segment within the tolerance replaced the one crossing found even
+when it belonged to the other crossing, just outside the segment. Upstream main still has
+it. Working round it in our code would mean re-deriving every segment pair the kernel
+intersects (in booleans, offsets and self-intersection scans alike), so the kernel is
+vendored at 0.9.0 in `vendor/cavalier_contours` and patched in through
+`[patch.crates-io]` (root and fuzz workspaces; the Nix build includes `vendor/`). The
+change is small and marked; `vendor/cavalier_contours/NOTICE` records it, and
+`crates/lvp-core/tests/kernel.rs` holds proptests that fail on the original. When upstream
+fixes it, the patch goes and the tests stay.
+
+- **Fallback per crossing group.** A boolean is split into clusters by bounding boxes, so
+  one coil or plane gathers a whole board, and a cluster the exact boolean could not close
+  fell back to the polygon boolean as a whole, losing every arc in it. A failed cluster is
+  now first split into groups of loops that cross, and a group joins the loops around it
+  only where their winding numbers there do not add up to zero (a pad in a clearance is
+  solved apart from its plane, a pad on the copper is not). Groups are solved exactly
+  again; only those that fail again fall back. This costs nothing until a cluster fails.
+- **The coverage audit ignores unswept specks** below `(0.05 × width)²` (1 µm² at 20 µm).
+  Rings a width apart just touch, and the exact union of their strokes leaves thousands of
+  such specks along the seams; kept, they made up most of the swept area's loops and most
+  of the time of the comparisons, for no change in the missed area on the boards measured.
+

@@ -5,7 +5,8 @@ milestones into `log.md`.
 
 ## Open questions for the project owner
 
-- none right now
+- Report the kernel fix (DEF-22, D38) upstream to cavalier_contours, as an issue with the
+  failing case, or an issue and a pull request?
 
 ## Staging (done 2026-10-24, see log)
 
@@ -95,6 +96,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       line descriptors, polarity, Profile; layerFunction as layer function
 - [ ] IPC-2581: Butterfly, Moire and Marking primitives are skipped with a warning; drill
       holes are read as circles on their layer
+- [x] IPC-2581 padstack pads (`PadStack` / `LayerPad`, shape referenced or inline), placed
+      once where a layer's features also carry them (DEF-21); `LayerHole` is not read
 - [x] SVG and DXF export of generated paths per output group
 - [ ] DXF export: true colour (group code 420) alongside the nearest ACI once the writer
       supports it; SVG export could keep arcs as `A` commands instead of flattening
@@ -184,6 +187,9 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] Bounded outward growth from a layer (isolation rings outside copper, clipped to a
       domain): the owner prefers layer operations (boundary trace outside with rings, or
       envelopes and subtraction) over a pattern for it
-- [ ] Coverage audit on boards drawn with micron chords: still 4 to 5 s of a 5 s
-      evaluation for a 50 mm FPC at 20 µm (4,600 paths; the swept area unites into 30k
-      loops), down from 22 s with indexed winding numbers. The fill takes under a second
+- [ ] Coverage audit of a large plane: Layer 2 of the Altium board (a pour with 553
+      holes, 9,000 paths) takes 26 s natively, about 16 s of it uniting the strokes, where
+      winding probes cross thousands of rings. Layer 1 is now 4.5 s in all (D38).
+- [ ] Booleans: some unions of capsules (strokes of a short, sharply turning path's
+      segments, whose caps share circles) still need the polygon fallback; since D38 only
+      their group loses its arcs
