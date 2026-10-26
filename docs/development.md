@@ -186,6 +186,7 @@ and `SharedArrayBuffer` status so this can be checked at a glance.
 crates/lvp-core/      geometry core, see docs/architecture.md for the module map
 crates/lvp-wasm/      wasm-bindgen exports, thread pool entry point
 crates/lvp-fixtures/  fixture generator (lib + bin) and staleness test
+vendor/cavalier_contours/  the polyline kernel 0.9.0 with a local fix (see its NOTICE), patched in for crates.io
 web/index.html        app shell; coi-serviceworker.js tag injected at build
 web/src/main.ts       mounts App.svelte
 web/src/App.svelte    layout: profiles bar, sources + layers, preview, properties + groups + export + diagnostics

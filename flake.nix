@@ -56,6 +56,7 @@
                 ./justfile
                 ./LICENSE
                 ./crates
+                ./vendor
                 (lib.fileset.difference ./web (lib.fileset.unions [
                   (lib.fileset.maybeMissing ./web/node_modules)
                   (lib.fileset.maybeMissing ./web/dist)

@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/lvp-core", "crates/lvp-wasm", "crates/lvp-fixtures"]
-# Its own workspace (libFuzzer instrumentation); see fuzz/Cargo.toml.
-exclude = ["fuzz"]
+# Its own workspace (libFuzzer instrumentation); see fuzz/Cargo.toml. The vendored kernel
+# is a patched dependency, not a member (see vendor/cavalier_contours/NOTICE).
+exclude = ["fuzz", "vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -35,6 +36,10 @@ serde_json = "1"
 schemars = "1.2"
 # Test-only: checks the presets against that schema.
 jsonschema = { version = "0.60", default-features = false }
+
+# The polyline kernel with a fix to its segment intersections (vendor/cavalier_contours/NOTICE).
+[patch.crates-io]
+cavalier_contours = { path = "vendor/cavalier_contours" }
 
 [profile.release]
 opt-level = 3

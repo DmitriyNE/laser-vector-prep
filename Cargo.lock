@@ -232,8 +232,6 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cavalier_contours"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85e06038a969c5e4d93565f12b044814d3b1a48d50c4ef868d588e79956fea51"
 dependencies = [
  "ahash",
  "num-traits",

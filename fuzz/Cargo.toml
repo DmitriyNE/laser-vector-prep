@@ -76,3 +76,7 @@ overflow-checks = true
 
 [profile.release.package.cavalier_contours]
 debug-assertions = false
+
+# The patched kernel, as in the root Cargo.toml.
+[patch.crates-io]
+cavalier_contours = { path = "../vendor/cavalier_contours" }

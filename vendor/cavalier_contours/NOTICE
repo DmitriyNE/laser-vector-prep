@@ -1,0 +1,25 @@
+cavalier_contours 0.9.0, vendored with a local change
+====================================================
+
+Source: https://github.com/jbuckmccready/cavalier_contours (crates.io release 0.9.0),
+Copyright (c) Buck McCready. Licensed under MIT OR Apache-2.0; used here under the
+Apache License 2.0 (see LICENSE at the repository root).
+
+Only the library is kept: `src/` and `README.md` as published, and `Cargo.toml` as
+published without its test and bench targets and dev-dependencies. The root Cargo.toml and
+fuzz/Cargo.toml use it in place of the crates.io release through `[patch.crates-io]`.
+
+Local change (marked LOCAL CHANGE in the source)
+------------------------------------------------
+
+`src/polyline/pline_seg_intersect.rs`, `pline_seg_intr`: when only one of the two
+solutions of a line-circle or circle-circle intersection lies within both segments, an end
+point lying on the other segment (within `pos_equal_eps`) replaced that solution even when
+the end point belonged to the other solution, the one just outside the segment. The
+crossing found was then lost, and as `find_intersects` skips intersects at a segment's end
+(the next segment reports them), often nothing was reported at all: two closed loops could
+be reported to cross an odd number of times. An end point now replaces the solution only
+if it is nearer to it than to the other solution; otherwise both are reported.
+
+Found with a polygonal pad whose vertex lies 9.5 nm inside a round pad's circle. Regression
+tests: crates/lvp-core/tests/kernel.rs. Upstream main (2026-10-21) still has the code.
