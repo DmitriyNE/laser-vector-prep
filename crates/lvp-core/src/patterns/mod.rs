@@ -1183,8 +1183,19 @@ pub struct Audit {
     pub short_segments: usize,
 }
 
+/// Unswept specks below `(AUDIT_SPECK * width)²` are not reported. Where the strokes of
+/// neighbouring paths just touch (rings a width apart), the exact union leaves thousands of
+/// such specks along the seams, far below any marking resolution; kept, they dominate the
+/// cost of the comparisons that follow.
+const AUDIT_SPECK: f64 = 0.05;
+
 pub fn audit(region: &Region, paths: &[Pline], width: f64) -> Audit {
-    let swept = crate::region::stroke_many(paths, width);
+    let mut swept = crate::region::stroke_many(paths, width);
+    let speck = (AUDIT_SPECK * width).powi(2);
+    swept.loops.retain(|l| {
+        let a = l.area();
+        a > 0.0 || a <= -speck
+    });
     Audit {
         width_mm: width,
         region_mm2: region.area(),

@@ -126,6 +126,7 @@ fn is_usable(p: &Pline) -> bool {
         && (p.area().abs() > 1e-18 || (p.vertex_count() >= 4 && p.scan_for_self_intersect()))
 }
 
+#[derive(Clone)]
 struct Tagged {
     pline: Pline,
     operand: u8,
@@ -877,50 +878,185 @@ fn resolve(a: &[Pline], b: &[Pline], rule: Rule) -> Result<Vec<Pline>, Vec<Pline
 
 /// The exact boolean of one cluster, or, if it cannot be made consistent, the robust
 /// polygon boolean of the same loops with arcs flattened finely (see [`overlay_fallback`]).
+/// A cluster groups loops by their bounding boxes, so one spiral or plane can gather a
+/// whole board: before falling back, a failed cluster is split into the groups of loops
+/// that actually cross or contain each other, and only the groups that fail again lose
+/// their arcs.
 fn resolve_cluster(
     loops: Vec<Tagged>,
     tol: Tolerances,
     rule: Rule,
 ) -> Result<Vec<Pline>, Vec<Pline>> {
-    let flat: Vec<(u8, i32, Pline)> = loops
-        .iter()
-        .map(|l| (l.operand, l.count, l.pline.clone()))
-        .collect();
+    resolve_part(loops, tol, rule, true)
+}
+
+fn resolve_part(
+    loops: Vec<Tagged>,
+    tol: Tolerances,
+    rule: Rule,
+    split: bool,
+) -> Result<Vec<Pline>, Vec<Pline>> {
+    let input = loops.clone();
+    let flat = || -> Vec<(u8, i32, Pline)> {
+        input
+            .iter()
+            .map(|l| (l.operand, l.count, l.pline.clone()))
+            .collect()
+    };
     // Fallback flattening: 0.1 µm, coarser only for geometry beyond a metre or so.
     let fine = tol.same.max(FALLBACK_FLATTEN_MM);
     let mut degenerate = false;
-    match resolve_tagged(loops, tol, rule, &mut degenerate) {
-        Ok(r) => {
-            let valid = is_valid_region(&r, tol.probe);
-            if valid && !degenerate {
-                return Ok(r);
-            }
-            // Snapped or merged loops, merged cuts or bridged gaps (near-coincident
-            // boundaries, where a complete result can still be wrong: a boundary kept twice,
-            // or none), or a result that is not a valid region: check it against the robust
-            // boolean, whose area may differ only by the tolerances along the boundary.
-            let Some(robust) = overlay_fallback(&flat, rule, fine) else {
-                return Ok(r);
-            };
-            let area = |ls: &[Pline]| ls.iter().map(|l| l.area()).sum::<f64>();
-            let perimeter: f64 = flat.iter().map(|(_, _, l)| l.path_length()).sum();
-            let slack = 4.0 * fine * perimeter;
-            // Loops the size of a few tolerances either way are not counted.
-            let speck = (10.0 * tol.same).powi(2);
-            let loops = |ls: &[Pline]| ls.iter().filter(|l| l.area().abs() > speck).count();
-            if valid && loops(&r) == loops(&robust) && (area(&r) - area(&robust)).abs() <= slack {
-                Ok(r)
-            } else {
-                Ok(robust)
-            }
+    let exact = resolve_tagged(loops, tol, rule, &mut degenerate);
+    if exact.is_err() && crate::cancel::cancelled() {
+        return exact;
+    }
+    let mut robust = None;
+    if let Ok(r) = &exact {
+        let valid = is_valid_region(r, tol.probe);
+        if valid && !degenerate {
+            return exact;
         }
-        Err(partial) => {
-            if crate::cancel::cancelled() {
-                return Err(partial);
+        // Snapped or merged loops, merged cuts or bridged gaps (near-coincident
+        // boundaries, where a complete result can still be wrong: a boundary kept twice,
+        // or none), or a result that is not a valid region: check it against the robust
+        // boolean, whose area may differ only by the tolerances along the boundary.
+        let Some(rb) = overlay_fallback(&flat(), rule, fine) else {
+            return exact;
+        };
+        let area = |ls: &[Pline]| ls.iter().map(|l| l.area()).sum::<f64>();
+        let perimeter: f64 = input.iter().map(|l| l.pline.path_length()).sum();
+        let slack = 4.0 * fine * perimeter;
+        // Loops the size of a few tolerances either way are not counted.
+        let speck = (10.0 * tol.same).powi(2);
+        let count = |ls: &[Pline]| ls.iter().filter(|l| l.area().abs() > speck).count();
+        if valid && count(r) == count(&rb) && (area(r) - area(&rb)).abs() <= slack {
+            return exact;
+        }
+        robust = Some(rb);
+    }
+    if split {
+        let groups = crossing_groups(&input, tol);
+        if groups.len() > 1 {
+            let mut slots: Vec<Option<Tagged>> = input.into_iter().map(Some).collect();
+            let parts: Vec<Vec<Tagged>> = groups
+                .iter()
+                .map(|g| {
+                    g.iter()
+                        .map(|&i| slots[i].take().expect("one group per loop"))
+                        .collect()
+                })
+                .collect();
+            let mut complete = true;
+            let mut out = Vec::new();
+            for r in crate::par::map(parts, |part| resolve_part(part, tol, rule, false)) {
+                match r {
+                    Ok(l) => out.extend(l),
+                    Err(l) => {
+                        out.extend(l);
+                        complete = false;
+                    }
+                }
             }
-            overlay_fallback(&flat, rule, fine).ok_or(partial)
+            return if complete { Ok(out) } else { Err(out) };
         }
     }
+    match (exact, robust) {
+        (Ok(_), Some(rb)) => Ok(rb),
+        (Ok(r), None) => Ok(r),
+        (Err(partial), _) => overlay_fallback(&flat(), rule, fine).ok_or(partial),
+    }
+}
+
+/// Groups of loops that are independent booleans: loops that cross or touch are in one
+/// group, and so is a group with the loops around it unless their winding numbers there
+/// add up to zero (a pad in a plane's clearance lies inside the plane's outline and inside
+/// the clearance, and is solved apart from the plane; a pad on the plane is not). Finer
+/// than [`clusters`], which only compares bounding boxes, and dearer: it intersects every
+/// pair of overlapping boxes.
+fn crossing_groups(loops: &[Tagged], tol: Tolerances) -> Vec<Vec<usize>> {
+    let grid = BBoxGrid::new(loops.iter().map(|l| l.bbox).collect());
+    let indexes: Vec<std::cell::OnceCell<_>> =
+        (0..loops.len()).map(|_| Default::default()).collect();
+    let mut parent: Vec<usize> = (0..loops.len()).collect();
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    fn unite(parent: &mut [usize], i: usize, j: usize) {
+        let (a, b) = (find(parent, i), find(parent, j));
+        parent[a.max(b)] = a.min(b);
+    }
+    for i in 0..loops.len() {
+        if i % 256 == 0 && crate::cancel::cancelled() {
+            return vec![(0..loops.len()).collect()];
+        }
+        for j in grid.query_box(&loops[i].bbox, tol.join) {
+            if j <= i || find(&mut parent, i) == find(&mut parent, j) {
+                continue;
+            }
+            let (a, b) = if loops[i].pline.vertex_count() >= loops[j].pline.vertex_count() {
+                (i, j)
+            } else {
+                (j, i)
+            };
+            let index = indexes[a].get_or_init(|| loops[a].pline.create_approx_aabb_index());
+            let ix = loops[a].pline.find_intersects_opt(
+                &loops[b].pline,
+                &FindIntersectsOptions {
+                    pline1_aabb_index: Some(index),
+                    ..Default::default()
+                },
+            );
+            if !ix.basic_intersects.is_empty() || !ix.overlapping_intersects.is_empty() {
+                unite(&mut parent, i, j);
+            }
+        }
+    }
+    // The loops of other groups wind a constant number of times round each group (they do
+    // not cross it): where that is not zero for an operand, the group joins the groups of
+    // the loops that wind round it.
+    let mut joins: Vec<(usize, usize)> = Vec::new();
+    let mut seen: HashMap<usize, ()> = HashMap::new();
+    for i in 0..loops.len() {
+        let g = find(&mut parent, i);
+        if seen.insert(g, ()).is_some() {
+            continue;
+        }
+        let v = loops[i].pline.at(0);
+        let at = Point::new(v.x, v.y);
+        let mut total = [0i32; 2];
+        let mut around = Vec::new();
+        for j in grid.query_point(at, 0.0) {
+            if find(&mut parent, j) == g {
+                continue;
+            }
+            let w = loops[j].pline.winding_number(Vector2::new(v.x, v.y)) * loops[j].count;
+            if w != 0 {
+                total[loops[j].operand as usize & 1] += w;
+                around.push(j);
+            }
+        }
+        if total != [0, 0] {
+            joins.extend(around.into_iter().map(|j| (i, j)));
+        }
+    }
+    for (i, j) in joins {
+        unite(&mut parent, i, j);
+    }
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut slot: HashMap<usize, usize> = HashMap::new();
+    for i in 0..loops.len() {
+        let r = find(&mut parent, i);
+        let g = *slot.entry(r).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[g].push(i);
+    }
+    groups
 }
 
 /// Whether `loops` form a valid region: just inside every boundary the loops wind exactly
@@ -1713,8 +1849,9 @@ pub fn stroke(path: &Pline, width: f64) -> Region {
 /// A closed path's stroke is the ring between the outward and inward offsets of its
 /// filled loop; an open path's stroke is its two side offsets closed with semicircular
 /// caps. Both come from cavalier's offsetting, so the pieces have no coincident or
-/// tangent boundaries (which a union of per-segment capsules is full of). Paths whose
-/// offsets fragment fall back to the capsule union.
+/// tangent boundaries (which a union of per-segment capsules is full of). A path that
+/// crosses or touches itself is stroked as the pieces between those points (see
+/// [`stroke_path`]); paths whose offsets fragment fall back to the capsule union.
 pub fn stroke_many(paths: &[Pline], width: f64) -> Region {
     let r = width / 2.0;
     if r.is_nan() || r <= 0.0 {
@@ -1727,31 +1864,52 @@ pub fn stroke_many(paths: &[Pline], width: f64) -> Region {
             return Region::empty();
         }
         if !p.is_closed() {
-            return stroke_open(&p, r);
+            return stroke_path(p, r, 0);
         }
         // The offsets of a loop's filled area lose any zero-width bridge in it (a stretch
         // the loop runs back along): those are stroked as open paths.
         let (loops, bridges) = pline::split_retraced(&p);
         if bridges.is_empty() {
-            return stroke_closed(p, r);
+            return stroke_path(p, r, 0);
         }
-        Region::union_all(loops.into_iter().map(|l| stroke_closed(l, r)).chain(
-            bridges.into_iter().map(|b| {
-                if b.is_closed() {
-                    stroke_closed(b, r)
-                } else {
-                    stroke_open(&b, r)
-                }
-            }),
-        ))
+        Region::union_all(
+            loops
+                .into_iter()
+                .chain(bridges)
+                .map(|l| stroke_path(l, r, 0)),
+        )
     });
     Region::union_all(parts)
 }
 
-/// The ring between the outward and inward offsets of a loop's filled area.
-fn stroke_closed(p: Pline, r: f64) -> Region {
-    if p.area().abs() <= 1e-18 {
-        return stroke_open(&p, r);
+/// Stroke of one path: of a loop, the ring between the outward and inward offsets of its
+/// area; of an open path, its side offsets closed by round caps; else the capsule union.
+/// A path that crosses or touches itself is first cut there into the loops and open paths
+/// between those points, as neither construction holds for it: such a loop does not bound
+/// its area (and the kernel's offset of a self-touching loop can lose a whole lobe, which
+/// the ring then covered), and an open path's offsets cross.
+fn stroke_path(p: Pline, r: f64, depth: usize) -> Region {
+    if p.is_closed() && p.area().abs() <= 1e-18 {
+        return stroke_capsules(std::slice::from_ref(&p), r);
+    }
+    // Offsets leave segments of a nanometre or less, some doubling back on the next one:
+    // within the kernel's tolerance, they would read as the path touching itself.
+    let p = pline::clean(&p, KERNEL_EPS).unwrap_or(p);
+    if let Some(pieces) = self_intersection_pieces(&p) {
+        return match pieces {
+            Some(pieces) if depth < 8 => Region::union_all(pieces.into_iter().map(|mut q| {
+                // A piece between two visits of one point is a loop of its own.
+                if q.vertex_count() > 2 && start_point(&q).distance(end_point(&q)) <= KERNEL_EPS {
+                    q.remove_last();
+                    q.set_is_closed(true);
+                }
+                stroke_path(q, r, depth + 1)
+            })),
+            _ => stroke_capsules(std::slice::from_ref(&p), r),
+        };
+    }
+    if !p.is_closed() {
+        return open_stroke(&p, r).unwrap_or_else(|| stroke_capsules(std::slice::from_ref(&p), r));
     }
     let base = Region::from_loops([p], LoopRule::NonZero);
     let outer = base.offset(r);
@@ -1763,14 +1921,65 @@ fn stroke_closed(p: Pline, r: f64) -> Region {
     }
 }
 
-fn stroke_open(p: &Pline, r: f64) -> Region {
-    open_stroke(p, r).unwrap_or_else(|| stroke_capsules(std::slice::from_ref(p), r))
+/// Pieces of `p` between the points where it crosses or touches itself, in order along
+/// it (an open path's first from its start, its last to its end), or `None` if it does
+/// neither. No piece crosses or touches itself or another except at its ends. The inner
+/// `None`: a piece could not be cut.
+fn self_intersection_pieces(p: &Pline) -> Option<Option<Vec<Pline>>> {
+    let mut splits: Vec<(usize, Vector2<f64>)> = Vec::new();
+    p.visit_self_intersects(&mut |ix: PlineIntersect<f64>| match ix {
+        PlineIntersect::Basic(b) => {
+            splits.push((b.start_index1, b.point));
+            splits.push((b.start_index2, b.point));
+        }
+        PlineIntersect::Overlapping(o) => {
+            for q in [o.point1, o.point2] {
+                splits.push((o.start_index1, q));
+                splits.push((o.start_index2, q));
+            }
+        }
+    });
+    if splits.is_empty() {
+        return None;
+    }
+    let mut merged = false;
+    let mut pts = sorted_splits(p, &mut splits, KERNEL_EPS, &mut merged);
+    let count = if p.is_closed() {
+        if pts.len() < 2 {
+            return Some(None);
+        }
+        pts.len()
+    } else {
+        let n = p.vertex_count();
+        pts.insert(0, (0, p.at(0).pos()));
+        pts.push((n - 2, p.at(n - 1).pos()));
+        pts.len() - 1
+    };
+    let mut pieces = Vec::with_capacity(count);
+    for k in 0..count {
+        let ((si, sp), (ei, ep)) = (pts[k], pts[(k + 1) % pts.len()]);
+        match PlineViewData::from_slice_points(p, sp, si, ep, ei, KERNEL_EPS) {
+            Some(vd) => pieces.push(Pline::create_from(&vd.view(p))),
+            // A crossing at an open path's start or end leaves nothing before or after it.
+            None if !p.is_closed() && pt(sp).distance(pt(ep)) <= KERNEL_EPS => {}
+            None => return Some(None),
+        }
+    }
+    Some(Some(pieces))
 }
 
-/// Stroke of an open path from its two side offsets plus end caps; `None` when an offset
-/// fragments (self-intersecting or looped paths), where the capsule fallback is used.
+/// Stroke of an open path that does not cross itself from its two side offsets plus end
+/// caps; `None` when an offset fragments or is trimmed at an end (a hairpin narrower than
+/// the width), or the path has an arc tighter than half the width (no inner offset),
+/// where the capsule fallback is used.
 fn open_stroke(p: &Pline, r: f64) -> Option<Region> {
     if p.vertex_count() < 2 || p.is_closed() {
+        return None;
+    }
+    let tight = p.iter_segments().any(|(a, b)| {
+        Arc::from_bulge(pt(a.pos()), pt(b.pos()), a.bulge).is_some_and(|arc| arc.radius <= r)
+    });
+    if tight {
         return None;
     }
     let left = p.parallel_offset(r);
@@ -1780,6 +1989,18 @@ fn open_stroke(p: &Pline, r: f64) -> Option<Region> {
     }
     let right = pline::sanitize(&right[0])?;
     let mut left_back = pline::sanitize(&left[0])?;
+    // The kernel trims an open path's offsets where they come within `r` of the path: the
+    // caps join the offsets' ends, which must then lie either side of the path's ends.
+    let tol = 1e-6 * (1.0 + r);
+    let across = |a: Point, b: Point, at: Point| {
+        Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0).distance(at) <= tol
+            && (a.distance(b) - 2.0 * r).abs() <= tol
+    };
+    if !across(start_point(&right), start_point(&left_back), start_point(p))
+        || !across(end_point(&right), end_point(&left_back), end_point(p))
+    {
+        return None;
+    }
     left_back.invert_direction_mut();
     let (t_start, t_end) = (start_tangent(p), end_tangent(p));
     let mut lp = Pline::new_closed();
@@ -1827,8 +2048,27 @@ fn stroke_capsules(paths: &[Pline], r: f64) -> Region {
         }
         match Arc::from_bulge(a, b, v1.bulge) {
             Some(arc) if arc_capsule_is_well_formed(&arc, r) => capsules.push(arc_capsule(&arc, r)),
+            // Within `r` of an arc tighter than that: the sector out to `radius + r` over its
+            // sweep (the closest point of the arc to a point there is on the same ray from
+            // the centre) and a disc round each end (closest to the rest of the plane).
+            Some(arc) if arc.radius <= r => {
+                let (c, out) = (arc.center, arc.radius + r);
+                let end = arc.start_angle + arc.sweep;
+                let mut pie = Pline::new_closed();
+                pie.add(c.x, c.y, 0.0);
+                pie.add(
+                    c.x + out * arc.start_angle.cos(),
+                    c.y + out * arc.start_angle.sin(),
+                    (arc.sweep / 4.0).tan(),
+                );
+                pie.add(c.x + out * end.cos(), c.y + out * end.sin(), 0.0);
+                capsules.push(pline::ensure_ccw(pie));
+                capsules.push(pline::circle(arc.start(), r));
+                capsules.push(pline::circle(arc.end(), r));
+            }
+            // Barely wider than `r`: its inner offset is a point; chords within 0.05% of `r`.
             Some(arc) => {
-                if let Ok(pts) = arc.flatten(r * 0.05) {
+                if let Ok(pts) = arc.flatten(r * 5e-4) {
                     for w in pts.windows(2) {
                         if w[0].distance(w[1]) > pline::REPEAT_EPS {
                             capsules.push(line_capsule(w[0], w[1], r));
@@ -2662,5 +2902,219 @@ mod tests {
             area <= 12.5 * 7.0 + 1e-9 && area >= two.offset(1.0).area() - 1e-9,
             "{area}"
         );
+    }
+
+    fn reversed(mut p: Pline) -> Pline {
+        p.invert_direction_mut();
+        p
+    }
+
+    #[test]
+    fn groups_part_where_the_loops_around_wind_to_zero() {
+        // A plane with a clearance, a pad in the clearance, a pad on the copper and two
+        // crossing squares elsewhere on the plane.
+        let loops = tag(
+            &[
+                rect(Point::new(0.0, 0.0), Point::new(10.0, 10.0)),
+                reversed(circle(Point::new(5.0, 5.0), 1.0)),
+                circle(Point::new(5.0, 5.0), 0.5),
+                circle(Point::new(2.0, 2.0), 0.5),
+                rect(Point::new(7.0, 7.0), Point::new(8.0, 8.0)),
+                rect(Point::new(7.5, 7.5), Point::new(8.5, 8.5)),
+            ],
+            0,
+        );
+        let mut groups = crossing_groups(&loops, Tolerances::for_extent(10.0));
+        groups.sort();
+        assert_eq!(groups, vec![vec![0, 1, 3, 4, 5], vec![2]]);
+    }
+
+    #[test]
+    fn a_group_that_falls_back_leaves_the_rest_of_its_cluster_exact() {
+        // The strokes of a short path's segments on a customer's board, whose exact union
+        // could not be closed (it needed the polygon boolean), in a clearance of a plane
+        // that has a pad in a second clearance: one cluster by bounding boxes, in which the
+        // clearances and the pad were flattened along with the capsules.
+        let capsules: Vec<Pline> = [
+            [
+                (18.331830526015935, 37.203903711126216, 0.0),
+                (18.331920369872638, 37.204077277004494, 1.0),
+                (18.314158874265804, 37.213271257307305, 0.0),
+                (18.3140690304091, 37.21309769142903, 1.0),
+            ],
+            [
+                (18.33230922481176, 37.20492267216236, 0.0),
+                (18.333805082932987, 37.208618702935105, 1.0),
+                (18.31526587744791, 37.21612189292218, 0.0),
+                (18.313770019326682, 37.21242586214944, 1.0),
+            ],
+            [
+                (18.33413061312901, 37.20955366449645, 0.0),
+                (18.33435436828793, 37.21031590798578, 1.0),
+                (18.315164102410808, 37.215949174850174, 0.0),
+                (18.314940347251888, 37.21518693136084, 1.0),
+            ],
+            [
+                (18.334570809091346, 37.21120043875359, 0.0),
+                (18.335407958407504, 37.21545163740879, 1.0),
+                (18.31578481092355, 37.21931584273756, 0.0),
+                (18.31494766160739, 37.21506464408236, 1.0),
+            ],
+            [
+                (18.33555310604582, 37.21645438580527, 0.0),
+                (18.335757931063497, 37.21864879724037, 1.0),
+                (18.315844488302915, 37.220507505776176, 0.0),
+                (18.315639663285236, 37.21831309434108, 1.0),
+            ],
+            [
+                (18.33580112077906, 37.2195359842812, 0.0),
+                (18.335814409874274, 37.222687478460884, 1.0),
+                (18.315814587682567, 37.22277181291503, 0.0),
+                (18.315801298587353, 37.219620318735345, 1.0),
+            ],
+        ]
+        .iter()
+        .map(|vs| {
+            let mut p = Pline::new_closed();
+            for &(x, y, b) in vs {
+                p.add(x, y, b);
+            }
+            pline::ensure_ccw(p)
+        })
+        .collect();
+        let plane = Region::from_resolved(vec![
+            rect(Point::new(17.0, 36.0), Point::new(20.0, 39.0)),
+            reversed(circle(Point::new(18.325, 37.213), 0.1)),
+            reversed(circle(Point::new(19.0, 38.0), 0.3)),
+            circle(Point::new(19.0, 38.0), 0.2),
+        ]);
+        // The capsules as they enter the union of the strokes: overlapping loops.
+        let all = plane.union(&Region::from_resolved(capsules.clone()));
+        let alone = Region::from_loops(capsules, LoopRule::NonZero);
+        assert!(!all.incomplete);
+        let plane_area = 9.0 - PI * (0.01 + 0.09) + PI * 0.04;
+        assert_near(all.area(), plane_area + alone.area(), 1e-9);
+        // Both clearances and the pad keep their arcs.
+        let circles = all
+            .loops
+            .iter()
+            .filter(|l| l.vertex_count() <= 4 && l.iter_vertexes().any(|v| v.bulge != 0.0))
+            .count();
+        assert_eq!(circles, 3);
+    }
+
+    #[test]
+    fn stroke_of_a_loop_that_touches_itself_stays_on_the_path() {
+        // Two unit squares meeting at a corner, run round as one loop, as a contour-fill
+        // ring is where its region narrows to a point. The kernel's offset of such a loop's
+        // area can lose a lobe, and the ring between the offsets then covered all of it.
+        let lp = pline::from_points(
+            [
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (1.0, 1.0),
+                (2.0, 1.0),
+                (2.0, 2.0),
+                (1.0, 2.0),
+                (1.0, 1.0),
+                (0.0, 1.0),
+            ]
+            .map(|(x, y)| Point::new(x, y)),
+            true,
+        );
+        let s = stroke(&lp, 0.1);
+        for c in [Point::new(0.5, 0.5), Point::new(1.5, 1.5)] {
+            assert!(!s.contains(c), "{c:?}");
+        }
+        for p in [
+            Point::new(0.5, 0.04),
+            Point::new(1.5, 1.96),
+            Point::new(1.0, 1.0),
+        ] {
+            assert!(s.contains(p), "{p:?}");
+        }
+        // Each square's ring is 1.2 + pi / 400 - 0.81; they overlap round the corner.
+        let ring = 0.39 + PI * 0.0025;
+        assert!(
+            s.area() <= 2.0 * ring && s.area() >= 2.0 * ring - 0.02,
+            "{}",
+            s.area()
+        );
+    }
+
+    #[test]
+    fn stroke_ignores_spikes_within_the_kernel_tolerance() {
+        // A unit square whose bottom side doubles back 0.1 nm, as offsets leave them: read
+        // as the loop running back over itself, it was cut at its self-intersections.
+        let square = rect(Point::new(0.0, 0.0), Point::new(1.0, 1.0));
+        let spiky = pline::from_points(
+            [
+                (0.0, 0.0),
+                (0.6, 0.0),
+                (0.6 - 1e-7, 0.0),
+                (1.0, 0.0),
+                (1.0, 1.0),
+                (0.0, 1.0),
+            ]
+            .map(|(x, y)| Point::new(x, y)),
+            true,
+        );
+        assert_near(
+            stroke(&spiky, 0.1).area(),
+            stroke(&square, 0.1).area(),
+            1e-9,
+        );
+        assert!(self_intersection_pieces(&pline::clean(&spiky, KERNEL_EPS).unwrap()).is_none());
+    }
+
+    /// Distance from `p` to the path.
+    fn distance_to(path: &Pline, p: Point) -> f64 {
+        path.closest_point(Vector2::new(p.x, p.y), 1e-12)
+            .map_or(f64::INFINITY, |c| c.distance)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// The stroke is the set of points within half the width of the path, of lines and
+        /// arcs, also for paths that cross or touch themselves.
+        #[test]
+        fn stroke_is_the_points_within_half_the_width(
+            pts in prop::collection::vec(
+                (0.0..10.0f64, 0.0..10.0f64, prop_oneof![Just(0.0), -1.0..1.0f64]),
+                3..7,
+            ),
+            closed in any::<bool>(),
+            width in 0.05..1.0f64,
+            near in prop::collection::vec((0usize..8, 0.0..1.0f64, -1.5..1.5f64), 40),
+            anywhere in prop::collection::vec((0.0..10.0f64, 0.0..10.0f64), 20),
+        ) {
+            let mut path = if closed { Pline::new_closed() } else { Pline::new() };
+            for &(x, y, b) in &pts {
+                path.add(x, y, b);
+            }
+            let Some(path) = pline::sanitize(&path) else {
+                return Ok(());
+            };
+            let s = stroke(&path, width);
+            let r = width / 2.0;
+            let n = path.vertex_count();
+            let segments = if path.is_closed() { n } else { n - 1 };
+            // Points across the path at up to 1.5 half-widths, and anywhere.
+            let across = near.iter().map(|&(k, t, off)| {
+                let (a, b) = (path.at(k % segments), path.at((k % segments + 1) % n));
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let len = dx.hypot(dy).max(1e-12);
+                Point::new(a.x + t * dx - dy / len * off * r, a.y + t * dy + dx / len * off * r)
+            });
+            for p in across.chain(anywhere.iter().map(|&(x, y)| Point::new(x, y))) {
+                let d = distance_to(&path, p);
+                if d < r * 0.999 {
+                    prop_assert!(s.contains(p), "{p:?} at {d} of the path is outside");
+                } else if d > r * 1.001 {
+                    prop_assert!(!s.contains(p), "{p:?} at {d} of the path is inside");
+                }
+            }
+        }
     }
 }
