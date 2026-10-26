@@ -307,6 +307,71 @@ pub fn append(path: &mut Pline, piece: &Pline) {
     }
 }
 
+/// Remove what the offset kernel would misread from a loop, without changing it by more
+/// than a fraction of a micron: vertices within `eps` of the one before, and vertices
+/// between two straight segments the kernel takes for parallel and continuing. Its parallel
+/// test compares the (unnormalised) cross product of the two segments with `eps`, so
+/// segments a few microns long meeting at several degrees count as one line folded back on
+/// itself, and an offset of such a boundary comes out broken. Removing the middle vertex
+/// moves the boundary by at most `eps` over the length of the new segment. Arcs are kept;
+/// a loop is never reduced below three vertices. `None` when fewer than two remain.
+pub fn clean(p: &Pline, eps: f64) -> Option<Pline> {
+    let n = p.vertex_count();
+    if n < 2 {
+        return None;
+    }
+    // Whether the kernel takes a -> b -> c for one straight line.
+    let continuing = |a: &PlineVertex<f64>, b: &PlineVertex<f64>, c: &PlineVertex<f64>| {
+        if a.bulge != 0.0 || b.bulge != 0.0 {
+            return false;
+        }
+        let (d1x, d1y) = (b.x - a.x, b.y - a.y);
+        let (d2x, d2y) = (c.x - b.x, c.y - b.y);
+        (d1x * d2y - d1y * d2x).abs() <= eps && d1x * d2x + d1y * d2y >= 0.0
+    };
+    // One pass with a stack: a vertex at the position of the one before replaces its bulge,
+    // a vertex in the middle of a straight line is dropped.
+    let floor = if p.is_closed() { 3 } else { 2 };
+    let mut vs: Vec<PlineVertex<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let v = p.at(i);
+        if let Some(last) = vs.last_mut()
+            && last.pos().fuzzy_eq_eps(v.pos(), eps)
+        {
+            last.bulge = v.bulge;
+            continue;
+        }
+        while vs.len() >= floor && continuing(&vs[vs.len() - 2], &vs[vs.len() - 1], &v) {
+            vs.pop();
+        }
+        vs.push(v);
+    }
+    if p.is_closed() {
+        // Across the seam: the last vertex repeating the first, then the same for lines.
+        while vs.len() > 1 && vs[vs.len() - 1].pos().fuzzy_eq_eps(vs[0].pos(), eps) {
+            vs.pop();
+        }
+        while vs.len() > 3 && continuing(&vs[vs.len() - 2], &vs[vs.len() - 1], &vs[0]) {
+            vs.pop();
+        }
+        while vs.len() > 3 && continuing(&vs[vs.len() - 1], &vs[0], &vs[1]) {
+            vs.remove(0);
+        }
+    }
+    if vs.len() < 2 {
+        return None;
+    }
+    let mut out = if p.is_closed() {
+        Pline::new_closed()
+    } else {
+        Pline::new()
+    };
+    for v in vs {
+        out.add(v.x, v.y, v.bulge);
+    }
+    Some(out)
+}
+
 /// Split a closed loop wherever it runs back along itself: an offset taken at exactly half
 /// a feature's width keeps the collapsed feature as a zero-width bridge, one segment there
 /// and the same segment reversed on the way back (vertices within [`REPEAT_EPS`]). Returns

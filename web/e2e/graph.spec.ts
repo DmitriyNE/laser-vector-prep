@@ -64,10 +64,14 @@ type Lvp = {
 const profile = (page: import("@playwright/test").Page) =>
   page.evaluate(() => JSON.parse(JSON.stringify((globalThis as unknown as { lvp: Lvp }).lvp.profile)) as Lvp["profile"]);
 
-/** Click an edge's line where nothing covers it (nodes, other edges, its own ×). */
+/** Click an edge's line where nothing covers it (nodes, other edges, its own ×). After a
+ * redraw (an undo, an evaluation) Svelte Flow leaves edges out for a frame while it measures
+ * the nodes' handles, so this waits for the edge to be drawn. */
 async function clickEdge(page: import("@playwright/test").Page, id: string) {
-  const at = await page.evaluate((id) => {
-    const path = document.querySelector(`.svelte-flow__edge[data-id="${id}"] path.svelte-flow__edge-path`) as SVGPathElement;
+  let at: { x: number; y: number } | null = null;
+  const find = () => page.evaluate((id) => {
+    const path = document.querySelector(`.svelte-flow__edge[data-id="${id}"] path.svelte-flow__edge-path`) as SVGPathElement | null;
+    if (!path) return null;
     const m = path.getScreenCTM()!;
     for (let t = 0.1; t < 0.95; t += 0.05) {
       const p = path.getPointAtLength(path.getTotalLength() * t);
@@ -77,7 +81,7 @@ async function clickEdge(page: import("@playwright/test").Page, id: string) {
     }
     return null;
   }, id);
-  expect(at, `a visible point on ${id}`).not.toBeNull();
+  await expect.poll(async () => (at = await find()), { message: `a visible point on ${id}` }).not.toBeNull();
   await page.mouse.click(at!.x, at!.y);
 }
 

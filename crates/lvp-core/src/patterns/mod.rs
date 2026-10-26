@@ -62,6 +62,9 @@ pub struct PatternOutput {
 /// Upper bound on contour rings, as a guard against a pitch far below the geometry size.
 const MAX_RINGS: usize = 100_000;
 
+/// Ring loops smaller across than this fraction of the pitch are numerical remnants.
+const MICRO_LOOP: f64 = 0.1;
+
 pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
     match pattern {
         Pattern::Passthrough {
@@ -444,6 +447,8 @@ struct IslandFill {
     rings: usize,
     gap_fills: usize,
     skipped: usize,
+    /// Ring levels whose cores could not be found (degenerate geometry).
+    degenerate: usize,
 }
 
 /// Rings of one island from depth `first` inward, then the gap-fill centrelines (the
@@ -456,6 +461,7 @@ fn fill_island(region: &Region, s: &FillSettings) -> IslandFill {
         rings: 0,
         gap_fills: 0,
         skipped: 0,
+        degenerate: 0,
     };
     // The area inside each ring (`region` shrunk by the ring's depth) and the indices of
     // its paths.
@@ -466,16 +472,25 @@ fn fill_island(region: &Region, s: &FillSettings) -> IslandFill {
         if crate::cancel::cancelled() {
             return fill;
         }
-        let ring = region.offset(-depth);
+        let mut ring = region.offset(-depth);
         if ring.is_empty() || fill.rings >= MAX_RINGS {
             break;
         }
+        // Offsets of a ragged boundary (two approximations of one curve merged, say) shed
+        // loops far smaller than the pitch, nanometres to microns across. No mark renders
+        // them, and they would cost the audit and the path order more than all the real
+        // rings: they leave the rings and the level, so gap fill sees the area they sat in.
+        let micro = |p: &Pline| {
+            crate::pline::bounds(p)
+                .is_none_or(|b| b.width().hypot(b.height()) < s.pitch * MICRO_LOOP)
+        };
+        ring.loops.retain(|l| !micro(l));
         // At exactly half a feature's width the ring runs into the feature and back along
         // its centreline: that stretch is drawn once, as an open path.
         let mut here = Vec::new();
         for l in &ring.loops {
             let (loops, bridges) = crate::pline::split_retraced(l);
-            for p in loops.into_iter().chain(bridges) {
+            for p in loops.into_iter().chain(bridges).filter(|p| !micro(p)) {
                 fill.rings += 1;
                 here.push(fill.paths.len());
                 fill.paths.push(match s.simplify {
@@ -502,6 +517,10 @@ fn fill_island(region: &Region, s: &FillSettings) -> IslandFill {
             if crate::cancel::cancelled() {
                 return fill;
             }
+            let Ok(core) = core else {
+                fill.degenerate += 1;
+                continue;
+            };
             let (lines, skipped) = gapfill::centrelines(&core, &opts);
             fill.gap_fills += lines.len();
             for line in lines {
@@ -809,7 +828,7 @@ fn cores(
     first: f64,
     pitch: f64,
     end_spacing: f64,
-) -> Vec<(isize, Region)> {
+) -> Vec<(isize, Result<Region, ()>)> {
     // Grows the next level slightly more than it must, so that its boundary passes outside
     // the coinciding stretches of the deeper boundary instead of onto them.
     let margin = pitch * 1e-3;
@@ -844,7 +863,11 @@ fn cores(
         }
         let core = match (next, kites) {
             (Some(next), Some(kites)) => {
-                let missed = inner.difference(&next.offset(reach + margin));
+                let Some(grown) = grow_coarsely(next, reach + margin) else {
+                    out.push((j, Err(())));
+                    continue;
+                };
+                let missed = inner.difference(&grown);
                 Region {
                     incomplete: missed.incomplete,
                     loops: missed
@@ -858,10 +881,44 @@ fn cores(
             _ => inner,
         };
         if !core.is_empty() {
-            out.push((j, core));
+            out.push((j, Ok(core)));
         }
     }
     out
+}
+
+/// `level` grown by `r`, coarsely where that is safe, or `None` when even that would run
+/// away. Offsets of a ragged boundary can leave loops microns across with hundreds of arc
+/// vertices; growing one by far more than its size makes every offset segment cross every
+/// other. A hole smaller than `2 r` across vanishes in the growth anyway, so it is dropped;
+/// an outer loop smaller than `r` is replaced by a circle round it, which grows into a
+/// superset of the true growth, so it can hide a core but never invent one.
+fn grow_coarsely(level: &Region, r: f64) -> Option<Region> {
+    let mut loops = Vec::with_capacity(level.loops.len());
+    for l in &level.loops {
+        let Some(b) = crate::pline::bounds(l) else {
+            continue;
+        };
+        let diagonal = b.width().hypot(b.height());
+        let area = l.area();
+        if area < 0.0 && diagonal < 2.0 * r {
+            continue;
+        }
+        if area > 0.0 && diagonal < r {
+            let c = Point::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0);
+            loops.push(crate::pline::circle(c, diagonal / 2.0));
+            continue;
+        }
+        loops.push(l.clone());
+    }
+    let input: usize = loops.iter().map(|l| l.vertex_count()).sum();
+    let coarse = Region {
+        loops,
+        incomplete: level.incomplete,
+    };
+    let grown = coarse.offset(r);
+    let output: usize = grown.loops.iter().map(|l| l.vertex_count()).sum();
+    (output <= 20 * input + 10_000).then_some(grown)
 }
 
 /// Same number of loops and of vertices.
@@ -1076,7 +1133,9 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
         fill
     });
     let mut skipped = 0;
+    let mut degenerate = 0;
     for f in fills {
+        degenerate += f.degenerate;
         let base = out.paths.len();
         out.precedence
             .extend(f.precedence.iter().map(|(a, b)| (base + a, base + b)));
@@ -1085,6 +1144,14 @@ fn contour_fill(geometry: &Geometry, params: &ContourParams) -> PatternOutput {
         out.stats.rings += f.rings;
         out.stats.gap_fills += f.gap_fills;
         skipped += f.skipped;
+    }
+    if degenerate > 0 {
+        out.diagnostics.push(Diagnostic::warning(
+            "pattern.gap_fill_degenerate",
+            format!(
+                "gap fill was left out at {degenerate} ring level(s) whose geometry is too ragged to grow (microscopic loops); cores there are not filled"
+            ),
+        ));
     }
     if skipped > 0 {
         out.diagnostics.push(Diagnostic::warning(

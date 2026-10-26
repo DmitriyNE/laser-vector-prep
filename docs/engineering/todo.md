@@ -184,3 +184,6 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] Bounded outward growth from a layer (isolation rings outside copper, clipped to a
       domain): the owner prefers layer operations (boundary trace outside with rings, or
       envelopes and subtraction) over a pattern for it
+- [ ] Coverage audit on boards drawn with micron chords: still 4 to 5 s of a 5 s
+      evaluation for a 50 mm FPC at 20 µm (4,600 paths; the swept area unites into 30k
+      loops), down from 22 s with indexed winding numbers. The fill takes under a second
