@@ -1,8 +1,9 @@
 //! DXF reader for the spec's entity subset (ASCII DXF, R12 and later).
 //!
 //! Produces per-layer primitives in millimetres: centreline paths (with an optional
-//! constant width) and filled hatch regions. Everything outside the subset becomes a
-//! diagnostic, never silent loss: ACIS solids are errors, text and dimensions are
+//! constant width) and filled hatch regions. Planar REGIONs are read from the ACIS text they
+//! carry (`acis`). Everything outside the subset becomes a diagnostic, never silent loss:
+//! other ACIS solids (and REGIONs that cannot be read) are errors, text and dimensions are
 //! informational, unknown entity types are warnings. Block references are expanded with
 //! their transforms; arcs survive uniform scaling and mirroring, non-uniform scaling
 //! flattens them (with a warning).
@@ -359,7 +360,134 @@ fn transform_pline(p: &Pline, xf: &Xf, tolerance_mm: f64) -> Pline {
 // Curve evaluation helpers
 
 /// Adaptive flattening of a parametric curve on `[t0, t1]` within `tol`.
-fn flatten_curve(f: &dyn Fn(f64) -> Point, t0: f64, t1: f64, tol: f64, out: &mut Vec<Point>) {
+struct Joined {
+    outlines: usize,
+    pieces: usize,
+}
+
+/// Join the zero-width open pieces (lines, arcs, open polylines) of each layer that meet end
+/// to end in a closed cycle into one closed path: CAD often draws a pad or a cut-out as
+/// separate LINE and ARC entities, which a region layer could not otherwise use. Only cycles
+/// where every joint has exactly two pieces are joined; open chains and junctions are left
+/// as they are. Pieces with a width (strokes) are never joined.
+fn join_closed_outlines(placed: &mut Vec<(String, Primitive)>) -> Joined {
+    use std::collections::HashMap;
+    let key = |q: Point| {
+        (
+            (q.x / pline::REPEAT_EPS).round() as i64,
+            (q.y / pline::REPEAT_EPS).round() as i64,
+        )
+    };
+    let ends = |p: &Pline| {
+        let (a, b) = (p.at(0), p.at(p.vertex_count() - 1));
+        (Point::new(a.x, a.y), Point::new(b.x, b.y))
+    };
+    // Open zero-width pieces by layer, and every piece end at each (snapped) point.
+    let mut at: HashMap<(&str, (i64, i64)), Vec<usize>> = HashMap::new();
+    for (i, (layer, prim)) in placed.iter().enumerate() {
+        if let Primitive::Path { pline, width } = prim
+            && width.is_none_or(|w| w <= 0.0)
+            && !pline.is_closed()
+            && pline.vertex_count() >= 2
+        {
+            let (a, b) = ends(pline);
+            at.entry((layer.as_str(), key(a))).or_default().push(i);
+            at.entry((layer.as_str(), key(b))).or_default().push(i);
+        }
+    }
+    let degree_two = |layer: &str, q: Point| at.get(&(layer, key(q))).is_some_and(|v| v.len() == 2);
+    let mut used = vec![false; placed.len()];
+    let mut cycles: Vec<(String, Pline, Vec<usize>)> = Vec::new();
+    for start in 0..placed.len() {
+        let (layer, Primitive::Path { pline, width }) = &placed[start] else {
+            continue;
+        };
+        if used[start] || pline.is_closed() || width.is_some_and(|w| w > 0.0) {
+            continue;
+        }
+        let (a, b) = ends(pline);
+        if !degree_two(layer, a) || !degree_two(layer, b) {
+            continue;
+        }
+        // Walk on from the end of `start` until back at its beginning.
+        let mut path = pline.clone();
+        let mut members = vec![start];
+        let mut here = b;
+        let mut last = start;
+        let closed = loop {
+            if key(here) == key(a) {
+                break true;
+            }
+            if !degree_two(layer, here) {
+                break false;
+            }
+            let pieces = &at[&(layer.as_str(), key(here))];
+            let next = if pieces[0] == last {
+                pieces[1]
+            } else {
+                pieces[0]
+            };
+            if used[next] || members.contains(&next) {
+                break false;
+            }
+            let Primitive::Path { pline: piece, .. } = &placed[next].1 else {
+                break false;
+            };
+            let (pa, pb) = ends(piece);
+            let piece = if key(pa) == key(here) {
+                piece.clone()
+            } else {
+                let mut r = piece.clone();
+                r.invert_direction_mut();
+                r
+            };
+            here = if key(pa) == key(here) { pb } else { pa };
+            pline::append(&mut path, &piece);
+            members.push(next);
+            last = next;
+        };
+        if !closed || members.len() < 2 {
+            continue;
+        }
+        let mut lp = Pline::new_closed();
+        let n = path.vertex_count();
+        for i in 0..n - 1 {
+            let v = path.at(i);
+            lp.add(v.x, v.y, v.bulge);
+        }
+        for &m in &members {
+            used[m] = true;
+        }
+        cycles.push((layer.clone(), lp, members));
+    }
+    let joined = Joined {
+        outlines: cycles.len(),
+        pieces: cycles.iter().map(|c| c.2.len()).sum(),
+    };
+    if joined.outlines > 0 {
+        let mut kept: Vec<(String, Primitive)> = placed
+            .drain(..)
+            .enumerate()
+            .filter(|(i, _)| !used[*i])
+            .map(|(_, p)| p)
+            .collect();
+        kept.extend(
+            cycles
+                .into_iter()
+                .map(|(layer, pline, _)| (layer, Primitive::Path { pline, width: None })),
+        );
+        *placed = kept;
+    }
+    joined
+}
+
+pub(super) fn flatten_curve(
+    f: &dyn Fn(f64) -> Point,
+    t0: f64,
+    t1: f64,
+    tol: f64,
+    out: &mut Vec<Point>,
+) {
     fn deviation(p: Point, a: Point, b: Point) -> f64 {
         let (dx, dy) = (b.x - a.x, b.y - a.y);
         let len2 = dx * dx + dy * dy;
@@ -618,11 +746,56 @@ impl Converter<'_> {
                 }
             }
             "INSERT" => self.insert(raw, &xf, &layer, depth, out),
-            "REGION" | "BODY" | "3DSOLID" | "SURFACE" | "ACAD_PROXY_ENTITY" | "MESH" => {
+            "REGION" => match self.region(raw) {
+                Ok(faces) => {
+                    for loops in faces {
+                        let loops: Vec<Pline> =
+                            loops.iter().map(|l| transform_pline(l, &xf, tol)).collect();
+                        out.push((
+                            layer.clone(),
+                            Primitive::Hatch {
+                                loops,
+                                rule: LoopRule::EvenOdd,
+                                solid: true,
+                                pattern: "REGION".into(),
+                            },
+                        ));
+                    }
+                }
+                Err(why) => {
+                    let ctx = format!("REGION {}", raw.handle().unwrap_or("?"));
+                    self.diag(
+                        Diagnostic::warning("dxf.region", format!("REGION not read: {why}"))
+                            .with_context(ctx),
+                    );
+                    self.unsupported(raw, &layer);
+                }
+            },
+            "BODY" | "3DSOLID" | "SURFACE" | "ACAD_PROXY_ENTITY" | "MESH" => {
                 self.unsupported(raw, &layer);
             }
             _ => self.unsupported(raw, &layer),
         }
+    }
+
+    /// The faces of a REGION, from the ACIS text it carries (group 1 lines, group 3
+    /// continuing a long line). DXF 2013 and later keep ACIS data in binary elsewhere.
+    fn region(&mut self, raw: &RawEntity) -> Result<Vec<Vec<Pline>>, String> {
+        let mut text = String::new();
+        for p in &raw.pairs {
+            match p.code {
+                1 => {
+                    text.push('\n');
+                    text.push_str(&super::acis::decipher(&p.value));
+                }
+                3 => text.push_str(&super::acis::decipher(&p.value)),
+                _ => {}
+            }
+        }
+        if text.trim().is_empty() {
+            return Err("its ACIS data is binary (DXF 2013 and later), which is not read".into());
+        }
+        super::acis::region_faces(text.trim_start(), self.opts.tolerance_mm)
     }
 
     fn malformed(&mut self, raw: &RawEntity, what: &str) {
@@ -1348,6 +1521,17 @@ pub fn read_str(text: &str, opts: &ReadOptions) -> Result<DxfDocument, DxfReadEr
         ));
     }
 
+    let joined = join_closed_outlines(&mut placed);
+    if joined.outlines > 0 {
+        conv.diagnostics.push(Diagnostic::info(
+            "dxf.outlines_joined",
+            format!(
+                "{} closed outline(s) joined from {} separate line, arc and polyline pieces",
+                joined.outlines, joined.pieces
+            ),
+        ));
+    }
+
     // Unsupported summary.
     for (kind, (count, layers)) in &conv.unsupported {
         let layers: Vec<&str> = layers.iter().map(|s| s.as_str()).collect();
@@ -1492,6 +1676,50 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn line(layer: &str, a: (f64, f64), b: (f64, f64)) -> String {
+        format!(
+            "  0\nLINE\n  8\n{layer}\n 10\n{}\n 20\n{}\n 11\n{}\n 21\n{}\n",
+            a.0, a.1, b.0, b.1
+        )
+    }
+
+    #[test]
+    fn lines_and_arcs_closing_a_cycle_join_into_one_outline() {
+        // A 2 mm square of four LINEs (drawn out of order, one reversed), a D of a LINE
+        // and a half-circle ARC, an open chain of two lines, a T junction, and a square of
+        // wide polylines: only the square and the D become closed paths.
+        let mut e = String::new();
+        e += &line("PADS", (0.0, 0.0), (2.0, 0.0));
+        e += &line("PADS", (2.0, 2.0), (0.0, 2.0));
+        e += &line("PADS", (2.0, 2.0), (2.0, 0.0));
+        e += &line("PADS", (0.0, 2.0), (0.0, 0.0));
+        e += &line("PADS", (10.0, -1.0), (10.0, 1.0));
+        e += "  0\nARC\n  8\nPADS\n 10\n10\n 20\n0\n 40\n1\n 50\n90\n 51\n270\n";
+        e += &line("PADS", (20.0, 0.0), (21.0, 0.0));
+        e += &line("PADS", (21.0, 0.0), (21.0, 1.0));
+        e += &line("PADS", (30.0, 0.0), (32.0, 0.0));
+        e += &line("PADS", (31.0, 0.0), (31.0, 1.0));
+        e += &line("PADS", (32.0, 0.0), (31.0, 1.0));
+        e += &line("PADS", (31.0, 1.0), (30.0, 0.0));
+        let doc = read(&dxf(mm(), "", &e));
+        let ps = paths(&doc, "PADS");
+        let closed: Vec<f64> = ps
+            .iter()
+            .filter(|(p, _)| p.is_closed())
+            .map(|(p, _)| p.area().abs())
+            .collect();
+        assert_eq!(closed.len(), 2, "{closed:?}");
+        assert!(closed.iter().any(|a| (a - 4.0).abs() < 1e-9));
+        assert!(closed.iter().any(|a| (a - PI / 2.0).abs() < 1e-9));
+        // The chain (2 pieces) and the junction's 4 lines stay as they were.
+        assert_eq!(ps.iter().filter(|(p, _)| !p.is_closed()).count(), 6);
+        assert!(
+            doc.diagnostics
+                .iter()
+                .any(|d| d.code == "dxf.outlines_joined" && d.message.starts_with("2 closed"))
+        );
     }
 
     #[test]

@@ -54,11 +54,13 @@ A layer may also carry a declared **function** (Gerber X2 `TF.FileFunction`, IPC
 | ELLIPSE, SPLINE | Flattened within the read tolerance (1 µm). SPLINE by de Boor evaluation. |
 | HATCH | Polyline and edge boundaries (lines, arcs, ellipses, splines), nesting styles. |
 | SOLID, TRACE | Filled quadrilaterals. |
+| REGION | Planar regions from the ACIS text DXF R13 to R2010 embed (SAT 1.x to 7.x): each face a filled area, straight and circular edges exact, elliptic ones flattened. Regions DXF 2013 and later store in binary (ACDSDATA) are reported, not read. |
+| Outlines in pieces | Zero-width lines, arcs and open polylines of one layer that meet end to end in a closed cycle (every joint shared by exactly two pieces) become one closed outline, as CAD often draws pads and cut-outs (info). Open chains and junctions are left as they are. |
 | INSERT | Blocks expanded with scale, rotation and translation; entities on layer 0 inherit the insert's layer. Non-uniform scale flattens arcs (warning). Depth limited to 32. |
 | `$INSUNITS` | in, mm, cm, m, mil, µm. Unitless files use the assumed unit (mm), reported. |
 
-Reported instead of read: REGION, BODY, 3DSOLID, SURFACE and proxy entities (error: ACIS
-geometry, explode it in CAD), MESH and polyface or 3D POLYLINE (warning), TEXT, MTEXT,
+Reported instead of read: BODY, 3DSOLID, SURFACE and proxy entities, and REGIONs that
+cannot be read (error: ACIS geometry, explode it in CAD), MESH and polyface or 3D POLYLINE (warning), TEXT, MTEXT,
 attributes, DIMENSION and leaders (info), unknown entities (warning). Binary DXF is refused.
 
 ## Gerber RS-274X and X2

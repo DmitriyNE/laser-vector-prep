@@ -3,6 +3,36 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-26 — The owner's test files: an Altium IPC-2581 board and a DXF
+
+The owner could not map the inner copper layers of an Altium IPC-2581 export (`.cvg`) onto
+the copper slot (DEF-18): mapping wrote a rule on the layer's function, which both inner
+layers share (`SIGNAL,INTERNAL`), so the slot was ambiguous. The rule now names the layer
+when its function is not unique, the PCB presets also find copper called `SIGNAL`, `PLANE`
+or `MIXED`, and the ambiguity message names the candidates. Checking the file further:
+nearly all of its traces were missing (DEF-19), because Altium groups a layer's lines and
+arcs in a `UserSpecial` straight inside `Features` and gives each line its `LineDesc`
+inline; the reader knew neither. Then the default LDI fill of the board ran out of memory
+(DEF-20): its copper is drawn with micron-long chords, partly two approximations of one
+curve merged into a 40 nm zig-zag, and in millimetres the offset kernel's fixed tolerances
+read such chords as lines folded back on themselves. Removing vertices "fixed" it but
+moved curves by microns; running the offsets in micrometres fixes it with no change to the
+geometry (a test disc of 2 µm chords now offsets to the exact area). The board now fills in
+0.75 s and misses 0.55% of its copper (corner and core slivers), against 20% and an
+out-of-memory before. Its coverage audit then took 22 s: the boolean that unites the swept
+strokes probed winding numbers by walking every segment of loops thousands of vertices
+long, thousands of times. Probes now go through a segment index per loop, or one for all
+segments in a large boolean (same sums; a proptest compares them with the kernel's): 4.4 s
+for the whole evaluation natively, and the 8×8 test panel 2.4 s instead of 3.6 s.
+
+The DXF had 20 copper pads as REGIONs, which were reported as unreadable ACIS solids. ACIS
+keeps a region as SAT text in the DXF, lightly enciphered (each character `c` as
+`159 - c`); planar faces with straight, circular and elliptic edges are now read, the
+record layout of ACIS 1.x and 7.x alike. Ten more pads were octagons of eight separate
+LINEs each, which a region layer refused as open paths; closed cycles of zero-width pieces
+now join into one outline on import. Neither file is kept in the repository; the tests use
+synthetic equivalents.
+
 ## 2026-10-26 — Patterns
 
 The owner asked for more patterns (D37). Scoping outward contour fill turned up DEF-15:
