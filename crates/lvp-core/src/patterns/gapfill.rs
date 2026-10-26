@@ -287,24 +287,80 @@ fn medial_axis(island: &Region, opts: &GapFillOptions) -> Option<Vec<Pline>> {
         if !island.contains(mid) {
             continue;
         }
+        // Between a corner and an edge the axis is a parabola: follow it.
+        let via = match (edge.is_curved(), sa, sb) {
+            (true, (_, Some(q)), (seg, None)) | (true, (seg, None), (_, Some(q))) => {
+                let (s0, s1) = seg_points(seg);
+                let mm = |p: [i32; 2]| to_mm(p[0] as f64, p[1] as f64);
+                parabola_points(mm(q), mm(s0), mm(s1), pa, pb, opts.flatten_tolerance_mm)
+            }
+            _ => Vec::new(),
+        };
         chords.push(Chord {
             from: na,
             to: nb,
             p_from: pa,
             p_to: pb,
+            via,
         });
     }
     Some(chain(chords, opts.min_length_mm))
 }
 
+/// Points of the medial axis between corner `focus` and the edge on the line through `a`
+/// and `b` (a parabola), strictly between its points `from` and `to`, so that straight
+/// segments through them stay within `tol` of it.
+fn parabola_points(
+    focus: Point,
+    a: Point,
+    b: Point,
+    from: Point,
+    to: Point,
+    tol: f64,
+) -> Vec<Point> {
+    let len = (b.x - a.x).hypot(b.y - a.y);
+    if len <= 0.0 || tol <= 0.0 {
+        return Vec::new();
+    }
+    let (ux, uy) = ((b.x - a.x) / len, (b.y - a.y) / len);
+    // Frame: x along the line, y the distance from it (the focus has y != 0).
+    let local = |p: Point| {
+        let (px, py) = (p.x - a.x, p.y - a.y);
+        (px * ux + py * uy, -px * uy + py * ux)
+    };
+    let (fx, fy) = local(focus);
+    if fy.abs() < 1e-12 {
+        return Vec::new();
+    }
+    let y = |x: f64| ((x - fx) * (x - fx) + fy * fy) / (2.0 * fy);
+    let back = |x: f64| {
+        let yy = y(x);
+        Point::new(a.x + x * ux - yy * uy, a.y + x * uy + yy * ux)
+    };
+    fn split(x0: f64, x1: f64, depth: u32, y: &dyn Fn(f64) -> f64, tol: f64, out: &mut Vec<f64>) {
+        let xm = (x0 + x1) / 2.0;
+        if depth >= 16 || (y(xm) - (y(x0) + y(x1)) / 2.0).abs() <= tol {
+            return;
+        }
+        split(x0, xm, depth + 1, y, tol, out);
+        out.push(xm);
+        split(xm, x1, depth + 1, y, tol, out);
+    }
+    let mut xs = Vec::new();
+    split(local(from).0, local(to).0, 0, &y, tol, &mut xs);
+    xs.into_iter().map(back).collect()
+}
+
 type Node = (u64, u64);
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Chord {
     from: Node,
     to: Node,
     p_from: Point,
     p_to: Point,
+    /// Points in between, from `p_from` on (where the axis is curved).
+    via: Vec<Point>,
 }
 
 /// Join chords sharing vertices into open polylines; junctions (degree != 2) end chains.
@@ -328,14 +384,17 @@ fn chain(chords: Vec<Chord>, min_length: f64) -> Vec<Pline> {
         if used[start] {
             continue;
         }
-        let mut c = chords[start];
+        let mut c = chords[start].clone();
         // Begin at a non-degree-2 node when there is one.
         if degree[&c.from] == 2 && degree[&c.to] != 2 {
             std::mem::swap(&mut c.from, &mut c.to);
             std::mem::swap(&mut c.p_from, &mut c.p_to);
+            c.via.reverse();
         }
         used[start] = true;
-        let mut pts = vec![c.p_from, c.p_to];
+        let mut pts = vec![c.p_from];
+        pts.extend(&c.via);
+        pts.push(c.p_to);
         let origin = c.from;
         let mut cur = c.to;
         while degree[&cur] == 2 && cur != origin {
@@ -343,14 +402,16 @@ fn chain(chords: Vec<Chord>, min_length: f64) -> Vec<Pline> {
                 break;
             };
             used[next] = true;
-            let n = chords[next];
-            let (nv, np) = if n.from == cur {
-                (n.to, n.p_to)
+            let n = &chords[next];
+            if n.from == cur {
+                pts.extend(&n.via);
+                pts.push(n.p_to);
+                cur = n.to;
             } else {
-                (n.from, n.p_from)
-            };
-            pts.push(np);
-            cur = nv;
+                pts.extend(n.via.iter().rev());
+                pts.push(n.p_from);
+                cur = n.from;
+            }
         }
         // A chain that comes back to where it began is a closed centreline (the core of a
         // ring around a hole), and the readers would close it on import anyway.
@@ -403,6 +464,32 @@ mod tests {
         assert!(len > 9.5 && len < 10.0, "length {len}");
         for v in l.iter_vertexes() {
             assert!((v.y - 0.125).abs() < 2e-3, "centreline y {}", v.y);
+        }
+    }
+
+    #[test]
+    fn parabolic_axis_points_are_equidistant_and_close_enough() {
+        // Corner (1, 2) against the x axis: the parabola y = ((x - 1)^2 + 4) / 4.
+        let focus = Point::new(1.0, 2.0);
+        let (a, b) = (Point::new(-5.0, 0.0), Point::new(5.0, 0.0));
+        let y = |x: f64| ((x - 1.0) * (x - 1.0) + 4.0) / 4.0;
+        let (from, to) = (Point::new(-2.0, y(-2.0)), Point::new(3.0, y(3.0)));
+        let tol = 1e-3;
+        let pts = parabola_points(focus, a, b, from, to, tol);
+        assert!(pts.len() > 4);
+        let mut all = vec![from];
+        all.extend(&pts);
+        all.push(to);
+        for p in &pts {
+            assert!(
+                (p.distance(focus) - p.y).abs() < 1e-9,
+                "{p:?} is not on the axis"
+            );
+        }
+        for w in all.windows(2) {
+            assert!(w[0].x < w[1].x, "in order");
+            let mx = (w[0].x + w[1].x) / 2.0;
+            assert!(((w[0].y + w[1].y) / 2.0 - y(mx)).abs() <= tol + 1e-12);
         }
     }
 

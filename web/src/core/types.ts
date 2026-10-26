@@ -96,6 +96,12 @@ export type Pattern =
       innerFirst: boolean;
       join?: JoinStyle;
     }
+  | {
+      kind: "centreline";
+      /** Leave out centrelines shorter than this; null = keep all. */
+      minLengthMm?: number | null;
+      simplifyMm?: number | null;
+    }
   | { kind: "hatch"; pitchMm: number; angleDeg: number; phaseMm: number; serpentine: boolean; insetMm: number }
   | { kind: "crossHatch"; pitchMm: number; anglesDeg: number[]; phaseMm: number; serpentine: boolean; insetMm: number }
   | {

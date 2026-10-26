@@ -450,7 +450,8 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                         );
                     }
                 }
-                Pattern::Passthrough { simplify_mm, .. } => {
+                Pattern::Passthrough { simplify_mm, .. }
+                | Pattern::Centreline { simplify_mm, .. } => {
                     if simplify_mm.is_some_and(|s| s < 0.0) {
                         out.push(
                             Diagnostic::error(

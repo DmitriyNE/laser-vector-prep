@@ -673,6 +673,35 @@
           "type": "object"
         },
         {
+          "description": "Single-line engraving of thin features (outlined text, traces): the region's medial\naxis as centrelines, open where it branches or ends, closed where it loops. Schema v3.",
+          "properties": {
+            "kind": {
+              "const": "centreline",
+              "type": "string"
+            },
+            "minLengthMm": {
+              "description": "Leave out centrelines shorter than this (mm); absent keeps every one.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "simplifyMm": {
+              "description": "Drop vertices that deviate less than this from the line (mm); absent keeps all.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Equally spaced parallel scanlines clipped to the region and its holes.",
           "properties": {
             "angleDeg": {

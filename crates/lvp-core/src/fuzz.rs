@@ -79,7 +79,9 @@ fn coarsen(profile: &mut Profile, min_pitch: f64) {
                     *pitch_mm = pitch_mm.max(min_pitch);
                     *shell_pitch_mm = shell_pitch_mm.max(min_pitch);
                 }
-                Pattern::Passthrough { .. } | Pattern::BoundaryTrace { .. } => {}
+                Pattern::Passthrough { .. }
+                | Pattern::BoundaryTrace { .. }
+                | Pattern::Centreline { .. } => {}
             }
         }
     }

@@ -120,6 +120,12 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
                 ..Default::default()
             }
         }),
+        Pattern::Centreline {
+            min_length_mm,
+            simplify_mm,
+        } => with_region(geometry, "centreline", |region| {
+            centreline(region, *min_length_mm, *simplify_mm)
+        }),
         Pattern::Hatch {
             pitch_mm,
             angle_deg,
@@ -253,6 +259,45 @@ struct FillSettings {
     gap_fill: bool,
     order: RingOrder,
     link: bool,
+}
+
+/// Curve tolerance of single-line centrelines (mm): how closely the flattened boundary and
+/// the straight pieces of the centrelines follow the curves.
+const CENTRELINE_TOLERANCE_MM: f64 = 1e-3;
+
+/// The medial axis of every island, in parallel.
+fn centreline(region: &Region, min_length: Option<f64>, simplify: Option<f64>) -> PatternOutput {
+    let opts = gapfill::GapFillOptions {
+        assumed_width_mm: 0.0,
+        flatten_tolerance_mm: CENTRELINE_TOLERANCE_MM,
+        min_length_mm: min_length.unwrap_or(0.0).max(0.0),
+    };
+    let islands = region.islands();
+    let count = islands.len().max(1) as f64;
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let parts = crate::par::map(islands, |island| {
+        let part = gapfill::centrelines(&island, &opts);
+        let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        crate::cancel::step(n as f64 / count);
+        part
+    });
+    let mut out = PatternOutput::default();
+    let mut skipped = 0;
+    for (lines, s) in parts {
+        skipped += s;
+        out.paths.extend(lines.into_iter().map(|l| match simplify {
+            Some(t) if t > 0.0 => crate::pline::simplify(&l, t),
+            _ => l,
+        }));
+    }
+    out.stats.gap_fills = out.paths.len();
+    if skipped > 0 {
+        out.diagnostics.push(Diagnostic::warning(
+            "pattern.centreline_skipped",
+            format!("{skipped} island(s) were too thin or degenerate for a centreline"),
+        ));
+    }
+    out
 }
 
 struct IslandFill {
@@ -1135,6 +1180,55 @@ mod tests {
             .filter(|p| crate::pline::bounds(p).unwrap().max.x < 5.0)
             .count();
         assert!(near_tip >= 3, "{near_tip} centrelines near the tip");
+    }
+
+    #[test]
+    fn centreline_follows_a_bent_stroke_round_its_inner_corner() {
+        // An L of two 10 mm arms 0.4 mm wide: one line along the middle of each arm, joined
+        // by two parabolas round the inner corner (0.4, 0.4) that meet on its diagonal.
+        let w = 0.4;
+        let l = rect_region(0.0, 0.0, 10.0, w).union(&rect_region(0.0, 0.0, w, 10.0));
+        let out = generate(
+            &Pattern::Centreline {
+                min_length_mm: None,
+                simplify_mm: None,
+            },
+            &Geometry::Region(l),
+        );
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert_eq!(out.paths.len(), 1);
+        let line = &out.paths[0];
+        assert!(!line.is_closed());
+        let corner = Point::new(w, w);
+        for v in line.iter_vertexes() {
+            // Equidistant from the outer edge on its side and the inner edge or corner.
+            let (along, across) = if v.x >= v.y { (v.x, v.y) } else { (v.y, v.x) };
+            let inner = if along >= w {
+                w - across
+            } else {
+                Point::new(v.x, v.y).distance(corner)
+            };
+            assert!((inner - across).abs() < 1e-5, "{v:?}: {inner} vs {across}");
+        }
+        // Each arm's middle runs from the bend to half a width short of the arm's end.
+        let len = crate::pline::length(line);
+        assert!(
+            len > 2.0 * (10.0 - 1.5 * w) && len < 2.0 * (10.0 - 0.5 * w),
+            "length {len}"
+        );
+        assert!(line.vertex_count() > 6, "the bend is followed, not cut");
+
+        // A ring gives one closed line.
+        let ring = rect_region(0.0, 0.0, 4.0, 4.0).difference(&rect_region(0.3, 0.3, 3.7, 3.7));
+        let out = generate(
+            &Pattern::Centreline {
+                min_length_mm: Some(1.0),
+                simplify_mm: None,
+            },
+            &Geometry::Region(ring),
+        );
+        assert_eq!(out.paths.len(), 1);
+        assert!(out.paths[0].is_closed());
     }
 
     fn linked_contour(pitch: f64, ring_order: RingOrder, region: &Region) -> PatternOutput {

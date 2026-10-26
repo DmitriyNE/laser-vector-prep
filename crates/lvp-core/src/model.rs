@@ -331,6 +331,17 @@ pub enum Pattern {
         #[serde(default, skip_serializing_if = "JoinStyle::is_round")]
         join: JoinStyle,
     },
+    /// Single-line engraving of thin features (outlined text, traces): the region's medial
+    /// axis as centrelines, open where it branches or ends, closed where it loops. Schema v3.
+    #[serde(rename_all = "camelCase")]
+    Centreline {
+        /// Leave out centrelines shorter than this (mm); absent keeps every one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_length_mm: Option<f64>,
+        /// Drop vertices that deviate less than this from the line (mm); absent keeps all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplify_mm: Option<f64>,
+    },
     /// Equally spaced parallel scanlines clipped to the region and its holes.
     #[serde(rename_all = "camelCase")]
     Hatch {

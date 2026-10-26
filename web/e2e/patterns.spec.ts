@@ -64,3 +64,20 @@ test("linked rings join each run of nested rings into one path", async ({ page }
   expect((await copperPass(page)).pattern.link).toBe(true);
   await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("linked");
 });
+
+test("centreline engraving draws single lines along the copper", async ({ page }) => {
+  await openCopperPass(page);
+  const rev = await revision(page);
+  await page.getByLabel("Pattern").selectOption("centreline");
+  const after = await evaluatedAfter(page, rev);
+  expect(after.hasErrors).toBe(false);
+  const pass = after.passes[0]!;
+  expect(pass.paths).toBeGreaterThan(0);
+  expect(pass.open).toBeGreaterThan(0);
+  await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("centreline");
+  // A minimum length leaves the short lines out.
+  const rev2 = await revision(page);
+  await page.getByLabel("Minimum length (mm)").fill("1");
+  const longer = await evaluatedAfter(page, rev2);
+  expect(longer.passes[0]!.paths).toBeLessThan(pass.paths);
+});

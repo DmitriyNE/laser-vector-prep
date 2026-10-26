@@ -49,6 +49,9 @@
         case "boundaryTrace":
           passInfo.pass.pattern = { kind: "boundaryTrace", side: "on", offsetMm: 0, kerfMm: 0, rings: 1, ringSpacingMm: 0.05, reverse: false, innerFirst: true };
           break;
+        case "centreline":
+          passInfo.pass.pattern = { kind: "centreline" };
+          break;
         case "hatch":
           passInfo.pass.pattern = { kind: "hatch", pitchMm: 0.02, angleDeg: 0, phaseMm: 0, serpentine: true, insetMm: 0 };
           break;
@@ -264,6 +267,7 @@
         <option value="hatch">parallel hatch</option>
         <option value="crossHatch">crosshatch (several angles)</option>
         <option value="boundaryHatch">boundary shells + hatch</option>
+        <option value="centreline">centreline (thin features)</option>
         <option value="passthrough">linework passthrough</option>
       </select>
     </label>
@@ -312,6 +316,15 @@
       )}
       <label class="check" title="cutting order: inner contours first, so parts do not drop before their holes are cut"><input type="checkbox" bind:checked={pass.pattern.innerFirst} onchange={touch} /> holes first</label>
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
+    {:else if pass.pattern.kind === "centreline"}
+      <label title="single-line engraving: the middle of every stroke, half a stroke width short of its ends; lines shorter than this are left out (empty keeps all)">Minimum length (mm)
+        <input type="number" step="0.01" min="0" placeholder="keep all" value={pass.pattern.minLengthMm ?? ""}
+          oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "centreline") pass.pattern.minLengthMm = v === "" ? null : Number(v); }); }} />
+      </label>
+      <label title="tolerance for dropping vertices; empty = off">Simplify (mm)
+        <input type="number" step="0.001" min="0" placeholder="off" value={pass.pattern.simplifyMm ?? ""}
+          oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { if (pass.pattern.kind === "centreline") pass.pattern.simplifyMm = v === "" ? null : Number(v); }); }} />
+      </label>
     {:else if pass.pattern.kind === "hatch"}
       <label title={CENTRELINE}>Pitch (mm) <input type="number" step="0.001" min="0.0005" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
       <label title="in document coordinates">Angle (°) <input type="number" step="1" bind:value={pass.pattern.angleDeg} oninput={touch} /></label>
