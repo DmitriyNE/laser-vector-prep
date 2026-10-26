@@ -3,7 +3,7 @@
 // sources and the latest evaluation (no Svelte, no DOM), laid out by dagre.
 
 import { Graph, layout as dagreLayout } from "@dagrejs/dagre";
-import type { EvaluationSummary, GeometryKind, MatchRule, Operand, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
+import type { BindingSummary, EvaluationSummary, GeometryKind, MatchRule, Operand, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
 import { opLabel, patternLabel, plural } from "./labels.js";
 
 /** Worst diagnostic of a node; `idle` when it has no result (not evaluated, or blocked). */
@@ -127,10 +127,10 @@ export function buildGraph(
   profile: Profile,
   sources: SourceSummary[],
   evaluation: EvaluationSummary | null,
+  bindings: BindingSummary[] = evaluation?.bindings ?? [],
 ): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
-  const bindings = evaluation?.bindings ?? [];
   const edge = (kind: EdgeKind, source: string, sourceHandle: string, target: string, targetHandle: string) =>
     edges.push({ id: `${kind}:${source}/${sourceHandle}>${target}/${targetHandle}`, kind, source, sourceHandle, target, targetHandle });
 

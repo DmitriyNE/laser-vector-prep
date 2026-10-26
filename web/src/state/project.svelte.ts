@@ -3,6 +3,7 @@
 // evaluation (older results can never overwrite a newer one).
 
 import type {
+  BindingsSummary,
   EvaluationSummary,
   Diagnostic,
   MatchRule,
@@ -62,6 +63,12 @@ export class ProjectStore {
   canRedo = $state(false);
 
   evaluation: EvaluationSummary | null = $state(null);
+  /**
+   * How the profile's slots resolve against the sources now: resolved before each
+   * evaluation and updated as soon as a layer is mapped, so the panels never show the
+   * mapping of an evaluation still running or cancelled.
+   */
+  bindings: BindingsSummary = $state({ bindings: [], unboundLayers: [] });
   evaluating = $state(false);
   importing = $state(false);
   /** Bumps whenever preview geometry may have changed. */
@@ -81,6 +88,8 @@ export class ProjectStore {
   #evalLoop: Promise<void> | null = null;
   /** Another evaluation is wanted after the one in flight (which is being cancelled). */
   #evalAgain = false;
+  /** Layers mapped onto slots so far (see `bindings`). */
+  #mapped = 0;
   /** Epochs of the evaluation and import in flight (0: none), for `cancel()`. */
   #evalEpoch = 0;
   #importEpoch = 0;
@@ -167,6 +176,7 @@ export class ProjectStore {
     this.#files = [];
     this.sources = [];
     this.evaluation = null;
+    this.bindings = { bindings: [], unboundLayers: [] };
     for (const f of files) {
       try {
         const bytes = new Uint8Array(await f.arrayBuffer());
@@ -292,7 +302,11 @@ export class ProjectStore {
         const epoch = this.worker.nextEpoch();
         this.#evalEpoch = epoch;
         try {
+          const mapped = this.#mapped;
           await this.worker.call({ kind: "setProfile", profile: $state.snapshot(this.profile) });
+          const bindings = await this.worker.call({ kind: "bindings" });
+          // A layer mapped meanwhile is newer than this; the next round resolves it.
+          if (mapped === this.#mapped) this.bindings = bindings;
           const ev = await this.worker.call({ kind: "evaluate", epoch });
           if (this.#evalAgain) continue; // superseded while it ran
           this.evaluation = ev;
@@ -547,6 +561,8 @@ export class ProjectStore {
     const src = this.sources.find((s) => s.name === file);
     const name = src?.format === "gerber" ? file.replace(/\.[^.]+$/, "") : layer;
     const id = this.addBinding(name, this.portableRule(file, layer));
+    this.bindings.bindings.push({ id, name, required: false, status: "matched", file, layer, candidates: [] });
+    this.#claim(file, layer);
     this.selection = { kind: "binding", id };
   }
 
@@ -558,6 +574,17 @@ export class ProjectStore {
       if (!b) return;
       b.rules = [rule, ...b.rules.filter((r) => JSON.stringify(r) !== JSON.stringify(rule))];
     });
+    // The new first rule matches that layer and no other: the slot is bound to it now, not
+    // when the evaluation that follows completes (or never, if it is cancelled).
+    const b = this.bindings.bindings.find((x) => x.id === bindingId);
+    if (b) Object.assign(b, { status: "matched", file, layer, candidates: [] });
+    this.#claim(file, layer);
+  }
+
+  /** An imported layer is bound to a slot: no longer listed as unbound. */
+  #claim(file: string, layer: string) {
+    this.#mapped++;
+    this.bindings.unboundLayers = this.bindings.unboundLayers.filter(([f, l]) => f !== file || l !== layer);
   }
 
   /** Layers (by name) that use a slot as an input. */
@@ -577,9 +604,9 @@ export class ProjectStore {
     return true;
   }
 
-  /** Which slot an imported layer is currently matched to, if any. */
-  bindingOf(file: string, layer: string) {
-    return this.evaluation?.bindings.find((b) => b.status === "matched" && b.file === file && b.layer === layer);
+  /** The slots an imported layer is bound to (each slot binds one layer; a layer may feed several). */
+  bindingsOf(file: string, layer: string) {
+    return this.bindings.bindings.filter((b) => b.status === "matched" && b.file === file && b.layer === layer);
   }
 
   // ---- structure: layers, passes, groups, and the edits drawn on the graph -------------

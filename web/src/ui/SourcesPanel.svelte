@@ -73,7 +73,7 @@
       <ul>
         {#each s.layers.filter((l) => l.closedPaths + l.openPaths + l.hatches > 0) as l (l.name)}
           {@const key = `${s.index}:${l.name}`}
-          {@const b = store.bindingOf(s.name, l.name)}
+          {@const slots = store.bindingsOf(s.name, l.name)}
           <li
             class:selected={store.selection.kind === "source" && store.selection.file === s.index && store.selection.layer === l.name}
           >
@@ -86,8 +86,15 @@
               {l.name}{#if l.function}<span class="fn"> {l.function}</span>{/if}
             </button>
             <button class="only" onclick={() => store.solo({ kind: "source", key })} title="show only this in preview">only</button>
-            <select class="map" class:unbound={!b} value={b?.id ?? ""} title="profile slot this layer is mapped to" onchange={(e) => onMap(e, s.name, l.name)}>
-              <option value="">{b ? "" : "unmapped"}</option>
+            <select
+              class="map"
+              class:unbound={!slots.length}
+              value={slots.length > 1 ? "+several" : (slots[0]?.id ?? "")}
+              title="profile slot this layer is mapped to (a slot takes one layer; mapping another moves it)"
+              onchange={(e) => onMap(e, s.name, l.name)}
+            >
+              <option value="">{slots.length ? "" : "unmapped"}</option>
+              {#if slots.length > 1}<option value="+several" disabled>→ {slots.map((x) => x.name).join(", ")}</option>{/if}
               {#each store.profile.sourceBindings as pb (pb.id)}<option value={pb.id}>→ {pb.name}</option>{/each}
               <option value="+new">+ new slot "{l.name}"</option>
             </select>

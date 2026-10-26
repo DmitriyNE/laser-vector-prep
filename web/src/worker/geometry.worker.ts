@@ -46,6 +46,8 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       return { result: undefined, transfer: [] };
     case "getProfile":
       return { result: JSON.parse(wasm.profile_json()), transfer: [] };
+    case "bindings":
+      return { result: JSON.parse(wasm.bindings_json()), transfer: [] };
     case "validateProfile":
       return { result: JSON.parse(wasm.validate_profile_json(JSON.stringify(req.profile))), transfer: [] };
     case "evaluate":

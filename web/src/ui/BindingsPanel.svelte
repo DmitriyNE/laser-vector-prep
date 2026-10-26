@@ -4,7 +4,7 @@
 
   let { store }: { store: ProjectStore } = $props();
 
-  const status = (id: string) => store.evaluation?.bindings.find((b) => b.id === id);
+  const status = (id: string) => store.bindings.bindings.find((b) => b.id === id);
   const imported = $derived(
     store.sources.flatMap((s) =>
       s.layers.filter((l) => l.closedPaths + l.openPaths + l.hatches > 0).map((l) => ({ file: s.name, layer: l.name, key: `${s.name}\u0000${l.name}` })),
@@ -46,10 +46,10 @@
       {#if st?.status === "ambiguous"}<div class="meta err">{st.candidates.length} layers match: pick one</div>{/if}
     </div>
   {/each}
-  {#if store.evaluation?.unboundLayers.length}
+  {#if store.bindings.unboundLayers.length}
     <div class="extra">
       <span class="meta">imported, not mapped:</span>
-      {#each store.evaluation.unboundLayers as [file, layer] (file + layer)}
+      {#each store.bindings.unboundLayers as [file, layer] (file + layer)}
         <span class="chip">{file} : {layer} <button title="new slot matching this layer" onclick={() => store.newBindingFromLayer(file, layer)}>+ slot</button></span>
       {/each}
     </div>

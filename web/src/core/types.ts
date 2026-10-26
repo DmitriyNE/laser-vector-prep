@@ -207,6 +207,12 @@ export interface BindingSummary {
   candidates: [string, string][];
 }
 
+/** How the profile's slots resolve against the sources, before any evaluation. */
+export interface BindingsSummary {
+  bindings: BindingSummary[];
+  unboundLayers: [string, string][];
+}
+
 export interface LayerSummary {
   id: string;
   name: string;

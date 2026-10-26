@@ -483,7 +483,7 @@
     <p class="hint">Used by: {store.bindingUsers(binding.id).join(", ") || "no working layer"}</p>
     <button onclick={deleteBinding}>delete slot</button>
   {:else if sourceLayer && sourceFile}
-    {@const mapped = store.bindingOf(sourceFile.name, sourceLayer.name)}
+    {@const mapped = store.bindingsOf(sourceFile.name, sourceLayer.name)}
     {@const b = sourceLayer.boundsMm}
     <p title="imported layers are read-only; map one onto a profile slot in the Sources list and working layers read from the slot">
       <strong>{sourceLayer.name}</strong> in {sourceFile.name}
@@ -492,7 +492,7 @@
       {#if sourceLayer.function}<dt>Function</dt><dd>{sourceLayer.function}</dd>{/if}
       <dt>Paths</dt><dd>{sourceLayer.closedPaths} closed, {sourceLayer.openPaths} open{sourceLayer.hatches ? `, ${sourceLayer.hatches} hatches` : ""}</dd>
       {#if b}<dt>Size</dt><dd title={`from (${b[0].toFixed(3)}, ${b[1].toFixed(3)}) to (${b[2].toFixed(3)}, ${b[3].toFixed(3)}) mm`}>{(b[2] - b[0]).toFixed(3)} × {(b[3] - b[1]).toFixed(3)} mm</dd>{/if}
-      <dt>Slot</dt><dd>{mapped ? mapped.name : "not mapped"}</dd>
+      <dt>Slot</dt><dd>{mapped.length ? mapped.map((m) => m.name).join(", ") : "not mapped"}</dd>
     </dl>
   {:else}
     <p class="hint">Select something to edit it.</p>

@@ -144,6 +144,13 @@ pub fn profile_json() -> String {
     with(|p| p.profile_json())
 }
 
+/// How the profile's slots resolve against the sources, without evaluating: a
+/// `BindingsSummary`.
+#[wasm_bindgen]
+pub fn bindings_json() -> Result<String, JsError> {
+    with(|p| json(&p.bindings()))
+}
+
 /// Structural diagnostics for a candidate profile, without applying it.
 #[wasm_bindgen]
 pub fn validate_profile_json(json_text: &str) -> Result<String, JsError> {

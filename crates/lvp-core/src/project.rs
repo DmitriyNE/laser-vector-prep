@@ -2,6 +2,8 @@
 //! UI-friendly form. Sources and the active profile go in; JSON summaries, flat preview
 //! buffers and export bytes come out. Nothing here persists anything.
 
+use std::collections::BTreeMap;
+
 use cavalier_contours::polyline::PlineSource;
 use serde::Serialize;
 
@@ -146,6 +148,14 @@ pub struct GroupSummary {
     pub after: Stats,
     /// A footprint heatmap over protected regions exists for this group.
     pub heatmap: bool,
+}
+
+/// Slots as resolved against the sources ([`Project::bindings`]).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingsSummary {
+    pub bindings: Vec<BindingSummary>,
+    pub unbound_layers: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -402,13 +412,27 @@ impl Project {
         self.last.as_ref().map(|(ev, _)| ev)
     }
 
-    pub fn summary(&self) -> Option<EvaluationSummary> {
-        let (ev, profile) = self.last.as_ref()?;
-        let bindings = profile
+    /// How the current profile's slots resolve against the current sources, without
+    /// evaluating: cheap, so the page shows a mapping as soon as it is made (an evaluation
+    /// can take seconds, and a cancelled one leaves the previous result).
+    pub fn bindings(&self) -> BindingsSummary {
+        let (status, unbound) = crate::eval::resolve_bindings(&self.profile, &self.sources);
+        BindingsSummary {
+            bindings: self.binding_summaries(&self.profile, &status),
+            unbound_layers: unbound,
+        }
+    }
+
+    fn binding_summaries(
+        &self,
+        profile: &Profile,
+        status: &BTreeMap<SourceId, BindingStatus>,
+    ) -> Vec<BindingSummary> {
+        profile
             .source_bindings
             .iter()
             .map(|b| {
-                let (status, file, layer, candidates) = match ev.bindings.get(&b.id) {
+                let (status, file, layer, candidates) = match status.get(&b.id) {
                     Some(BindingStatus::Matched(i, l)) => (
                         "matched",
                         self.sources.files.get(*i).map(|f| f.name.clone()),
@@ -440,7 +464,12 @@ impl Project {
                     candidates,
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    pub fn summary(&self) -> Option<EvaluationSummary> {
+        let (ev, profile) = self.last.as_ref()?;
+        let bindings = self.binding_summaries(profile, &ev.bindings);
         let layers = profile
             .working_layers
             .iter()

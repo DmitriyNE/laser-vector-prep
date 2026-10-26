@@ -9,7 +9,7 @@
   /** The selected entry names the profile being edited (renamed, or with unsaved edits). */
   const label = (key: string, name: string) => (key === current ? `${store.profile.name}${store.dirty ? " ● unsaved" : ""}` : name);
   const bindingCounts = $derived(() => {
-    const b = store.evaluation?.bindings ?? [];
+    const b = store.bindings.bindings;
     return {
       matched: b.filter((x) => x.status === "matched").length,
       missing: b.filter((x) => x.status === "missing").length,
@@ -101,12 +101,12 @@
   <button onclick={() => store.undo()} disabled={!store.canUndo} title="undo the last profile edit (Ctrl/⌘ Z)">Undo</button>
   <button onclick={() => store.redo()} disabled={!store.canRedo} title="redo (Ctrl/⌘ ⇧ Z)">Redo</button>
   <span class="status">
-    {#if store.evaluation}
+    {#if store.bindings.bindings.length || store.sources.length}
       {@const c = bindingCounts()}
       <span class="ok">{c.matched} matched</span>
       {#if c.missing}<span class="err">{c.missing} missing</span>{/if}
       {#if c.ambiguous}<span class="err">{c.ambiguous} ambiguous</span>{/if}
-      {#if store.evaluation.unboundLayers.length}<span class="meta">{store.evaluation.unboundLayers.length} unbound</span>{/if}
+      {#if store.bindings.unboundLayers.length}<span class="meta">{store.bindings.unboundLayers.length} unbound</span>{/if}
     {/if}
   </span>
   {#if message}<span class="msg">{message} <button onclick={() => (message = null)}>×</button></span>{/if}

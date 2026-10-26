@@ -37,7 +37,7 @@
   const nodeTypes = { file: GraphNode, slot: GraphNode, layer: GraphNode, pass: GraphNode, outputGroup: GraphNode };
   const edgeTypes = { link: GraphLink };
 
-  const model = $derived(buildGraph(store.profile, store.sources, store.evaluation));
+  const model = $derived(buildGraph(store.profile, store.sources, store.evaluation, store.bindings.bindings));
 
   /** Node positions: from the layout, or where the user dragged them. */
   let positions = new Map<string, { x: number; y: number }>();

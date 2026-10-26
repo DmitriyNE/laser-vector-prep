@@ -71,3 +71,28 @@ test("inner layers that share a function map onto the copper slot one at a time"
     expect(ev.layers.find((l) => l.name === "Copper")!.outers).toBe(count);
   }
 });
+
+test("a slot shows on the one layer it binds, also when its evaluation is cancelled", async ({ page }) => {
+  await page.goto(url);
+  await waitForApp(page);
+  await page.locator('input[type="file"][accept*="dxf"]').setInputFiles({ name: "board.cvg", mimeType: "application/xml", buffer: Buffer.from(altium) });
+  await page.waitForFunction(() => {
+    const lvp = (globalThis as unknown as { lvp: { sources: unknown[]; evaluating: boolean; evaluation: unknown } }).lvp;
+    return lvp.sources.length === 1 && !lvp.evaluating && lvp.evaluation !== null;
+  });
+  const select = (layer: string) =>
+    page
+      .locator(".source li")
+      .filter({ has: page.locator(".name", { hasText: new RegExp(`^${layer}`) }) })
+      .locator("select.map");
+  await expect(select("Top Layer")).toHaveValue("src-copper");
+  for (const layer of ["Layer 1", "Layer 2"]) {
+    await select(layer).selectOption("src-copper");
+    // Cancelled before it runs: the last evaluation still binds the slot to another layer.
+    await page.evaluate(() => (globalThis as unknown as { lvp: { cancel(): void } }).lvp.cancel());
+    for (const other of ["Top Layer", "Layer 1", "Layer 2"]) {
+      await expect(select(other)).toHaveValue(other === layer ? "src-copper" : "");
+    }
+    await expect(page.locator(".slot").filter({ hasText: "Copper" }).locator("select.map")).toHaveValue(`board.cvg\u0000${layer}`);
+  }
+});
