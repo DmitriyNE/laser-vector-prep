@@ -70,7 +70,8 @@ fn coarsen(profile: &mut Profile, min_pitch: f64) {
             match &mut pass.pattern {
                 Pattern::ContourFill { pitch_mm, .. }
                 | Pattern::Hatch { pitch_mm, .. }
-                | Pattern::CrossHatch { pitch_mm, .. } => *pitch_mm = pitch_mm.max(min_pitch),
+                | Pattern::CrossHatch { pitch_mm, .. }
+                | Pattern::Dots { pitch_mm, .. } => *pitch_mm = pitch_mm.max(min_pitch),
                 Pattern::BoundaryHatch {
                     pitch_mm,
                     shell_pitch_mm,

@@ -52,6 +52,9 @@
         case "centreline":
           passInfo.pass.pattern = { kind: "centreline" };
           break;
+        case "dots":
+          passInfo.pass.pattern = { kind: "dots", lattice: "hex", pitchMm: 0.1, angleDeg: 0, phaseMm: 0, shape: "circle", sizeMm: 0.03, insetMm: 0 };
+          break;
         case "hatch":
           passInfo.pass.pattern = { kind: "hatch", pitchMm: 0.02, angleDeg: 0, phaseMm: 0, serpentine: true, insetMm: 0 };
           break;
@@ -278,6 +281,7 @@
         <option value="crossHatch">crosshatch (several angles)</option>
         <option value="boundaryHatch">boundary shells + hatch</option>
         <option value="centreline">centreline (thin features)</option>
+        <option value="dots">dots / stipple</option>
         <option value="passthrough">linework passthrough</option>
       </select>
     </label>
@@ -326,6 +330,25 @@
       )}
       <label class="check" title="cutting order: inner contours first, so parts do not drop before their holes are cut"><input type="checkbox" bind:checked={pass.pattern.innerFirst} onchange={touch} /> holes first</label>
       <label class="check"><input type="checkbox" bind:checked={pass.pattern.reverse} onchange={touch} /> reverse direction</label>
+    {:else if pass.pattern.kind === "dots"}
+      <label title="square: rows and columns; hex: six neighbours a pitch away; stipple: the hex lattice with every dot moved by a fixed random offset (the same every time)">Lattice
+        <select bind:value={pass.pattern.lattice} onchange={touch}>
+          <option value="hex">hex</option>
+          <option value="square">square</option>
+          <option value="stipple">stipple</option>
+        </select>
+      </label>
+      <label title="distance between neighbouring dots">Pitch (mm) <input type="number" step="0.01" min="0.001" bind:value={pass.pattern.pitchMm} oninput={touch} /></label>
+      <label title="each dot is a small closed circle or a short dash along the rows, never a zero-length point">Dot
+        <select bind:value={pass.pattern.shape} onchange={touch}>
+          <option value="circle">circle</option>
+          <option value="dash">dash</option>
+        </select>
+      </label>
+      <label title="circle diameter or dash length">Size (mm) <input type="number" step="0.005" min="0.001" bind:value={pass.pattern.sizeMm} oninput={touch} /></label>
+      <label title="direction of the lattice rows, in document coordinates">Angle (°) <input type="number" step="1" bind:value={pass.pattern.angleDeg} oninput={touch} /></label>
+      <label title="offset of the global lattice, so neighbouring regions line up">Phase (mm) <input type="number" step="0.001" bind:value={pass.pattern.phaseMm} oninput={touch} /></label>
+      <label title="keep dot centres this far inside the boundary">Inset from boundary (mm) <input type="number" step="0.001" min="0" bind:value={pass.pattern.insetMm} oninput={touch} /></label>
     {:else if pass.pattern.kind === "centreline"}
       <label title="single-line engraving: the middle of every stroke, half a stroke width short of its ends; lines shorter than this are left out (empty keeps all)">Minimum length (mm)
         <input type="number" step="0.01" min="0" placeholder="keep all" value={pass.pattern.minLengthMm ?? ""}

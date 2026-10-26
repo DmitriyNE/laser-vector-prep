@@ -96,3 +96,23 @@ test("hatch rows link along the boundary into zigzags", async ({ page }) => {
   expect((await copperPass(page)).pattern.linkMm).toBe(0.1);
   await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("linked");
 });
+
+test("dots fill the copper with small finite marks", async ({ page }) => {
+  await openCopperPass(page);
+  let rev = await revision(page);
+  await page.getByLabel("Pattern").selectOption("dots");
+  const hex = await evaluatedAfter(page, rev);
+  expect(hex.hasErrors).toBe(false);
+  expect(hex.passes[0]!.closed).toBeGreaterThan(100);
+  expect(hex.passes[0]!.open).toBe(0);
+  await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("hex dots");
+  rev = await revision(page);
+  await page.getByLabel(/^Dot\b/).selectOption("dash");
+  const dashes = await evaluatedAfter(page, rev);
+  expect(dashes.passes[0]!.open).toBe(hex.passes[0]!.closed);
+  rev = await revision(page);
+  await page.getByLabel("Lattice").selectOption("stipple");
+  const stipple = await evaluatedAfter(page, rev);
+  expect(stipple.hasErrors).toBe(false);
+  expect(stipple.passes[0]!.paths).toBeGreaterThan(0);
+});

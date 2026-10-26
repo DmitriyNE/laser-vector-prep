@@ -269,6 +269,37 @@ fn linked(region: &Region, rows: &[Row], frame: Frame, max: f64) -> Vec<Pline> {
     out
 }
 
+/// Points of a lattice clipped to the region: rows `pitch_y` apart at `phase + k * pitch_y`,
+/// points `pitch` apart along them at `phase + m * pitch`, every odd row shifted by `shift`.
+/// In document coordinates, rows alternating direction.
+pub(crate) fn lattice(
+    region: &Region,
+    angle_rad: f64,
+    pitch: f64,
+    pitch_y: f64,
+    phase: f64,
+    shift: f64,
+) -> Vec<Point> {
+    let frame = Frame::new(angle_rad);
+    let mut out = Vec::new();
+    for (n, row) in rows(region, angle_rad, pitch_y, phase).iter().enumerate() {
+        let offset = phase + if row.k.rem_euclid(2) == 1 { shift } else { 0.0 };
+        let mut here = Vec::new();
+        for (a, b) in row.spans() {
+            let m0 = ((a.x - offset) / pitch).ceil() as i64;
+            let m1 = ((b.x - offset) / pitch).floor() as i64;
+            for m in m0..=m1 {
+                here.push(frame.back(offset + m as f64 * pitch, row.y));
+            }
+        }
+        if n % 2 == 1 {
+            here.reverse();
+        }
+        out.extend(here);
+    }
+    out
+}
+
 /// Each crossing of the horizontal line at `y` with the segment `(x1,y1)->(x2,y2)` of
 /// `bulge`: its x and its arc length from the segment start. Half-open at the upper
 /// endpoint so shared vertices count once.
@@ -406,6 +437,26 @@ mod tests {
         let joins = plain.len() - lines.len();
         assert!(total(&lines) > total(&plain));
         assert!(total(&lines) <= total(&plain) + joins as f64 * 2.0 + 1e-9);
+    }
+
+    #[test]
+    fn lattice_points_sit_on_the_global_grid() {
+        // A 10 mm square, pitch 1, phase 0.5: 10 x 10 points at half-integers.
+        let pts = lattice(&square(10.0), 0.0, 1.0, 1.0, 0.5, 0.0);
+        assert_eq!(pts.len(), 100);
+        for p in &pts {
+            assert!(((p.x - 0.5) - (p.x - 0.5).round()).abs() < 1e-9);
+            assert!(((p.y - 0.5) - (p.y - 0.5).round()).abs() < 1e-9);
+        }
+        // Hex rows: 0.866 apart, odd rows shifted half a pitch.
+        let hex = lattice(&square(10.0), 0.0, 1.0, 3f64.sqrt() / 2.0, 0.0, 0.5);
+        let rows: std::collections::BTreeSet<i64> = hex
+            .iter()
+            .map(|p| (p.y / (3f64.sqrt() / 2.0)).round() as i64)
+            .collect();
+        assert_eq!(rows.len(), 12);
+        let grown = square(10.0).offset(1e-6);
+        assert!(hex.iter().all(|p| grown.contains(*p)));
     }
 
     #[test]

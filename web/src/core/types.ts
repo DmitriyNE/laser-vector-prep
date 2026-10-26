@@ -68,6 +68,8 @@ export interface SourceBinding {
 }
 
 export type RingOrder = "any" | "inward" | "outward";
+export type Lattice = "square" | "hex" | "stipple";
+export type DotShape = "circle" | "dash";
 
 export type Pattern =
   | { kind: "passthrough"; simplifyMm?: number | null; reverse: boolean }
@@ -95,6 +97,17 @@ export type Pattern =
       reverse: boolean;
       innerFirst: boolean;
       join?: JoinStyle;
+    }
+  | {
+      kind: "dots";
+      lattice: Lattice;
+      pitchMm: number;
+      angleDeg: number;
+      phaseMm: number;
+      shape: DotShape;
+      /** Circle diameter or dash length. */
+      sizeMm: number;
+      insetMm: number;
     }
   | {
       kind: "centreline";

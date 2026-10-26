@@ -404,6 +404,54 @@ pub enum Pattern {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         link_mm: Option<f64>,
     },
+    /// Tiny marks on a lattice clipped to the region: finite paths (a small circle or a
+    /// short dash), never zero-length points. Schema v3.
+    #[serde(rename_all = "camelCase")]
+    Dots {
+        #[serde(default)]
+        lattice: Lattice,
+        /// Distance between neighbouring dots (mm).
+        pitch_mm: f64,
+        /// Direction of the lattice rows, in document coordinates (degrees).
+        #[serde(default)]
+        angle_deg: f64,
+        /// Offset of the lattice from the document origin along both its axes (mm), so
+        /// neighbouring regions share one lattice.
+        #[serde(default)]
+        phase_mm: f64,
+        #[serde(default)]
+        shape: DotShape,
+        /// Circle diameter or dash length (mm).
+        size_mm: f64,
+        /// Keep dot centres this far inside the boundary (mm).
+        #[serde(default)]
+        inset_mm: f64,
+    },
+}
+
+/// Where the dots of a dot pattern sit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Lattice {
+    /// Rows and columns a pitch apart.
+    Square,
+    /// Every dot a pitch from its six neighbours.
+    #[default]
+    Hex,
+    /// The hex lattice with every dot moved by a fixed pseudo-random offset of up to 0.3
+    /// pitch: an irregular stipple, the same on every run.
+    Stipple,
+}
+
+/// The mark each dot of a dot pattern is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DotShape {
+    /// A closed circle of the given diameter.
+    #[default]
+    Circle,
+    /// A straight dash of the given length along the lattice rows.
+    Dash,
 }
 
 fn default_one() -> u32 {

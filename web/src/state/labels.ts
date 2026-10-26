@@ -9,6 +9,8 @@ export function patternLabel(p: Pass): string {
       return `contour ${pt.pitchMm} mm${pt.gapFill ? " +gap" : ""}${pt.ringOrder && pt.ringOrder !== "any" ? ` ${pt.ringOrder}` : ""}${pt.link ? " linked" : ""}`;
     case "boundaryTrace":
       return `trace ${pt.side}${pt.offsetMm ? ` ${pt.offsetMm} mm` : ""}${pt.kerfMm ? ` kerf ${pt.kerfMm}` : ""}${pt.rings > 1 ? ` ×${pt.rings}` : ""}${pt.join && pt.join.kind !== "round" ? ` ${pt.join.kind}` : ""}`;
+    case "dots":
+      return `${pt.lattice} ${pt.shape === "dash" ? "dashes" : "dots"} ${pt.pitchMm} mm`;
     case "centreline":
       return `centreline${pt.minLengthMm ? ` ≥ ${pt.minLengthMm} mm` : ""}`;
     case "hatch":

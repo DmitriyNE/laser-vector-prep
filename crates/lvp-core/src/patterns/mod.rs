@@ -12,7 +12,7 @@ use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 
 use crate::diag::Diagnostic;
 use crate::geom::Point;
-use crate::model::{Pattern, RingOrder};
+use crate::model::{DotShape, Lattice, Pattern, RingOrder};
 use crate::pline::Pline;
 use crate::region::Region;
 
@@ -213,6 +213,28 @@ pub fn generate(pattern: &Pattern, geometry: &Geometry) -> PatternOutput {
             }
             out
         }),
+        Pattern::Dots {
+            lattice,
+            pitch_mm,
+            angle_deg,
+            phase_mm,
+            shape,
+            size_mm,
+            inset_mm,
+        } => with_region(geometry, "dots", |region| {
+            dots(
+                region,
+                &DotParams {
+                    lattice: *lattice,
+                    pitch_mm: *pitch_mm,
+                    angle_deg: *angle_deg,
+                    phase_mm: *phase_mm,
+                    shape: *shape,
+                    size_mm: *size_mm,
+                    inset_mm: *inset_mm,
+                },
+            )
+        }),
     }
 }
 
@@ -265,6 +287,112 @@ struct FillSettings {
     gap_fill: bool,
     order: RingOrder,
     link: bool,
+}
+
+/// Dot pattern parameters (see [`Pattern::Dots`]).
+#[derive(Clone, Copy, Debug)]
+pub struct DotParams {
+    pub lattice: Lattice,
+    pub pitch_mm: f64,
+    pub angle_deg: f64,
+    pub phase_mm: f64,
+    pub shape: DotShape,
+    pub size_mm: f64,
+    pub inset_mm: f64,
+}
+
+/// How far a stipple dot moves off its hex lattice point, as a fraction of the pitch (in
+/// each axis): neighbours stay at least 0.4 pitch apart.
+const STIPPLE_JITTER: f64 = 0.3;
+
+fn dots(region: &Region, p: &DotParams) -> PatternOutput {
+    let mut out = PatternOutput::default();
+    if p.pitch_mm.is_nan() || p.pitch_mm <= 0.0 {
+        out.diagnostics.push(Diagnostic::error(
+            "pattern.pitch",
+            "dot pitch must be positive",
+        ));
+        return out;
+    }
+    if p.size_mm.is_nan() || p.size_mm <= 0.0 {
+        out.diagnostics.push(Diagnostic::error(
+            "pattern.dot_size",
+            "dot size must be positive: a dot is a small mark, never a zero-length point",
+        ));
+        return out;
+    }
+    let area = if p.inset_mm != 0.0 {
+        region.offset(-p.inset_mm)
+    } else {
+        region.clone()
+    };
+    let angle = p.angle_deg.to_radians();
+    let (pitch, phase) = (p.pitch_mm, p.phase_mm);
+    let row = pitch * 3f64.sqrt() / 2.0;
+    // Islands in parallel: a stipple dot is checked against its own island only.
+    let parts = crate::par::map(area.islands(), |island| match p.lattice {
+        Lattice::Square => hatch::lattice(&island, angle, pitch, pitch, phase, 0.0),
+        Lattice::Hex => hatch::lattice(&island, angle, pitch, row, phase, pitch / 2.0),
+        Lattice::Stipple => {
+            let frame = hatch::Frame::new(angle);
+            let (s, c) = angle.sin_cos();
+            hatch::lattice(&island, angle, pitch, row, phase, pitch / 2.0)
+                .into_iter()
+                .filter_map(|q| {
+                    // The point's place on the global lattice decides its offset, so a
+                    // dot is where it is whichever region it falls in.
+                    let (x, y) = (c * q.x + s * q.y, -s * q.x + c * q.y);
+                    let key = ((x / pitch * 2.0).round() as i64, (y / row).round() as i64);
+                    let (jx, jy) = jitter(key);
+                    let moved = frame.back(
+                        x + jx * STIPPLE_JITTER * pitch,
+                        y + jy * STIPPLE_JITTER * pitch,
+                    );
+                    island.contains(moved).then_some(moved)
+                })
+                .collect()
+        }
+    });
+    let (s, c) = angle.sin_cos();
+    let half = p.size_mm / 2.0;
+    for q in parts.into_iter().flatten() {
+        out.paths.push(match p.shape {
+            DotShape::Circle => crate::pline::circle(q, half),
+            DotShape::Dash => crate::pline::from_points(
+                [
+                    Point::new(q.x - half * c, q.y - half * s),
+                    Point::new(q.x + half * c, q.y + half * s),
+                ],
+                false,
+            ),
+        });
+    }
+    if p.size_mm >= p.pitch_mm {
+        out.diagnostics.push(Diagnostic::warning(
+            "pattern.dots_overlap",
+            format!(
+                "dots {} mm across at a {} mm pitch touch or overlap",
+                p.size_mm, p.pitch_mm
+            ),
+        ));
+    }
+    out
+}
+
+/// Two numbers in [-1, 1] from a lattice point: a fixed hash (SplitMix64), so the stipple
+/// is the same every time.
+fn jitter((i, j): (i64, i64)) -> (f64, f64) {
+    let mut z = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (j as u64).wrapping_add(0xD1B5_4A32_D192_ED03);
+    let mut next = || {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut x = z;
+        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^= x >> 31;
+        (x >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    };
+    (next(), next())
 }
 
 /// Curve tolerance of single-line centrelines (mm): how closely the flattened boundary and
@@ -1235,6 +1363,105 @@ mod tests {
         );
         assert_eq!(out.paths.len(), 1);
         assert!(out.paths[0].is_closed());
+    }
+
+    fn dot_pattern(
+        lattice: Lattice,
+        shape: DotShape,
+        inset: f64,
+        region: &Region,
+    ) -> PatternOutput {
+        generate(
+            &Pattern::Dots {
+                lattice,
+                pitch_mm: 1.0,
+                angle_deg: 0.0,
+                phase_mm: 0.5,
+                shape,
+                size_mm: 0.2,
+                inset_mm: inset,
+            },
+            &Geometry::Region(region.clone()),
+        )
+    }
+
+    #[test]
+    fn dots_are_small_finite_marks_on_a_lattice() {
+        let square = rect_region(0.0, 0.0, 10.0, 10.0);
+        // Square lattice at half-integers: 100 circles 0.2 mm across.
+        let out = dot_pattern(Lattice::Square, DotShape::Circle, 0.0, &square);
+        assert!(out.diagnostics.is_empty());
+        assert_eq!(out.paths.len(), 100);
+        for p in &out.paths {
+            assert!(p.is_closed());
+            assert!((crate::pline::length(p) - PI * 0.2).abs() < 1e-12);
+        }
+        // Dashes along the rows, 0.2 mm long.
+        let dashes = dot_pattern(Lattice::Hex, DotShape::Dash, 0.0, &square);
+        assert!(dashes.paths.len() > 100);
+        for p in &dashes.paths {
+            assert!(!p.is_closed());
+            assert!((crate::pline::length(p) - 0.2).abs() < 1e-12);
+            assert!((p.at(0).y - p.at(1).y).abs() < 1e-12);
+        }
+        // An inset keeps every centre that far inside.
+        let inset = dot_pattern(Lattice::Hex, DotShape::Circle, 1.2, &square);
+        assert!(inset.paths.len() < dashes.paths.len());
+        let inner = rect_region(1.2, 1.2, 8.8, 8.8).offset(1e-9);
+        for p in &inset.paths {
+            // A circle's two vertices are the ends of its horizontal diameter.
+            let centre = Point::new((p.at(0).x + p.at(1).x) / 2.0, p.at(0).y);
+            assert!(inner.contains(centre), "{centre:?}");
+        }
+        // A dot is never a point.
+        let none = generate(
+            &Pattern::Dots {
+                lattice: Lattice::Hex,
+                pitch_mm: 1.0,
+                angle_deg: 0.0,
+                phase_mm: 0.0,
+                shape: DotShape::Circle,
+                size_mm: 0.0,
+                inset_mm: 0.0,
+            },
+            &Geometry::Region(square),
+        );
+        assert_eq!(none.diagnostics[0].code, "pattern.dot_size");
+        assert!(none.paths.is_empty());
+    }
+
+    #[test]
+    fn stipple_is_irregular_spaced_and_the_same_every_time() {
+        let region = rect_region(0.0, 0.0, 12.0, 9.0).difference(&Region::from_loops(
+            [circle(Point::new(6.0, 4.5), 2.0)],
+            LoopRule::NonZero,
+        ));
+        let a = dot_pattern(Lattice::Stipple, DotShape::Dash, 0.0, &region);
+        let b = dot_pattern(Lattice::Stipple, DotShape::Dash, 0.0, &region);
+        let centres = |o: &PatternOutput| -> Vec<Point> {
+            o.paths
+                .iter()
+                .map(|p| Point::new((p.at(0).x + p.at(1).x) / 2.0, (p.at(0).y + p.at(1).y) / 2.0))
+                .collect()
+        };
+        let (ca, cb) = (centres(&a), centres(&b));
+        assert_eq!(ca, cb);
+        let hex = dot_pattern(Lattice::Hex, DotShape::Dash, 0.0, &region);
+        let n = hex.paths.len() as f64;
+        assert!((ca.len() as f64 - n).abs() < 0.1 * n, "{} vs {n}", ca.len());
+        // Off the lattice, but never closer than 0.4 pitch.
+        let off = ca
+            .iter()
+            .zip(centres(&hex))
+            .filter(|(p, q)| p.distance(*q) > 1e-6)
+            .count();
+        assert!(off > ca.len() / 2);
+        for (i, p) in ca.iter().enumerate() {
+            assert!(region.contains(*p));
+            for q in &ca[i + 1..] {
+                assert!(p.distance(*q) >= 0.4 - 1e-9, "{p:?} and {q:?}");
+            }
+        }
     }
 
     fn linked_contour(pitch: f64, ring_order: RingOrder, region: &Region) -> PatternOutput {

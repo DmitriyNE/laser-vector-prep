@@ -450,6 +450,31 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
                         );
                     }
                 }
+                Pattern::Dots {
+                    pitch_mm, size_mm, ..
+                } => {
+                    if pitch_mm.is_nan() || *pitch_mm <= 0.0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.pitch",
+                                format!("pass {:?} has a non-positive pitch", p.name),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                    if size_mm.is_nan() || *size_mm <= 0.0 {
+                        out.push(
+                            Diagnostic::error(
+                                "profile.dot_size",
+                                format!(
+                                    "pass {:?} has dots of no size (a dot is a small mark, never a point)",
+                                    p.name
+                                ),
+                            )
+                            .with_context(p.id.to_string()),
+                        );
+                    }
+                }
                 Pattern::Passthrough { simplify_mm, .. }
                 | Pattern::Centreline { simplify_mm, .. } => {
                     if simplify_mm.is_some_and(|s| s < 0.0) {

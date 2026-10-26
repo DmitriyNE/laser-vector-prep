@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "DotShape": {
+      "description": "The mark each dot of a dot pattern is.",
+      "oneOf": [
+        {
+          "const": "circle",
+          "description": "A closed circle of the given diameter.",
+          "type": "string"
+        },
+        {
+          "const": "dash",
+          "description": "A straight dash of the given length along the lattice rows.",
+          "type": "string"
+        }
+      ]
+    },
     "EnvelopeProvider": {
       "description": "How an envelope layer turns its reference set (group A) into a bounded region.",
       "oneOf": [
@@ -205,6 +220,26 @@
             "kind"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "Lattice": {
+      "description": "Where the dots of a dot pattern sit.",
+      "oneOf": [
+        {
+          "const": "square",
+          "description": "Rows and columns a pitch apart.",
+          "type": "string"
+        },
+        {
+          "const": "hex",
+          "description": "Every dot a pitch from its six neighbours.",
+          "type": "string"
+        },
+        {
+          "const": "stipple",
+          "description": "The hex lattice with every dot moved by a fixed pseudo-random offset of up to 0.3\npitch: an irregular stipple, the same on every run.",
+          "type": "string"
         }
       ]
     },
@@ -857,6 +892,57 @@
             "kind",
             "shellPitchMm",
             "pitchMm"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tiny marks on a lattice clipped to the region: finite paths (a small circle or a\nshort dash), never zero-length points. Schema v3.",
+          "properties": {
+            "angleDeg": {
+              "default": 0.0,
+              "description": "Direction of the lattice rows, in document coordinates (degrees).",
+              "format": "double",
+              "type": "number"
+            },
+            "insetMm": {
+              "default": 0.0,
+              "description": "Keep dot centres this far inside the boundary (mm).",
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "dots",
+              "type": "string"
+            },
+            "lattice": {
+              "$ref": "#/$defs/Lattice",
+              "default": "hex"
+            },
+            "phaseMm": {
+              "default": 0.0,
+              "description": "Offset of the lattice from the document origin along both its axes (mm), so\nneighbouring regions share one lattice.",
+              "format": "double",
+              "type": "number"
+            },
+            "pitchMm": {
+              "description": "Distance between neighbouring dots (mm).",
+              "format": "double",
+              "type": "number"
+            },
+            "shape": {
+              "$ref": "#/$defs/DotShape",
+              "default": "circle"
+            },
+            "sizeMm": {
+              "description": "Circle diameter or dash length (mm).",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "pitchMm",
+            "sizeMm"
           ],
           "type": "object"
         }
