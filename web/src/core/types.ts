@@ -82,6 +82,8 @@ export type Pattern =
       simplifyMm?: number | null;
       /** Order the rings are marked in; absent = the optimizer's choice. */
       ringOrder?: RingOrder;
+      /** Join nested rings into one path with connectors a pitch long. */
+      link?: boolean;
     }
   | {
       kind: "boundaryTrace";

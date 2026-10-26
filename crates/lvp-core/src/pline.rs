@@ -7,8 +7,8 @@
 
 use cavalier_contours::core::math::Vector2;
 use cavalier_contours::polyline::{
-    PlineOrientation, PlineSource, PlineSourceMut, PlineVertex, Polyline, seg_midpoint,
-    seg_tangent_vector,
+    PlineOrientation, PlineSource, PlineSourceMut, PlineVertex, Polyline, seg_length, seg_midpoint,
+    seg_split_at_point, seg_tangent_vector,
 };
 
 use crate::arc::Arc;
@@ -196,6 +196,115 @@ pub fn sanitize(p: &Pline) -> Option<Pline> {
         q.remove_last();
     }
     (q.vertex_count() >= 2).then_some(q)
+}
+
+/// Closed loop `p` opened at `at`, a point on its segment `seg`: an open path from `at` round
+/// the loop and back to `at`, the split arc kept exact.
+pub fn open_at(p: &Pline, seg: usize, at: Point) -> Pline {
+    let n = p.vertex_count();
+    let split = seg_split_at_point(
+        p.at(seg),
+        p.at((seg + 1) % n),
+        Vector2::new(at.x, at.y),
+        REPEAT_EPS,
+    );
+    let mut out = Pline::new();
+    out.add(at.x, at.y, split.split_vertex.bulge);
+    for k in 1..=n {
+        let v = p.at((seg + k) % n);
+        let bulge = if k == n {
+            split.updated_start.bulge
+        } else {
+            v.bulge
+        };
+        out.add(v.x, v.y, bulge);
+    }
+    out.add(at.x, at.y, 0.0);
+    sanitize(&out).unwrap_or(out)
+}
+
+/// The part of `p` from arc length `from` to arc length `to` (both measured from its first
+/// vertex) as an open path, arcs kept exact. On a closed loop `to < from` runs on past the
+/// first vertex. `None` when that part is shorter than [`REPEAT_EPS`].
+pub fn sub_path(p: &Pline, from: f64, to: f64) -> Option<Pline> {
+    let n = p.vertex_count();
+    let segments = if p.is_closed() {
+        n
+    } else {
+        n.saturating_sub(1)
+    };
+    if segments == 0 {
+        return None;
+    }
+    let lengths: Vec<f64> = (0..segments)
+        .map(|i| seg_length(p.at(i), p.at((i + 1) % n)))
+        .collect();
+    let total: f64 = lengths.iter().sum();
+    let (from, mut to) = (from.clamp(0.0, total), to.clamp(0.0, total));
+    if to < from {
+        if !p.is_closed() {
+            return None;
+        }
+        to += total;
+    }
+    if to - from <= REPEAT_EPS {
+        return None;
+    }
+    let mut out = Pline::new();
+    let mut end = point(p.at(0).pos());
+    // Over at most two laps of the segments, `start` the arc length where segment k begins.
+    let mut start = 0.0;
+    for k in 0..2 * segments {
+        if start >= to {
+            break;
+        }
+        let (i, len) = (k % segments, lengths[k % segments]);
+        let (a, b) = (from.max(start), to.min(start + len));
+        if b > a && len > 0.0 {
+            let (v1, v2) = (p.at(i), p.at((i + 1) % n));
+            let (t0, t1) = ((a - start) / len, (b - start) / len);
+            match Arc::from_bulge(point(v1.pos()), point(v2.pos()), v1.bulge) {
+                Some(arc) => {
+                    let q = arc.point_at(t0);
+                    out.add(q.x, q.y, (arc.sweep * (t1 - t0) / 4.0).tan());
+                    end = arc.point_at(t1);
+                }
+                None => {
+                    let at =
+                        |t: f64| Point::new(v1.x + t * (v2.x - v1.x), v1.y + t * (v2.y - v1.y));
+                    let q = at(t0);
+                    out.add(q.x, q.y, 0.0);
+                    end = at(t1);
+                }
+            }
+        }
+        start += len;
+    }
+    out.add(end.x, end.y, 0.0);
+    sanitize(&out)
+}
+
+/// Append `piece` to `path`; where `piece` starts at the end of `path` the two share that
+/// vertex, otherwise a straight segment joins them.
+pub fn append(path: &mut Pline, piece: &Pline) {
+    let n = piece.vertex_count();
+    if n == 0 {
+        return;
+    }
+    let mut from = 0;
+    // (cavalier's `last` underflows on an empty polyline rather than returning `None`.)
+    if path.vertex_count() > 0
+        && let Some(last) = path.last()
+        && last.pos().fuzzy_eq_eps(piece.at(0).pos(), REPEAT_EPS)
+    {
+        path.remove_last();
+        path.add(last.x, last.y, piece.at(0).bulge);
+        from = 1;
+    }
+    for i in from..n {
+        let v = piece.at(i);
+        path.add(v.x, v.y, v.bulge);
+    }
 }
 
 /// Split a closed loop wherever it runs back along itself: an offset taken at exactly half
@@ -661,6 +770,7 @@ pub fn from_bulged_points(pts: &[(Point, f64)], closed: bool) -> Option<Pline> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cavalier_contours::polyline::seg_closest_point;
     use proptest::prelude::*;
     use std::f64::consts::PI;
 
@@ -824,7 +934,84 @@ mod tests {
         assert!((length(&bridges[0]) - 2.0 * PI).abs() < 1e-12);
     }
 
+    #[test]
+    fn loops_open_at_any_point_and_paths_cut_by_arc_length() {
+        let square = rect(Point::new(0.0, 0.0), Point::new(1.0, 1.0));
+        let opened = open_at(&square, 0, Point::new(0.5, 0.0));
+        assert!(!opened.is_closed());
+        assert_eq!(opened.vertex_count(), 6);
+        assert!((length(&opened) - 4.0).abs() < 1e-12);
+        assert_eq!((opened.at(0).x, opened.at(5).x), (0.5, 0.5));
+        // At a vertex: no zero-length piece.
+        assert_eq!(open_at(&square, 1, Point::new(1.0, 0.0)).vertex_count(), 5);
+        let c = circle(Point::new(0.0, 0.0), 1.0);
+        let at = Point::new(0.0, 1.0);
+        let seg = (0..c.vertex_count())
+            .find(|&i| {
+                (seg_closest_point(
+                    c.at(i),
+                    c.at((i + 1) % c.vertex_count()),
+                    Vector2::new(0.0, 1.0),
+                    1e-9,
+                ) - Vector2::new(0.0, 1.0))
+                .length()
+                    < 1e-9
+            })
+            .unwrap();
+        let opened = open_at(&c, seg, at);
+        assert!((length(&opened) - 2.0 * PI).abs() < 1e-9);
+        assert!(opened.at(0).pos().fuzzy_eq(Vector2::new(0.0, 1.0)));
+
+        // Cut by arc length: along an edge and round a corner, and past the start of a loop.
+        let piece = sub_path(&square, 0.5, 1.5).unwrap();
+        assert!((length(&piece) - 1.0).abs() < 1e-12);
+        assert!(piece.at(0).pos().fuzzy_eq(Vector2::new(0.5, 0.0)));
+        assert!(piece.last().unwrap().pos().fuzzy_eq(Vector2::new(1.0, 0.5)));
+        let wrapped = sub_path(&square, 3.5, 0.5).unwrap();
+        assert!((length(&wrapped) - 1.0).abs() < 1e-12);
+        assert!(wrapped.at(0).pos().fuzzy_eq(Vector2::new(0.0, 0.5)));
+        let half = sub_path(&c, 0.0, PI).unwrap();
+        assert!((length(&half) - PI).abs() < 1e-9);
+        let line = from_points([Point::new(0.0, 0.0), Point::new(2.0, 0.0)], false);
+        assert!(
+            sub_path(&line, 1.5, 0.5).is_none(),
+            "an open path does not wrap"
+        );
+        assert!(sub_path(&line, 1.0, 1.0).is_none());
+
+        // Appending shares the meeting vertex, or joins with a straight segment.
+        let mut path = from_points([Point::new(0.0, 0.0), Point::new(1.0, 0.0)], false);
+        append(
+            &mut path,
+            &from_points([Point::new(1.0, 0.0), Point::new(1.0, 1.0)], false),
+        );
+        assert_eq!(path.vertex_count(), 3);
+        append(
+            &mut path,
+            &from_points([Point::new(2.0, 1.0), Point::new(3.0, 1.0)], false),
+        );
+        assert_eq!(path.vertex_count(), 5);
+        assert!((length(&path) - 4.0).abs() < 1e-12);
+    }
+
     proptest! {
+        #[test]
+        fn cutting_a_loop_by_arc_length_measures_up(
+            verts in prop::collection::vec((-5.0..5.0f64, -5.0..5.0f64, -0.8..0.8f64), 3..8),
+            a in 0.0..1.0f64,
+            b in 0.0..1.0f64,
+        ) {
+            let p = from_bulge_vertices(verts.iter().copied(), true);
+            let total = length(&p);
+            prop_assume!(total > 1e-3);
+            let (from, to) = (a * total, b * total);
+            let expected = (to - from).rem_euclid(total);
+            match sub_path(&p, from, to) {
+                Some(piece) => prop_assert!((length(&piece) - expected).abs() < 1e-7 * (1.0 + total), "{} vs {}", length(&piece), expected),
+                None => prop_assert!(expected <= REPEAT_EPS * 2.0 || total - expected <= REPEAT_EPS * 2.0),
+            }
+        }
+
         #[test]
         fn splitting_retraced_loops_keeps_area_and_length(
             steps in prop::collection::vec((-1.0..1.0f64, 0.2..2.0f64, -0.5..0.5f64), 1..6)

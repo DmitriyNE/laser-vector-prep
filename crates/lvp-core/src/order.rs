@@ -88,6 +88,8 @@ pub struct PassPaths<'a> {
     pub id: PassId,
     pub paths: &'a [Pline],
     pub precedence: &'a [(usize, usize)],
+    /// Open paths that keep their generated direction.
+    pub directed: &'a [usize],
 }
 
 /// Largest raster the footprint model will allocate (cells); the cell size grows past it.
@@ -99,6 +101,8 @@ struct Node {
     pass: usize,
     index: usize,
     closed: bool,
+    /// An open path that is never reversed.
+    directed: bool,
     /// Vertices (open: all; closed: all, as seam candidates).
     verts: Vec<Point>,
 }
@@ -124,7 +128,8 @@ impl Node {
         }
     }
 
-    /// Entry points a jump can arrive at: both ends of an open path, every vertex of a loop.
+    /// Entry points a jump can arrive at: both ends of an open path (its start only when
+    /// it is directed), every vertex of a loop.
     fn entries(&self) -> Vec<(Point, bool, usize)> {
         if self.closed {
             self.verts
@@ -132,6 +137,8 @@ impl Node {
                 .enumerate()
                 .map(|(i, p)| (*p, false, i))
                 .collect()
+        } else if self.directed {
+            vec![(self.verts[0], false, 0)]
         } else {
             vec![
                 (self.verts[0], false, 0),
@@ -161,6 +168,7 @@ fn nodes_of(passes: &[PassPaths<'_>]) -> (Vec<Node>, Vec<(usize, usize)>) {
     let mut precedence = Vec::new();
     for (pi, pp) in passes.iter().enumerate() {
         let base = nodes.len();
+        let directed: std::collections::HashSet<usize> = pp.directed.iter().copied().collect();
         for (i, p) in pp.paths.iter().enumerate() {
             let verts: Vec<Point> = p.iter_vertexes().map(|v| Point::new(v.x, v.y)).collect();
             if verts.is_empty() {
@@ -170,6 +178,7 @@ fn nodes_of(passes: &[PassPaths<'_>]) -> (Vec<Node>, Vec<(usize, usize)>) {
                 pass: pi,
                 index: i,
                 closed: p.is_closed(),
+                directed: !p.is_closed() && directed.contains(&i),
                 verts,
             });
         }
@@ -800,7 +809,11 @@ fn polish(seq: &mut Seq, obj: &Objective<'_>) {
     for k in 0..m {
         let nd = node(k);
         if !nd.closed {
-            states.push(vec![(false, 0), (true, 0)]);
+            states.push(if nd.directed {
+                vec![(false, 0)]
+            } else {
+                vec![(false, 0), (true, 0)]
+            });
             continue;
         }
         let mut seams: Vec<usize> = Vec::new();
@@ -1025,6 +1038,8 @@ struct Scan<'a> {
     pos: &'a [usize],
     neighbours: &'a [Vec<usize>],
     precedence: &'a Precedence,
+    /// Some move may break a constraint: there are precedence pairs or directed paths.
+    constrained: bool,
     /// Weight of a protected cell, in mm of jump length.
     scale: f64,
 }
@@ -1077,10 +1092,13 @@ impl Scan<'_> {
                         .iter()
                         .all(|&b| self.pos[b] < i || at < mv.moved(self.pos[b], m))
             }
+            // A reversed run also reverses its open paths: none may be directed.
             Move::Reverse { first, last } => (first..=last).all(|k| {
-                prec.after[self.seq.order[k]]
-                    .iter()
-                    .all(|&b| !(k < self.pos[b] && self.pos[b] <= last))
+                let n = self.seq.order[k];
+                !self.obj.nodes[n].directed
+                    && prec.after[n]
+                        .iter()
+                        .all(|&b| !(k < self.pos[b] && self.pos[b] <= last))
             }),
         }
     }
@@ -1135,6 +1153,8 @@ impl Scan<'_> {
                         v.push((false, seq.seam[n]));
                     }
                     v
+                } else if nd.directed {
+                    vec![(false, 0)]
                 } else {
                     vec![(false, 0), (true, 0)]
                 };
@@ -1170,7 +1190,7 @@ impl Scan<'_> {
                     continue;
                 };
                 let mv = Move::Relocate { i, a, rev, seam };
-                if !self.precedence.is_empty() && !self.respects(&mv) {
+                if self.constrained && !self.respects(&mv) {
                     continue;
                 }
                 let removed = removed_i.iter().copied().chain(removed_a).collect();
@@ -1224,7 +1244,7 @@ impl Scan<'_> {
                 continue;
             }
             let mv = Move::Reverse { first, last: j };
-            if !self.precedence.is_empty() && !self.respects(&mv) {
+            if self.constrained && !self.respects(&mv) {
                 continue;
             }
             out.push(Candidate {
@@ -1299,6 +1319,7 @@ fn improve(seq: &mut Seq, obj: &mut Objective<'_>, precedence: &Precedence, max_
     let threads = crate::par::threads();
     let block = if threads > 1 { 64 * threads } else { 1 };
 
+    let constrained = !precedence.is_empty() || nodes.iter().any(|n| n.directed);
     let mut pos: Vec<usize> = vec![0; nodes.len()];
     for _ in 0..max_sweeps {
         if crate::cancel::cancelled() {
@@ -1321,6 +1342,7 @@ fn improve(seq: &mut Seq, obj: &mut Objective<'_>, precedence: &Precedence, max_
                         pos: &pos,
                         neighbours: &neighbours,
                         precedence,
+                        constrained,
                         scale,
                     };
                     crate::par::map((from..to).collect(), |k| {
@@ -1553,6 +1575,7 @@ pub fn fingerprint(
             p.is_closed().hash(&mut h);
         }
         pp.precedence.hash(&mut h);
+        pp.directed.hash(&mut h);
     }
     serde_json::to_string(&(mode, settings))
         .unwrap_or_default()
@@ -1602,6 +1625,7 @@ mod tests {
             id: PassId::new("p"),
             paths: &paths,
             precedence: &[],
+            directed: &[],
         }];
         let s = settings(OptimizerMode::MinimumJump);
         let plan = plan(&passes, OptimizerMode::MinimumJump, &s, None);
@@ -1633,6 +1657,7 @@ mod tests {
             id: PassId::new("p"),
             paths: &paths,
             precedence: &[],
+            directed: &[],
         }];
         let s = settings(OptimizerMode::MinimumJump);
         let plan = plan(&passes, OptimizerMode::MinimumJump, &s, None);
@@ -1652,6 +1677,33 @@ mod tests {
     }
 
     #[test]
+    fn directed_paths_are_never_reversed() {
+        // From the origin, the shortest plan runs the second line backwards; directed, it
+        // is entered at its start however far that is.
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            crate::pline::from_points([Point::new(a.0, a.1), Point::new(b.0, b.1)], false)
+        };
+        let paths = vec![
+            line((0.0, 0.0), (1.0, 0.0)),
+            line((5.0, 0.0), (2.0, 0.0)),
+            line((6.0, 1.0), (6.0, 3.0)),
+        ];
+        let mut s = settings(OptimizerMode::MinimumJump);
+        s.start_mm = Some([0.0, 0.0]);
+        for (directed, reversed) in [(&[][..], true), (&[1usize][..], false)] {
+            let passes = [PassPaths {
+                id: PassId::new("p"),
+                paths: &paths,
+                precedence: &[],
+                directed,
+            }];
+            let plan = plan(&passes, OptimizerMode::MinimumJump, &s, None);
+            let second = plan.order.iter().find(|r| r.index == 1).unwrap();
+            assert_eq!(second.reversed, reversed, "{:?}", plan.order);
+        }
+    }
+
+    #[test]
     fn precedence_keeps_holes_before_their_outer() {
         // Outer square far right, its hole in the middle, a lone square left: the greedy
         // start is the lone square; the hole must still come before the outer.
@@ -1664,6 +1716,7 @@ mod tests {
             id: PassId::new("cut"),
             paths: &paths,
             precedence: &precedence,
+            directed: &[],
         }];
         let mut s = settings(OptimizerMode::MinimumJump);
         s.start_mm = Some([0.0, 0.0]);
@@ -1688,6 +1741,7 @@ mod tests {
             id: PassId::new("p"),
             paths: &paths,
             precedence: &[],
+            directed: &[],
         }];
         let protected = Region::from_loops(
             [rect(Point::new(4.0, -1.0), Point::new(6.0, 1.0))],
@@ -1744,6 +1798,7 @@ mod tests {
             id: PassId::new("p"),
             paths: &paths,
             precedence: &[],
+            directed: &[],
         }];
         let s = settings(OptimizerMode::AsGenerated);
         let plan = plan(&passes, OptimizerMode::AsGenerated, &s, None);
@@ -1764,6 +1819,7 @@ mod tests {
             id: PassId::new("p"),
             paths: &paths,
             precedence: &[],
+            directed: &[],
         }];
         let mut s = settings(OptimizerMode::MinimumJump);
         let none = plan(&passes, OptimizerMode::MinimumJump, &s, None);
@@ -1850,7 +1906,7 @@ mod tests {
         #[test]
         fn moves_predict_their_positions(m in 3usize..30, x in 0usize..1000, y in 0usize..1000, reverse: bool) {
             let nodes: Vec<Node> = (0..m)
-                .map(|k| Node { pass: 0, index: k, closed: k % 2 == 0, verts: vec![Point::new(k as f64, 0.0), Point::new(k as f64, 1.0)] })
+                .map(|k| Node { pass: 0, index: k, closed: k % 2 == 0, directed: false, verts: vec![Point::new(k as f64, 0.0), Point::new(k as f64, 1.0)] })
                 .collect();
             let mut seq = Seq { order: (0..m).rev().collect(), reversed: vec![false; m], seam: vec![0; m] };
             let mv = if reverse {
@@ -1880,7 +1936,7 @@ mod tests {
             reverse: bool,
         ) {
             let nodes: Vec<Node> = (0..m)
-                .map(|k| Node { pass: 0, index: k, closed: false, verts: vec![Point::new(k as f64, 0.0), Point::new(k as f64, 1.0)] })
+                .map(|k| Node { pass: 0, index: k, closed: false, directed: false, verts: vec![Point::new(k as f64, 0.0), Point::new(k as f64, 1.0)] })
                 .collect();
             // Constraints between distinct nodes, kept by the identity order.
             let mut pairs: Vec<(usize, usize)> = links
@@ -1896,7 +1952,7 @@ mod tests {
             let pos: Vec<usize> = (0..m).collect();
             let obj = Objective { nodes: &nodes, start: None, end: None, bleed_weight: 0.0, raster: None };
             let neighbours = vec![Vec::new(); m];
-            let scan = Scan { seq: &seq, obj: &obj, pos: &pos, neighbours: &neighbours, precedence: &precedence, scale: 0.0 };
+            let scan = Scan { seq: &seq, obj: &obj, pos: &pos, neighbours: &neighbours, precedence: &precedence, constrained: true, scale: 0.0 };
             let mv = if reverse {
                 let first = x % (m - 1);
                 Move::Reverse { first, last: first + 1 + y % (m - 1 - first) }

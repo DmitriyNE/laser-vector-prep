@@ -129,20 +129,27 @@ fn cutting_keeps_holes_before_their_outer_under_optimisation() {
 
 #[test]
 fn ring_order_holds_under_optimisation() {
-    // Outward (core first) and inward contour fills of the islands board: the planner
-    // reorders freely within the constraints, and every ring keeps its place relative to
-    // the ring outside it.
+    // Outward (core first) and inward contour fills of the islands board, rings separate
+    // or linked: the planner reorders freely within the constraints, every ring keeps its
+    // place relative to the ring outside it, and linked rings keep their direction.
     let sources = sources(&["board-islands.dxf"]);
-    for order in [RingOrder::Outward, RingOrder::Inward] {
+    for (order, linked) in [
+        (RingOrder::Outward, false),
+        (RingOrder::Inward, false),
+        (RingOrder::Outward, true),
+        (RingOrder::Inward, true),
+    ] {
         let mut profile = pcb_positive_ldi();
         if let Pattern::ContourFill {
             pitch_mm,
             ring_order,
+            link,
             ..
         } = &mut profile.working_layers[0].passes[0].pattern
         {
             *pitch_mm = 0.05;
             *ring_order = order;
+            *link = linked;
         }
         profile.optimizer.mode = OptimizerMode::MinimumJump;
         let ev = Evaluator::new().evaluate(&profile, &sources);
@@ -150,10 +157,11 @@ fn ring_order_holds_under_optimisation() {
         let id = PassId::new("pass-copper-fill");
         let pass = ev.pass(&id).unwrap();
         assert!(
-            pass.precedence.len() > 100,
+            pass.precedence.len() > if linked { 0 } else { 100 },
             "{} constraints",
             pass.precedence.len()
         );
+        assert_eq!(pass.directed.is_empty(), !linked);
         let plan = ev.group_plan(&GroupId::new("grp-copper")).unwrap();
         let mut pos = vec![0; pass.paths.len()];
         for (k, r) in plan.order.iter().enumerate() {
@@ -163,6 +171,12 @@ fn ring_order_holds_under_optimisation() {
         }
         for &(a, b) in &pass.precedence {
             assert!(pos[a] < pos[b], "{order:?}: {a} must come before {b}");
+        }
+        for &d in &pass.directed {
+            assert!(
+                !plan.order[pos[d]].reversed,
+                "{order:?}: chain {d} reversed"
+            );
         }
         assert!(plan.after.jump_length_mm < plan.before.jump_length_mm);
     }

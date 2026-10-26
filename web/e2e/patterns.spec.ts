@@ -50,3 +50,17 @@ test("contour fill marks its rings outward when asked, with the same paths", asy
   expect((await copperPass(page)).pattern.ringOrder).toBe("outward");
   await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("outward");
 });
+
+test("linked rings join each run of nested rings into one path", async ({ page }) => {
+  await openCopperPass(page);
+  const before = await summary(page);
+  const rev = await revision(page);
+  await page.getByLabel("link rings").check();
+  const after = await evaluatedAfter(page, rev);
+  expect(after.hasErrors).toBe(false);
+  expect(after.passes[0]!.paths).toBeLessThan(before.passes[0]!.paths);
+  // The connectors are marks: the total length grows.
+  expect(after.passes[0]!.lengthMm).toBeGreaterThan(before.passes[0]!.lengthMm);
+  expect((await copperPass(page)).pattern.link).toBe(true);
+  await expect(page.locator(".row.pass").first().locator(".sub")).toContainText("linked");
+});

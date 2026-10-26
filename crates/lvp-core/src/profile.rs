@@ -889,6 +889,7 @@ pub fn pcb_positive_ldi() -> Profile {
                     end_spacing_mm: None,
                     simplify_mm: None,
                     ring_order: RingOrder::Any,
+                    link: false,
                 },
                 group: GroupId::new("grp-copper"),
                 enabled: true,
@@ -1106,6 +1107,7 @@ mod tests {
             end_spacing_mm: None,
             simplify_mm: None,
             ring_order: RingOrder::Any,
+            link: false,
         };
         let d = validate(&p);
         assert!(d.has_errors());

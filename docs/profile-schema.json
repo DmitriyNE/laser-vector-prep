@@ -589,6 +589,10 @@
               "const": "contourFill",
               "type": "string"
             },
+            "link": {
+              "description": "Join each run of nested rings into one path: a straight connector a pitch long\nleads from each ring into the next, marked like the rings. Schema v3.",
+              "type": "boolean"
+            },
             "pitchMm": {
               "description": "Centreline distance between rings (mm).",
               "format": "double",

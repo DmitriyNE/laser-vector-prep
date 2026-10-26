@@ -159,13 +159,15 @@ pub struct PassResult {
     pub diagnostics: Vec<Diagnostic>,
     /// Ordering constraints `(before, after)` over `paths` (cutting: holes first).
     pub precedence: Vec<(usize, usize)>,
+    /// Open paths (indices into `paths`) that keep the direction they were generated in.
+    pub directed: Vec<usize>,
     pub cached: bool,
     /// Coverage audit, when the pass fills a region and its group sets an audit width.
     pub audit: Option<patterns::Audit>,
 }
 
-/// Cached pattern output of one pass: fingerprint, paths, diagnostics, precedence.
-type CachedPass = (u64, Vec<Pline>, Vec<Diagnostic>, Vec<(usize, usize)>);
+/// Cached pattern output of one pass, with its fingerprint.
+type CachedPass = (u64, patterns::PatternOutput);
 
 #[derive(Clone, Debug, Default)]
 pub struct Evaluation {
@@ -509,18 +511,16 @@ impl Evaluator {
         }
         let computed = par::map(jobs, |job| {
             let generated = match job.cached {
-                Some((_, paths, diagnostics, precedence)) => {
-                    Some((true, paths, diagnostics, precedence))
-                }
+                Some((_, out)) => Some((true, out)),
                 None => unless_cancelled(|| patterns::generate(&job.pass.pattern, job.geometry))
-                    .map(|out| (false, out.paths, out.diagnostics, out.precedence)),
+                    .map(|out| (false, out)),
             };
             // `Some(None)`: an audit was wanted but cancelled.
             let audit = match (&generated, job.geometry, &job.audit) {
-                (Some((_, paths, ..)), Geometry::Region(region), Some((w, afp, cached))) => {
+                (Some((_, out)), Geometry::Region(region), Some((w, afp, cached))) => {
                     Some(match cached {
                         Some(a) => Some((*afp, a.clone(), true)),
-                        None => unless_cancelled(|| patterns::audit(region, paths, *w))
+                        None => unless_cancelled(|| patterns::audit(region, &out.paths, *w))
                             .map(|a| (*afp, a, false)),
                     })
                 }
@@ -534,16 +534,13 @@ impl Evaluator {
         // Whatever completed is cached, even if the evaluation stopped meanwhile.
         let mut stopped = false;
         for (layer, pass, fp, generated, audit) in computed {
-            let Some((cached, paths, diagnostics, precedence)) = generated else {
+            let Some((cached, out)) = generated else {
                 stopped = true;
                 continue;
             };
             let id = &pass.id;
             if !cached {
-                self.pass_cache.insert(
-                    id.clone(),
-                    (fp, paths.clone(), diagnostics.clone(), precedence.clone()),
-                );
+                self.pass_cache.insert(id.clone(), (fp, out.clone()));
             }
             let audit = match audit {
                 Some(Some((afp, a, cached))) => {
@@ -563,9 +560,10 @@ impl Evaluator {
                 PassResult {
                     layer: layer.clone(),
                     group: pass.group.clone(),
-                    paths,
-                    diagnostics,
-                    precedence,
+                    paths: out.paths,
+                    diagnostics: out.diagnostics,
+                    precedence: out.precedence,
+                    directed: out.directed,
                     cached,
                     audit,
                 },
@@ -620,6 +618,7 @@ impl Evaluator {
                         id: id.clone(),
                         paths: &r.paths,
                         precedence: &r.precedence,
+                        directed: &r.directed,
                     })
                     .collect();
                 let mode = group.order_mode.unwrap_or(settings.mode);

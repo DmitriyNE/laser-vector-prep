@@ -280,6 +280,7 @@
           <option value="outward">outward</option>
         </select>
       </label>
+      <label class="check" title="join nested rings into one path: a straight connector a pitch long leads into each next ring, marked like the rings (shown and audited)"><input type="checkbox" checked={pass.pattern.link ?? false} onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).checked; store.update(() => { if (pass.pattern.kind === "contourFill") pass.pattern.link = v || undefined; }); }} /> link rings</label>
       <label class="check" title="centrelines in cores too narrow for another ring"><input type="checkbox" bind:checked={pass.pattern.gapFill} onchange={touch} /> gap fill</label>
       {#if pass.pattern.gapFill}
         <label title="where gap fill starts beyond the last ring; empty = half the pitch">End spacing (mm)

@@ -53,13 +53,28 @@ pub fn centrelines(slivers: &Region, opts: &GapFillOptions) -> (Vec<Pline>, usiz
 
 /// Build the diagram, turning a library panic (debug assertions on degenerate input) into
 /// `None` on the host. On wasm (panic = abort) the input sanitising above has to suffice.
+/// Such a panic is expected, so it is not printed: the panic hook (installed once, as
+/// swapping the process-wide hook from parallel threads could leave the quiet one in place)
+/// stays silent on a thread while it builds a diagram.
 #[cfg(not(target_arch = "wasm32"))]
 fn build_diagram(segments: &[[i32; 4]]) -> Option<Diagram> {
+    use std::cell::Cell;
+    thread_local! {
+        static QUIET: Cell<bool> = const { Cell::new(false) };
+    }
+    static HOOK: std::sync::Once = std::sync::Once::new();
     if !segments_valid(segments) {
         return None;
     }
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
+    HOOK.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !QUIET.with(Cell::get) {
+                prev(info);
+            }
+        }));
+    });
+    QUIET.with(|q| q.set(true));
     let result = std::panic::catch_unwind(|| {
         Builder::<i32>::default()
             .with_segments(segments.iter())
@@ -67,7 +82,7 @@ fn build_diagram(segments: &[[i32; 4]]) -> Option<Diagram> {
             .build()
             .ok()
     });
-    std::panic::set_hook(prev);
+    QUIET.with(|q| q.set(false));
     result.ok().flatten()
 }
 

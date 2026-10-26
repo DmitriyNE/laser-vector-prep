@@ -251,6 +251,10 @@ impl Default for Interpretation {
     }
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 fn default_true() -> bool {
     true
 }
@@ -293,6 +297,10 @@ pub enum Pattern {
         /// Order the rings are marked in. Schema v3.
         #[serde(default, skip_serializing_if = "RingOrder::is_any")]
         ring_order: RingOrder,
+        /// Join each run of nested rings into one path: a straight connector a pitch long
+        /// leads from each ring into the next, marked like the rings. Schema v3.
+        #[serde(default, skip_serializing_if = "is_false")]
+        link: bool,
     },
     /// Trace the region boundary (outers and holes) at a geometric offset, optionally as
     /// several rings. Kerf compensation is a user-entered distance, applied outward from the

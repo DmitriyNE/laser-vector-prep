@@ -6,7 +6,7 @@ export function patternLabel(p: Pass): string {
   const pt = p.pattern;
   switch (pt.kind) {
     case "contourFill":
-      return `contour ${pt.pitchMm} mm${pt.gapFill ? " +gap" : ""}${pt.ringOrder && pt.ringOrder !== "any" ? ` ${pt.ringOrder}` : ""}`;
+      return `contour ${pt.pitchMm} mm${pt.gapFill ? " +gap" : ""}${pt.ringOrder && pt.ringOrder !== "any" ? ` ${pt.ringOrder}` : ""}${pt.link ? " linked" : ""}`;
     case "boundaryTrace":
       return `trace ${pt.side}${pt.offsetMm ? ` ${pt.offsetMm} mm` : ""}${pt.kerfMm ? ` kerf ${pt.kerfMm}` : ""}${pt.rings > 1 ? ` ×${pt.rings}` : ""}${pt.join && pt.join.kind !== "round" ? ` ${pt.join.kind}` : ""}`;
     case "hatch":
