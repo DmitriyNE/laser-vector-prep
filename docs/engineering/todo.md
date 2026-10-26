@@ -49,8 +49,8 @@ Open M1 items on the profile schema, preview precision, cancellation and Firefox
       deferred until a version is deployed (D17)
 - [x] Built-in presets: positive LDI, negative background hatch, general marking, boundary
       cutting, each tested on a fixture
-- [ ] Hatch link strokes between rows as visible beam-on geometry with a coverage audit
-      (spec §6); today rows are independent paths
+- [x] Hatch link strokes between rows as visible beam-on geometry with a coverage audit
+      (spec §6): rows link along the boundary up to a set length (D37)
 - [ ] Preset pitches (20 µm fill, 50 µm marking) are starting points, not measured values;
       revisit once the machine has been characterised
 
@@ -162,3 +162,25 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [x] Graph editing: connect operands, slot mappings and pass groups; add/delete layers,
       passes, groups, slots; undo/redo for profile edits
 
+## Patterns (D37)
+
+- [x] Gap fill at every ring level: necks, fingers and trace cores (DEF-15); a ring at
+      exactly half a width drawn once and swept by the audit (DEF-16)
+- [x] Contour fill ring order (inward, outward = core first) kept as path-order
+      constraints; the optimizer checks a move only against the constraints it can break
+- [x] Linked rings: nested rings joined by connectors a pitch long; directed paths
+- [x] Centreline engraving of thin features (medial axis, parabolic stretches followed)
+- [x] Linked hatch rows (zigzag along the boundary)
+- [x] Dots: square, hex and stipple lattices of small circles or dashes
+- [x] Breaks for any pass: dashes (perforation) and tabs
+- [x] Profile schema v3 with a v2 → v3 migration and v2 fixtures
+- [ ] Gap fill at a bend of a zigzag trace: the centreline splits at the medial axis
+      junction and its short pieces are dropped, leaving ~0.0003 mm² per bend at 0.02 mm
+      pitch; join chains through junctions instead
+- [ ] Passthrough's "reverse direction" is not kept by the optimizer, which may reverse
+      open paths; mark them directed (the mechanism exists since D37)
+- [ ] Variable-density hatch (spec §6): needs a density source (gradient, distance to the
+      boundary, an image); not started
+- [ ] Bounded outward growth from a layer (isolation rings outside copper, clipped to a
+      domain): the owner prefers layer operations (boundary trace outside with rings, or
+      envelopes and subtraction) over a pattern for it

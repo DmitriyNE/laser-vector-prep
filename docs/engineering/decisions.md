@@ -557,3 +557,50 @@ freed by another thread. With it the panel takes 3.3 s per evaluation in Chrome 
 threads (13.6 s with one), and 2.7 s for import and first evaluation instead of 72 s; in
 Firefox 8 s instead of 37 to 49 s, measured while the machine was far busier. Cost: the
 module grows by 82 kB (21 kB gzipped); std's own copy of dlmalloc stays linked.
+
+## D37 — More patterns: ring order, linking, centreline, dots, breaks (2026-10-26)
+
+The owner asked for more of spec §6's additional patterns, starting with outward contour
+fill, and chose centreline engraving, linked spiral and hatch, dot lattices, and dashes and
+tabs. Outward contour fill means marking the rings from the core out: growing rings outward
+from a layer and clipping them to a domain can be built from layer operations, so it is no
+pattern.
+
+- **Ring order is a constraint, not a generated order.** The optimizer reorders paths, so a
+  fill generated core first would not stay that way. Each ring, bridge and gap-fill
+  centreline is tied to the nearest path of the ring level just outside it (a forest, one
+  pair per path), inward or outward. Checking every pair for every candidate move would not
+  scale to the 23,000 pairs of the 8×8 panel, so the optimizer now checks a relocation
+  against the moved path's own pairs and a reversal against pairs inside the reversed run;
+  a proptest compares this with checking every pair. Outward order costs the 8×8 panel
+  4.4 s instead of 3.6 s natively, and longer travel.
+- **Linked rings.** Working inside out, each ring's seam is where the ring inside it
+  connects, and its connector runs from there to the nearest point of the ring outside.
+  That point is exactly a pitch away (rings lie at constant depth), so the connector
+  stays in the band between the two rings and crosses nothing; a ring already taken by
+  another chain starts a new one. Connectors are marks (drawn and audited). A chain is an
+  open path whose direction is the order, so passes now also report **directed** paths:
+  the optimizer offers them only their start, keeps their orientation in polishing and
+  relocation, and does not reverse a run that contains one.
+- **Gap fill at every level** (DEF-15): the cores a ring level leaves are the points deeper
+  than the ring plus the end spacing that are not within `pitch − end spacing` of the next
+  level. A round sweep misses a sliver at every convex corner; corners of 60° or wider
+  count as swept (as if mitred; the audit still reports them), sharper ones are cores. A
+  level whose next level has the same numbers of loops and vertices and no sharper corner
+  cannot hold a core (nothing collapsed between them) and is skipped. On the 8×8 panel the
+  fill takes 0.06 s instead of 0.014 s at 10 threads; in the browser the whole evaluation
+  grows by about 0.2–0.4 s of 3–4 s.
+- **Centreline** is the gap fill's medial axis of the whole region. Curved stretches of the
+  axis (between a corner and an edge) are followed as parabolas, within 1 µm.
+- **Linked hatch** joins a row end to the next boundary point along its loop when that is
+  the start of a segment in the next row and the stretch is at most `link_mm`: the link
+  runs on the boundary, so it never crosses a hole or passes another row end.
+- **Dots** come from the hatch's row spans, so they share its global lattice. A dot is a
+  small circle or a short dash, never a zero-length point. The stipple is the hex lattice
+  with each dot moved by up to 0.3 pitch by a hash of its lattice point: irregular, the
+  same on every run and in every region.
+- **Breaks** apply to any pass after its pattern. A constraint between two paths becomes
+  one from the last piece of the first to the first piece of the second, with each
+  constrained path's pieces kept in order; pieces of a directed path stay directed.
+- **Schema v3** with an identity migration: the deployed v2 app would otherwise read a v3
+  profile and silently drop the fields it does not know (dashes on a cut, for one).

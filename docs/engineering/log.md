@@ -3,6 +3,37 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-26 — Patterns
+
+The owner asked for more patterns (D37). Scoping outward contour fill turned up DEF-15:
+gap fill only looked past an island's deepest ring, so a trace, which runs out of rings
+long before its pads do, kept an unmarked core. On the LDI preset's 2×2 test panel 1.2% of
+the copper was missed and gap fill drew nothing; with cores found at every ring level it
+is 0.04%. Measuring that showed DEF-16: at exactly half a trace's width the ring runs into
+the trace and back (a zero-width bridge), which the audit's stroke lost; the ring is now
+split there and the bridge drawn once. A first version of the per-level gap fill took
+0.4 s on the 8×8 panel instead of 0.014 s, nearly all of it Voronoi diagrams of the slivers
+every convex corner leaves (29,000, of which 512 gave a line); the corner rule and skipping
+unchanged levels brought it to 0.06 s.
+
+Then, one commit each: ring order (inward or outward) as path-order constraints with an
+optimizer that checks only what a move can break, and profile schema v3; linked rings and
+directed paths; the centreline pattern, with the medial axis's parabolic stretches
+followed instead of cut; linked hatch rows; dots on square, hex and stipple lattices; dashes
+and tabs for any pass. Each has its controls in the pass properties (defaults as
+placeholders, explanations in tooltips) and a browser test in `e2e/patterns.spec.ts`.
+
+Learned:
+
+- cavalier's `last()` underflows on an empty polyline instead of returning `None` (a
+  debug-build panic; release wrapped around to the same answer).
+- Swapping the process-wide panic hook from parallel threads can leave the silent hook in
+  place for good: a failing native test then printed nothing (DEF-17).
+- A `<select>` inside a `<label>` is named by the label text and the selected option
+  ("Dot circle"), so exact label matches miss it in browser tests.
+- A gap-fill chain that comes back to its start is a closed centreline; emitted open, the
+  readers closed it again on import, which the export round-trip tests caught.
+
 ## 2026-10-25 — After M4: graph view
 
 The main area has a Graph tab next to the preview (D33): imported files with a row per

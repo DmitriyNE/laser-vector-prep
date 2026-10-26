@@ -84,8 +84,8 @@ worker has to provide them). Avoid ports on the Fetch standard's "bad ports" lis
 suite used 4190 (ManageSieve) until Firefox refused it. Covered: import → evaluate →
 export of a colour-separated PDF, mapping an unmapped layer onto a new slot, a two-group
 subtraction with a hatch pass, cancelling and superseding a long evaluation, every input
-format, and the service worker installing, isolating the page and serving the app
-offline.
+format, the patterns' controls (ring order, linking, centreline, dots, tabs), and the
+service worker installing, isolating the page and serving the app offline.
 
 A failure keeps a trace under `web/test-results/`; open it with
 `npx playwright show-trace <file>`. `npx playwright test --headed` (in `web/`) shows the
