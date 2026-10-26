@@ -7,7 +7,7 @@
 //! Each `<Layer>` with features becomes one source layer; the profile becomes `Profile`.
 //! Several steps prefix the layer names with the step name.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cavalier_contours::polyline::{PlineSource, PlineSourceMut};
 use usvg::roxmltree::{Document, Node};
@@ -146,6 +146,8 @@ struct Counts {
     unsupported: BTreeMap<String, usize>,
     components: usize,
     mirrored: usize,
+    stack_pads: usize,
+    stack_pads_duplicate: usize,
 }
 
 struct Reader<'a> {
@@ -563,35 +565,7 @@ impl Reader<'_> {
                 "Features" => {
                     self.features(c, scale, xf, out, dark);
                 }
-                "Pad" | "Fiducial" => {
-                    let mut local = xf;
-                    for k in c.children().filter(|k| k.is_element()) {
-                        match k.tag_name().name() {
-                            "Xform" => {
-                                let x = Xform::from_node(k, scale);
-                                if x.mirror {
-                                    self.counts.mirrored += 1;
-                                }
-                                local = Xform {
-                                    mirror: local.mirror ^ x.mirror,
-                                    rotation_deg: local.rotation_deg + x.rotation_deg,
-                                    dx: local.dx + x.dx,
-                                    dy: local.dy + x.dy,
-                                };
-                            }
-                            "Location" => {
-                                local = local.translated(
-                                    attr_f(k, "x").unwrap_or(0.0) * scale,
-                                    attr_f(k, "y").unwrap_or(0.0) * scale,
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(shape) = self.primitive_ref(c, scale, &local) {
-                        self.emit(out, dark, shape);
-                    }
-                }
+                "Pad" | "Fiducial" => self.pad(c, scale, xf, out, dark),
                 "Hole" => {
                     let d = attr_f(c, "diameter").unwrap_or(0.0) * scale;
                     let x = attr_f(c, "x").unwrap_or(0.0) * scale;
@@ -648,6 +622,58 @@ impl Reader<'_> {
                     }
                 }
             }
+        }
+    }
+
+    /// A `<Pad>`, `<Fiducial>` or padstack `<LayerPad>`: a primitive placed by its own
+    /// Xform and Location, referenced from the dictionaries or written inline.
+    fn pad(
+        &mut self,
+        n: Node<'_, '_>,
+        scale: f64,
+        xf: Xform,
+        out: &mut Vec<(bool, Shape)>,
+        dark: bool,
+    ) {
+        let mut local = xf;
+        let mut inline = None;
+        for k in n.children().filter(|k| k.is_element()) {
+            match k.tag_name().name() {
+                "Xform" => {
+                    let x = Xform::from_node(k, scale);
+                    if x.mirror {
+                        self.counts.mirrored += 1;
+                    }
+                    local = Xform {
+                        mirror: local.mirror ^ x.mirror,
+                        rotation_deg: local.rotation_deg + x.rotation_deg,
+                        dx: local.dx + x.dx,
+                        dy: local.dy + x.dy,
+                    };
+                }
+                "Location" => {
+                    local = local.translated(
+                        attr_f(k, "x").unwrap_or(0.0) * scale,
+                        attr_f(k, "y").unwrap_or(0.0) * scale,
+                    );
+                }
+                name if name.ends_with("Ref") || name == "Property" => {}
+                _ => inline = inline.or(Some(k)),
+            }
+        }
+        let shape = match inline {
+            Some(k)
+                if !n
+                    .children()
+                    .any(|r| r.is_element() && r.tag_name().name().ends_with("PrimitiveRef")) =>
+            {
+                self.standard_primitive(k, scale)
+                    .map(|r| self.flash(&r, &local))
+            }
+            _ => self.primitive_ref(n, scale, &local),
+        };
+        if let Some(shape) = shape {
+            self.emit(out, dark, shape);
         }
     }
 
@@ -878,6 +904,33 @@ fn composite(items: Vec<(bool, Shape)>) -> (Vec<Primitive>, bool) {
     (out, incomplete)
 }
 
+/// A pad's place and primitive as written (location, rotation, primitive id), to find a
+/// padstack pad that the layer's features already carry.
+type PadKey = (i64, i64, i64, String);
+
+fn pad_key(n: Node<'_, '_>) -> Option<PadKey> {
+    let child = |name: &str| {
+        n.children()
+            .find(|c| c.is_element() && c.tag_name().name() == name)
+    };
+    let at = child("Location")?;
+    let id = n
+        .children()
+        .find(|c| c.is_element() && c.tag_name().name().ends_with("PrimitiveRef"))?
+        .attribute("id")?;
+    let rotation = child("Xform")
+        .and_then(|x| attr_f(x, "rotation"))
+        .unwrap_or(0.0)
+        .rem_euclid(360.0);
+    let q = |v: f64| (v * 1e6).round() as i64;
+    Some((
+        q(attr_f(at, "x").unwrap_or(0.0)),
+        q(attr_f(at, "y").unwrap_or(0.0)),
+        q(rotation) % q(360.0),
+        id.to_string(),
+    ))
+}
+
 fn incomplete_boolean(layer: &str) -> Diagnostic {
     Diagnostic::warning(
         "ipc.incomplete_boolean",
@@ -1003,24 +1056,57 @@ pub fn read_bytes(
             }
             layers.get_mut(&name).unwrap().primitives.extend(prims);
         }
-        for lf in step
+        // Pads that padstacks place on each layer. Altium writes most pads only here, not
+        // in the layer's features; pads that are in both are read once.
+        let mut stack_pads: BTreeMap<&str, Vec<Node>> = BTreeMap::new();
+        for lp in step
+            .children()
+            .filter(|c| c.is_element() && c.tag_name().name() == "PadStack")
+            .flat_map(|ps| ps.children())
+            .filter(|c| c.is_element() && c.tag_name().name() == "LayerPad")
+        {
+            if let Some(layer) = lp.attribute("layerRef") {
+                stack_pads.entry(layer).or_default().push(lp);
+            }
+        }
+        let features: Vec<(&str, Option<Node>)> = step
             .children()
             .filter(|c| c.is_element() && c.tag_name().name() == "LayerFeature")
-        {
-            let Some(layer_ref) = lf.attribute("layerRef") else {
-                continue;
-            };
+            .filter_map(|lf| Some((lf.attribute("layerRef")?, Some(lf))))
+            .collect();
+        let pads_only: Vec<(&str, Option<Node>)> = stack_pads
+            .keys()
+            .filter(|l| !features.iter().any(|(f, _)| f == *l))
+            .map(|l| (*l, None))
+            .collect();
+        for (layer_ref, lf) in features.into_iter().chain(pads_only) {
             let mut items: Vec<(bool, Shape)> = Vec::new();
-            for set in lf.children().filter(|c| c.is_element()) {
-                match set.tag_name().name() {
-                    "Set" => {
-                        let dark = !set
-                            .attribute("polarity")
-                            .is_some_and(|p| p.eq_ignore_ascii_case("NEGATIVE"));
-                        reader.features(set, scale, Xform::IDENTITY, &mut items, dark);
+            let mut placed: HashSet<PadKey> = HashSet::new();
+            if let Some(lf) = lf {
+                for set in lf.children().filter(|c| c.is_element()) {
+                    match set.tag_name().name() {
+                        "Set" => {
+                            let dark = !set
+                                .attribute("polarity")
+                                .is_some_and(|p| p.eq_ignore_ascii_case("NEGATIVE"));
+                            reader.features(set, scale, Xform::IDENTITY, &mut items, dark);
+                        }
+                        _ => reader.features(lf, scale, Xform::IDENTITY, &mut items, true),
                     }
-                    _ => reader.features(lf, scale, Xform::IDENTITY, &mut items, true),
                 }
+                placed.extend(
+                    lf.descendants()
+                        .filter(|n| n.is_element() && n.tag_name().name() == "Pad")
+                        .filter_map(pad_key),
+                );
+            }
+            for &lp in stack_pads.get(layer_ref).into_iter().flatten() {
+                if pad_key(lp).is_some_and(|k| !placed.insert(k)) {
+                    reader.counts.stack_pads_duplicate += 1;
+                    continue;
+                }
+                reader.counts.stack_pads += 1;
+                reader.pad(lp, scale, Xform::IDENTITY, &mut items, true);
             }
             if reader.budget.exhausted() {
                 return Err(reader.budget.error(SourceFormat::Ipc2581));
@@ -1039,6 +1125,19 @@ pub fn read_bytes(
         }
     }
     diags.extend(reader.diags);
+    if reader.counts.stack_pads > 0 {
+        let duplicates = match reader.counts.stack_pads_duplicate {
+            0 => String::new(),
+            n => format!("; {n} already in the layer features were read once"),
+        };
+        diags.push(Diagnostic::info(
+            "ipc.padstacks",
+            format!(
+                "{} pad(s) placed from padstacks{duplicates}",
+                reader.counts.stack_pads
+            ),
+        ));
+    }
     if reader.counts.components > 0 {
         diags.push(Diagnostic::info(
             "ipc.components",
@@ -1331,6 +1430,55 @@ mod tests {
         assert_eq!(strokes.len(), 2, "{:?}", top.primitives);
         assert!(strokes.iter().any(|l| (l - 10.0).abs() < 1e-9));
         assert!(strokes.iter().any(|l| (l - 2.0 * PI).abs() < 1e-9));
+    }
+
+    #[test]
+    fn padstack_pads_are_placed_on_their_layers_once() {
+        // As Altium writes pads: a via's padstack places pads on TOP and on an inner layer
+        // with no features of its own, a component pad is in both the padstack and the
+        // layer's features, and a pad's shape may be written inline.
+        let xml = format!(
+            r#"{HEAD}
+    <PadStack net="N1">
+     <LayerHole name="v" diameter="0.2" platingStatus="VIA" x="5" y="5"><Span fromLayer="TOP" toLayer="IN1"/></LayerHole>
+     <LayerPad layerRef="TOP"><Location x="5" y="5"/><StandardPrimitiveRef id="c1"/></LayerPad>
+     <LayerPad layerRef="IN1"><Location x="5" y="5"/><StandardPrimitiveRef id="c1"/></LayerPad>
+    </PadStack>
+    <PadStack net="N2">
+     <LayerPad layerRef="TOP"><Xform rotation="90"/><Location x="10" y="5"/><StandardPrimitiveRef id="r2"/><PinRef componentRef="R1" pin="1"/></LayerPad>
+     <LayerPad layerRef="TOP"><Location x="15" y="5"/><RectCenter width="2" height="1"/></LayerPad>
+    </PadStack>
+    <LayerFeature layerRef="TOP">
+     <Set net="N2"><Pad><Xform rotation="90"/><Location x="10" y="5"/><StandardPrimitiveRef id="r2"/><PinRef componentRef="R1" pin="1"/></Pad></Set>
+     <Set net="N3"><Features><Line startX="0" startY="10" endX="10" endY="10"><LineDescRef id="square"/></Line></Features></Set>
+    </LayerFeature>
+   </Step>
+  </CadData>
+ </Ecad>
+</IPC-2581>"#
+        );
+        let doc = read(&xml);
+        assert!(
+            !doc.diagnostics.iter().any(|d| d.code == "ipc.unsupported"),
+            "{:?}",
+            doc.diagnostics
+        );
+        let note = doc
+            .diagnostics
+            .iter()
+            .find(|d| d.code == "ipc.padstacks")
+            .expect("padstack note");
+        assert!(note.message.starts_with("3 pad(s)"), "{}", note.message);
+        let layer = |name: &str| doc.layers.iter().find(|l| l.name == name).unwrap();
+        let top = region_of(layer("TOP"));
+        // Circle (pi/4), the upright rectangle once (2), the inline rectangle (2) and the
+        // square-ended line (10.4 x 0.4).
+        let expected = PI / 4.0 + 2.0 + 2.0 + 10.4 * 0.4;
+        assert!((top.area() - expected).abs() < 1e-6, "{}", top.area());
+        assert!(top.contains(Point::new(10.0, 5.9)) && top.contains(Point::new(15.9, 5.0)));
+        let inner = region_of(layer("IN1"));
+        assert!((inner.area() - PI / 4.0).abs() < 1e-6, "{}", inner.area());
+        assert!(inner.contains(Point::new(5.0, 5.0)));
     }
 
     #[test]
