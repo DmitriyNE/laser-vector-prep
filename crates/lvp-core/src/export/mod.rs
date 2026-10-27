@@ -85,6 +85,32 @@ impl From<pdf::PdfError> for ExportError {
     }
 }
 
+/// A group's marking sequence: its paths in the planned order and direction (generated
+/// order when it has no plan), leaving out paths too short to mark. Every exporter writes
+/// exactly this sequence, and the preview's order inspector steps through it.
+pub fn group_sequence(ev: &Evaluation, group: &GroupId) -> Vec<(PassId, Pline)> {
+    let seq: Vec<(PassId, Pline)> = match ev.group_plan(group) {
+        Some(plan) => plan
+            .order
+            .iter()
+            .filter_map(|r| {
+                ev.pass(&r.pass)
+                    .and_then(|pr| pr.paths.get(r.index))
+                    .map(|p| (r.pass.clone(), order::oriented(p, r)))
+            })
+            .collect(),
+        None => ev
+            .passes
+            .iter()
+            .filter(|(_, r)| &r.group == group)
+            .flat_map(|(id, r)| r.paths.iter().map(move |p| (id.clone(), p.clone())))
+            .collect(),
+    };
+    seq.into_iter()
+        .filter(|(_, p)| p.vertex_count() >= 2)
+        .collect()
+}
+
 /// Gather exportable paths in planner order. Groups with `export: false` are skipped;
 /// passes pointing at unknown groups are reported.
 /// Flattened paths of every exporting group, group by group in profile order and within a
@@ -100,7 +126,6 @@ pub fn collect_paths(profile: &Profile, ev: &Evaluation) -> (Vec<ExportPath>, Ve
             ));
         }
     }
-    let paths_by_pass = ev.pass_paths();
     for group in &profile.output_groups {
         if !group.export {
             continue;
@@ -108,34 +133,13 @@ pub fn collect_paths(profile: &Profile, ev: &Evaluation) -> (Vec<ExportPath>, Ve
         let width_mm = group
             .stroke_width_mm
             .unwrap_or(profile.export.stroke_width_mm);
-        // Planned order when available, generated order otherwise.
-        let ordered: Vec<(PassId, Pline)> = match ev.group_plan(&group.id) {
-            Some(plan) => plan
-                .order
-                .iter()
-                .filter_map(|r| {
-                    paths_by_pass
-                        .get(&r.pass)
-                        .and_then(|v| v.get(r.index))
-                        .map(|p| (r.pass.clone(), order::oriented(p, r)))
-                })
-                .collect(),
-            None => ev
-                .passes
-                .iter()
-                .filter(|(_, r)| r.group == group.id)
-                .flat_map(|(id, r)| r.paths.iter().map(move |p| (id.clone(), p.clone())))
-                .collect(),
-        };
-        for (_, p) in ordered {
-            if p.vertex_count() >= 2 {
-                out.push(ExportPath {
-                    pline: p,
-                    color: group.color,
-                    width_mm,
-                    group: group.id.clone(),
-                });
-            }
+        for (_, p) in group_sequence(ev, &group.id) {
+            out.push(ExportPath {
+                pline: p,
+                color: group.color,
+                width_mm,
+                group: group.id.clone(),
+            });
         }
     }
     (out, diags)
@@ -240,27 +244,12 @@ pub fn export_dxf(
     ev: &Evaluation,
 ) -> Result<(Vec<u8>, Vec<Diagnostic>), ExportError> {
     let mut diags = Vec::new();
-    let paths_by_pass = ev.pass_paths();
     let mut groups = Vec::new();
     for group in profile.output_groups.iter().filter(|g| g.export) {
-        let paths: Vec<Pline> = match ev.group_plan(&group.id) {
-            Some(plan) => plan
-                .order
-                .iter()
-                .filter_map(|r| {
-                    paths_by_pass
-                        .get(&r.pass)
-                        .and_then(|v| v.get(r.index))
-                        .map(|p| order::oriented(p, r))
-                })
-                .collect(),
-            None => ev
-                .passes
-                .iter()
-                .filter(|(_, r)| r.group == group.id)
-                .flat_map(|(_, r)| r.paths.iter().cloned())
-                .collect(),
-        };
+        let paths: Vec<Pline> = group_sequence(ev, &group.id)
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
         if paths.is_empty() {
             continue;
         }

@@ -17,7 +17,7 @@ use std::cell::RefCell;
 
 use lvp_core::model::{GroupId, LayerId, PassId};
 use lvp_core::profile;
-use lvp_core::project::{PreviewBuffer, Project};
+use lvp_core::project::{OrderBuffer, PreviewBuffer, Project};
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
@@ -247,6 +247,52 @@ pub fn preview_source(file: usize, layer: &str) -> Option<Preview> {
 #[wasm_bindgen]
 pub fn preview_jumps(group_id: &str) -> Option<Preview> {
     with(|p| p.preview_jumps(&GroupId::new(group_id)).map(Into::into))
+}
+
+/// An output group's marking sequence as exported: paths in order and direction, the pass
+/// of each, and the assumed start and end points.
+#[wasm_bindgen]
+pub struct OrderPreview {
+    inner: OrderBuffer,
+}
+
+#[wasm_bindgen]
+impl OrderPreview {
+    #[wasm_bindgen(getter)]
+    pub fn paths(&self) -> Preview {
+        self.inner.paths.clone().into()
+    }
+
+    /// Pass of each path, as an index into `passes`.
+    #[wasm_bindgen(getter)]
+    pub fn pass_of(&self) -> Vec<u32> {
+        self.inner.pass_of.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn passes(&self) -> Vec<String> {
+        self.inner.passes.iter().map(|p| p.to_string()).collect()
+    }
+
+    /// The assumed start point (x, y mm), if the optimizer settings have one.
+    #[wasm_bindgen(getter)]
+    pub fn start(&self) -> Option<Vec<f64>> {
+        self.inner.start.map(Vec::from)
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn end(&self) -> Option<Vec<f64>> {
+        self.inner.end.map(Vec::from)
+    }
+}
+
+/// An output group's marking sequence, for stepping through in the preview.
+#[wasm_bindgen]
+pub fn preview_order(group_id: &str) -> Option<OrderPreview> {
+    with(|p| {
+        p.preview_order(&GroupId::new(group_id))
+            .map(|inner| OrderPreview { inner })
+    })
 }
 
 /// Jump footprint coverage raster over the protected regions of a group.

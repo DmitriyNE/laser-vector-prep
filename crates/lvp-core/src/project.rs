@@ -238,6 +238,19 @@ impl PreviewBuffer {
     }
 }
 
+/// A group's marking sequence for the preview's order inspector: its paths in the order and
+/// direction the export writes them, the pass each came from, and the assumed start and end
+/// points the first and last jumps lead from and to.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OrderBuffer {
+    pub paths: PreviewBuffer,
+    /// Pass of each path, as an index into `passes`.
+    pub pass_of: Vec<u32>,
+    pub passes: Vec<PassId>,
+    pub start: Option<[f64; 2]>,
+    pub end: Option<[f64; 2]>,
+}
+
 pub struct Project {
     pub sources: Sources,
     pub profile: Profile,
@@ -637,6 +650,31 @@ impl Project {
         Some(b)
     }
 
+    /// A group's marking sequence as exported, for stepping through in the preview.
+    pub fn preview_order(&self, group: &GroupId) -> Option<OrderBuffer> {
+        let (ev, profile) = self.last.as_ref()?;
+        profile.group(group)?;
+        let seq = export::group_sequence(ev, group);
+        let mut passes: Vec<PassId> = Vec::new();
+        let pass_of = seq
+            .iter()
+            .map(|(id, _)| match passes.iter().position(|p| p == id) {
+                Some(k) => k as u32,
+                None => {
+                    passes.push(id.clone());
+                    (passes.len() - 1) as u32
+                }
+            })
+            .collect();
+        Some(OrderBuffer {
+            paths: PreviewBuffer::from_plines(seq.iter().map(|(_, p)| p)),
+            pass_of,
+            passes,
+            start: profile.optimizer.start_mm,
+            end: profile.optimizer.end_mm,
+        })
+    }
+
     /// Jump footprint coverage over the protected regions, for the preview overlay.
     pub fn heatmap(&self, group: &GroupId) -> Option<&Heatmap> {
         self.last.as_ref()?.0.group_plan(group)?.heatmap.as_ref()
@@ -775,6 +813,82 @@ mod tests {
         let e2 = p.evaluate();
         assert_eq!(e2.revision, 2);
         assert!(e2.layers.iter().all(|l| l.cached) && e2.passes.iter().all(|p| p.cached));
+    }
+
+    /// First and last point of path `i` of a buffer, in document mm.
+    fn ends(b: &PreviewBuffer, i: usize) -> ([f64; 2], [f64; 2]) {
+        let at = |k: u32| {
+            let k = k as usize;
+            [
+                b.origin[0] + f64::from(b.coords[2 * k]),
+                b.origin[1] + f64::from(b.coords[2 * k + 1]),
+            ]
+        };
+        let first = at(b.starts[i]);
+        let last = if b.closed[i] == 1 {
+            first
+        } else {
+            at(b.starts[i + 1] - 1)
+        };
+        (first, last)
+    }
+
+    #[test]
+    fn the_order_preview_is_the_exported_sequence() {
+        let mut p = Project::new();
+        coarse(&mut p);
+        p.add_source("board-islands.dxf", &board()).unwrap();
+        p.profile.optimizer.start_mm = Some([-1.0, -2.0]);
+        p.profile.optimizer.end_mm = Some([30.0, 2.0]);
+        for mode in [
+            OptimizerMode::AsGenerated,
+            OptimizerMode::MinimumJump,
+            OptimizerMode::BleedAware,
+        ] {
+            p.profile.optimizer.mode = mode;
+            assert!(!p.evaluate().has_errors);
+            let (ev, profile) = p.last.as_ref().unwrap();
+            let (exported, _) = export::collect_paths(profile, ev);
+            for g in &profile.output_groups {
+                let o = p.preview_order(&g.id).unwrap();
+                let want: Vec<&Pline> = exported
+                    .iter()
+                    .filter(|e| e.group == g.id)
+                    .map(|e| &e.pline)
+                    .collect();
+                assert!(!want.is_empty());
+                assert_eq!(o.paths, PreviewBuffer::from_plines(want), "{mode:?}");
+                // Each pass contributes as many paths as it made, and only to its group.
+                assert_eq!(o.pass_of.len(), o.paths.path_count());
+                for (k, id) in o.passes.iter().enumerate() {
+                    let pr = ev.pass(id).unwrap();
+                    assert_eq!(pr.group, g.id);
+                    let n = o.pass_of.iter().filter(|&&q| q as usize == k).count();
+                    assert_eq!(n, pr.paths.len());
+                }
+                assert_eq!((o.start, o.end), (Some([-1.0, -2.0]), Some([30.0, 2.0])));
+                // The jumps the inspector draws between its paths are the planned jumps.
+                let jumps = p.preview_jumps(&g.id).unwrap();
+                let n = o.paths.path_count();
+                assert_eq!(jumps.path_count(), n + 1);
+                let mut from = o.start.unwrap();
+                for i in 0..=n {
+                    let to = if i < n {
+                        ends(&o.paths, i).0
+                    } else {
+                        o.end.unwrap()
+                    };
+                    let (a, b) = ends(&jumps, i);
+                    for (u, v) in [(a, from), (b, to)] {
+                        assert!((u[0] - v[0]).abs() < 1e-4 && (u[1] - v[1]).abs() < 1e-4);
+                    }
+                    if i < n {
+                        from = ends(&o.paths, i).1;
+                    }
+                }
+            }
+        }
+        assert!(p.preview_order(&GroupId::new("nope")).is_none());
     }
 
     #[test]
