@@ -3,6 +3,32 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-10-27 — Order inspector
+
+The owner asked for a way to inspect path order, like a slicer's move slider (D39). The
+preview's new "order" toggle opens a timeline over one output group: step, play, jump to
+a path by clicking it, or pick the group (also from the order panel). Marked paths shade
+from blue to red by their place in the order, chevrons show their direction, and the
+current path is drawn with its seam and the jump into it. The sequence is the exported
+one: the exporters and the inspector share `export::group_sequence`, and a core test
+checks the inspector's buffer against the PDF's paths and its jumps against the planned
+jumps for every optimizer mode.
+
+On the Altium board (Top Layer, 5,727 paths), stepping first cost 110 ms a frame and
+opening the inspector 2 s. The order overlay was cheap; the preview itself traced all
+127,000 vertices into screen coordinates on every frame. Paths are now traced once in
+document space and drawn through a transform, with screen-space tracing kept for zooms
+where single precision would show. Stepping and zooming hold 60 fps in Chrome (zooming
+took 21 to 29 ms a frame on the live site), and the inspector opens in 0.5 s.
+
+The owner decided to keep the kernel fix (D38) vendored and upstream it later (todo).
+
+Learned:
+
+- Timing canvas drawing by the time a call takes measures only the recording: Chrome
+  rasterizes later. Reading a pixel back forces it but can switch the canvas to CPU
+  rendering; frame intervals under `requestAnimationFrame` are what a user sees.
+
 ## 2026-10-26 — Padstack pads, and what they uncovered
 
 The owner saw the Altium board's teardrops without its pads (DEF-21): Altium writes most

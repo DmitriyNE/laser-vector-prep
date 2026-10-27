@@ -5,8 +5,7 @@ milestones into `log.md`.
 
 ## Open questions for the project owner
 
-- Report the kernel fix (DEF-22, D38) upstream to cavalier_contours, as an issue with the
-  failing case, or an issue and a pull request?
+None.
 
 ## Staging (done 2026-10-24, see log)
 
@@ -193,3 +192,21 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] Booleans: some unions of capsules (strokes of a short, sharply turning path's
       segments, whose caps share circles) still need the polygon fallback; since D38 only
       their group loses its arcs
+
+## Order inspector (D39)
+
+- [x] A group's marking sequence shared by the exporters and the preview
+      (`export::group_sequence`, `Project::preview_order`)
+- [x] Timeline over one group: step, play, keyboard, group choice; a click on a path makes
+      it the current one; opens from the order panel's group names
+- [x] Marked paths coloured by place in the order (or by group), chevrons for direction,
+      the current path with its seam and the jump into it
+- [x] Preview paths kept in document space and drawn through a transform; screen-space
+      tracing past single precision's reach
+- [ ] Upstream the kernel fix (DEF-22, D38) to cavalier_contours, as an issue with the
+      failing case and a pull request; the owner wants it kept vendored for now
+      (2026-10-27)
+- [ ] Every visibility toggle re-requests every preview buffer from the worker (about
+      0.3 s on the Altium board); keep the buffers of an unchanged revision
+- [ ] Optionally trace the current path part way (the beam's position by length), if
+      stepping whole paths turns out too coarse for long linked fills

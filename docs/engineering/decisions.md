@@ -630,3 +630,32 @@ fixes it, the patch goes and the tests stay.
   such specks along the seams; kept, they made up most of the swept area's loops and most
   of the time of the comparisons, for no change in the missed area on the boards measured.
 
+## D39 — Order inspector: one group, whole paths, colour for order, chevrons for direction (2026-10-27)
+
+The owner asked for a way to inspect path order, like the move slider of a 3D-printer
+slicer, and chose (2026-10-27):
+
+- **One output group at a time.** The planner orders each group on its own and the laser
+  software may run groups in any order (spec §7), so a timeline across groups would claim
+  an order nobody controls. The other groups stay drawn faintly.
+- **Whole paths per step.** Exact, and fast with ten thousand paths; mark and jump speeds
+  are unknown, so a length-based "beam position" would rest on a guess.
+- **Colour for order, shape for direction.** Marked paths shade from blue (early) to red
+  (late) in 48 batches, so the sweep over a board reads at a glance; the timeline's track
+  shows the ramp. Direction is shown by chevrons along marked paths, spaced in screen
+  pixels so they appear as one zooms in, and the current path gets denser ones, a dot at
+  its start (a loop's seam) and the jump into it.
+
+The sequence shown is `export::group_sequence`, the one every exporter writes, so the
+inspector cannot disagree with the PDF.
+
+**Drawing in document space.** Tracing a large panel into screen coordinates took about
+0.3 s a frame on the Altium board (127,000 vertices), which made stepping and panning
+slow. Each preview buffer is now traced once into a `Path2D` in document mm relative to
+its origin and drawn through a transform, which browsers cache: stepping and zooming keep
+60 fps in Chrome, where zooming ran at 21 to 29 ms a frame before. Canvas paths and
+transforms are single precision, so when a buffer's extent times the device scale passes
+4e6 px (a quarter-pixel error), the old screen-space tracing takes over. While stepping,
+the scene under the inspector (including the whole sequence, faint) is kept in an
+offscreen canvas and only the marked paths and the current path are drawn again.
+
