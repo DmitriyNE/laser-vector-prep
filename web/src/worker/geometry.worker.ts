@@ -1,5 +1,5 @@
 import init, * as wasm from "../wasm/lvp_wasm.js";
-import type { Heatmap, Preview } from "../core/types.js";
+import type { Heatmap, OrderPreview, Preview } from "../core/types.js";
 import { CANCELLED, type Payload, type Request, type Response } from "./protocol.js";
 
 // Shared-memory wasm: instantiate, then start the rayon pool (one Web Worker per thread).
@@ -60,6 +60,15 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       return preview(wasm.preview_source(req.file, req.layer));
     case "previewJumps":
       return preview(wasm.preview_jumps(req.id));
+    case "previewOrder": {
+      const o = wasm.preview_order(req.id);
+      if (!o) return { result: null, transfer: [] };
+      const paths = preview(o.paths);
+      const point = (v: Float64Array | undefined): [number, number] | null => (v ? [v[0]!, v[1]!] : null);
+      const out: OrderPreview = { paths: paths.result!, passOf: o.pass_of, passes: o.passes, start: point(o.start), end: point(o.end) };
+      o.free();
+      return { result: out, transfer: [...paths.transfer, out.passOf.buffer] };
+    }
     case "previewAudit":
       return preview(wasm.preview_audit(req.id, req.spill));
     case "heatmap": {

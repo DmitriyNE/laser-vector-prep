@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { Heatmap, Preview } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
+  import { Sequence } from "../state/sequence.js";
+  import { documentPath, documentSpaceOk, extent, inDocument, project, segment, tracePath, type View } from "./canvas.js";
+  import { drawOrder, drawOrderBase, type OrderState } from "./orderDraw.js";
+  import OrderTimeline from "./OrderTimeline.svelte";
 
   let { store }: { store: ProjectStore } = $props();
 
@@ -12,8 +16,25 @@
   let fitted = false;
   let cursorMm: [number, number] | null = $state(null);
 
-  type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; closedHoles?: boolean; fill?: string };
+  /**
+   * `group`: the output group a pass's paths or jumps belong to. `doc` and `extent`: the
+   * paths in document space and their extent, made on first draw (see canvas.ts).
+   */
+  type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; fill?: string; group?: string; doc?: Path2D; extent?: number };
   let items: Item[] = [];
+  /** The order inspector's sequence, and the path under the pointer (-1: none). */
+  let order: { group: string; seq: Sequence; revision: number } | null = $state.raw(null);
+  let hover = $state(-1);
+  let hoverAt: { x: number; y: number } | null = $state(null);
+  /** The scene under the order overlay while only the overlay changes, and what it shows. */
+  let base: { canvas: HTMLCanvasElement; key: string } | null = null;
+  let itemsVersion = 0;
+  /** The group the inspector steps through: the chosen one, else the first with paths. */
+  const orderGroup = $derived.by(() => {
+    const gs = store.evaluation?.groups ?? [];
+    return gs.find((g) => g.id === store.orderGroup && g.paths > 0)?.id ?? gs.find((g) => g.paths > 0)?.id ?? null;
+  });
+  const inspecting = () => (store.showOrder && order ? order : null);
   /** Heatmap images in document mm: drawn under the geometry when enabled. */
   type HeatImage = { key: string; canvas: HTMLCanvasElement; x: number; top: number; wMm: number; hMm: number };
   let heatImages: HeatImage[] = [];
@@ -59,13 +80,6 @@
     return { key, canvas, x: h.originX, top: h.originY + h.height * h.cellMm, wMm: h.width * h.cellMm, hMm: h.height * h.cellMm };
   }
 
-  /** A view of the document: mm at the centre of a w × h pixel area, and pixels per mm. */
-  type View = { cx: number; cy: number; ppm: number; w: number; h: number };
-
-  function project(v: View, x: number, y: number): [number, number] {
-    return [v.w / 2 + (x - v.cx) * v.ppm, v.h / 2 - (y - v.cy) * v.ppm];
-  }
-
   function toScreen(x: number, y: number, w: number, h: number): [number, number] {
     return project({ cx, cy, ppm, w, h }, x, y);
   }
@@ -104,6 +118,7 @@
 
   async function refetch() {
     const token = ++fetchToken;
+    const revision = store.previewRevision;
     const next: Item[] = [];
     const ev = store.evaluation;
     if (store.showSources) {
@@ -120,7 +135,7 @@
       for (const l of ev.layers) {
         if (store.hiddenLayers.has(l.id)) continue;
         const p = await store.preview("layer", l.id);
-        if (p) next.push({ key: `layer:${l.id}`, preview: p, color: "rgba(60,60,60,0.9)", width: 1.5, dash: [], closedHoles: true });
+        if (p) next.push({ key: `layer:${l.id}`, preview: p, color: "rgba(60,60,60,0.9)", width: 1.5, dash: [] });
       }
     }
     const nextHeat: HeatImage[] = [];
@@ -130,7 +145,7 @@
         const g = store.group(pass.group);
         if (g && !g.visible) continue;
         const p = await store.preview("pass", pass.id);
-        if (p) next.push({ key: `pass:${pass.id}`, preview: p, color: g ? rgbCss(g.color) : "black", width: 1, dash: [] });
+        if (p) next.push({ key: `pass:${pass.id}`, preview: p, color: g ? rgbCss(g.color) : "black", width: 1, dash: [], group: pass.group });
       }
       // Coverage audit: missed area and spill of each visible audited pass, under the paths.
       if (store.showAudit) {
@@ -150,7 +165,7 @@
         if (g && !g.visible) continue;
         if (store.showJumps) {
           const j = await store.previewJumps(gs.id);
-          if (j) next.push({ key: `jumps:${gs.id}`, preview: j, color: "rgba(220,0,200,0.8)", width: 1, dash: [4, 3] });
+          if (j) next.push({ key: `jumps:${gs.id}`, preview: j, color: "rgba(220,0,200,0.8)", width: 1, dash: [4, 3], group: gs.id });
         }
         if (store.showHeatmap && gs.heatmap) {
           const h = await store.heatmap(gs.id);
@@ -158,9 +173,18 @@
         }
       }
     }
+    let nextOrder: typeof order = null;
+    const og = orderGroup;
+    if (store.showOrder && og) {
+      const o = order?.group === og && order.revision === revision ? order : null;
+      const fetched = o ? null : await store.previewOrder(og);
+      nextOrder = o ?? (fetched ? { group: og, seq: new Sequence(fetched), revision } : null);
+    }
     if (token !== fetchToken) return; // a newer fetch is in flight
     items = next;
+    itemsVersion++;
     heatImages = nextHeat;
+    order = nextOrder;
     renderMiniScene();
     if (!fitted) fit();
     draw();
@@ -176,12 +200,51 @@
       canvas.height = h * dpr;
     }
     const ctx = canvas.getContext("2d")!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    drawGrid(ctx, w, h);
-    drawScene(ctx, { cx, cy, ppm, w, h }, true);
+    const v = { cx, cy, ppm, w, h };
+    const ord = inspecting();
+    if (ord) {
+      // Stepping through the order redraws only the overlay, over the scene kept from before.
+      const key = JSON.stringify([cx, cy, ppm, w, h, dpr, itemsVersion, store.selection, ord.group]);
+      if (base?.key !== key) {
+        const off = base?.canvas ?? document.createElement("canvas");
+        off.width = w * dpr;
+        off.height = h * dpr;
+        const bctx = off.getContext("2d")!;
+        bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        drawGrid(bctx, w, h);
+        drawOrderBase(bctx, v, ord.seq, orderState(ord));
+        drawScene(bctx, v, true);
+        base = { canvas: off, key };
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(base.canvas, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawOrder(ctx, v, ord.seq, orderState(ord));
+    } else {
+      base = null;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      drawGrid(ctx, w, h);
+      drawScene(ctx, v, true);
+    }
     drawRulers(ctx, w, h);
     drawMinimap();
+  }
+
+  /** How the order inspector draws the inspected sequence now. */
+  function orderState(ord: NonNullable<typeof order>): OrderState {
+    const g = store.group(ord.group);
+    const hidden = Uint8Array.from(ord.seq.order.passes, (id) => (store.hiddenPasses.has(id) ? 1 : 0));
+    return {
+      index: store.orderIndex,
+      gradient: store.orderGradient,
+      color: g ? rgbCss(g.color) : "black",
+      jumps: store.showJumps,
+      hidden: (i) => hidden[ord.seq.order.passOf[i]!] === 1,
+      hiddenKey: hidden.join(""),
+      hover,
+    };
   }
 
   /** Heatmaps and every visible item through view `v`; `emphasis` thickens the selection. */
@@ -192,22 +255,40 @@
       ctx.drawImage(hi.canvas, sx, sy, hi.wMm * v.ppm, hi.hMm * v.ppm);
     }
     const sel = store.selection;
+    // The order inspector draws its group itself and leaves the other groups faint.
+    const ord = emphasis ? inspecting() : null;
     for (const it of items) {
+      if (ord && it.group === ord.group) continue;
       const selected =
         emphasis &&
         ((sel.kind === "pass" && it.key === `pass:${sel.id}`) ||
           (sel.kind === "layer" && it.key === `layer:${sel.id}`) ||
           (sel.kind === "source" && it.key === `src:${sel.file}:${sel.layer}`));
+      ctx.globalAlpha = ord && it.group ? 0.3 : 1;
       ctx.strokeStyle = it.color;
-      ctx.lineWidth = selected ? it.width + 1.5 : it.width;
+      const width = selected ? it.width + 1.5 : it.width;
+      if (documentSpaceOk(ctx, v, (it.extent ??= extent(it.preview)))) {
+        const path = (it.doc ??= documentPath(it.preview));
+        inDocument(ctx, v, it.preview, (px) => {
+          ctx.lineWidth = width * px;
+          ctx.setLineDash(it.dash.map((d) => d * px));
+          if (it.fill) {
+            ctx.fillStyle = it.fill;
+            ctx.fill(path, "evenodd");
+          }
+          ctx.stroke(path);
+        });
+        continue;
+      }
+      ctx.lineWidth = width;
       ctx.setLineDash(it.dash);
-      const { originX: ox, originY: oy, coords, bulges, starts, closed } = it.preview;
-      // Offsets from the buffer's origin, added back in double precision.
-      const x = (k: number) => ox + coords[2 * k]!;
-      const y = (k: number) => oy + coords[2 * k + 1]!;
+      const { originX: ox, originY: oy, coords, bulges, starts } = it.preview;
+      ctx.beginPath();
       if (it.fill) {
         // A region: all loops in one path, filled even-odd so holes stay open.
-        ctx.beginPath();
+        // Offsets from the buffer's origin, added back in double precision.
+        const x = (k: number) => ox + coords[2 * k]!;
+        const y = (k: number) => oy + coords[2 * k + 1]!;
         for (let i = 0; i + 1 < starts.length; i++) {
           const a = starts[i]!;
           const b = starts[i + 1]!;
@@ -226,51 +307,11 @@
         ctx.stroke();
         continue;
       }
-      for (let i = 0; i + 1 < starts.length; i++) {
-        const a = starts[i]!;
-        const b = starts[i + 1]!;
-        if (b - a < 2) continue;
-        const isClosed = closed[i] === 1;
-        ctx.beginPath();
-        const [x0, y0] = project(v, x(a), y(a));
-        ctx.moveTo(x0, y0);
-        const segments = isClosed ? b - a : b - a - 1;
-        for (let s = 0; s < segments; s++) {
-          const k = a + s;
-          const n = s + 1 < b - a ? k + 1 : a; // the closing segment returns to the start
-          segment(ctx, v, x(k), y(k), x(n), y(n), bulges[k]!);
-        }
-        if (isClosed) ctx.closePath();
-        ctx.stroke();
-      }
+      for (let i = 0; i + 1 < starts.length; i++) tracePath(ctx, v, it.preview, i);
+      ctx.stroke();
     }
+    ctx.globalAlpha = 1;
     ctx.setLineDash([]);
-  }
-
-  /**
-   * Add the segment from (x1, y1) to (x2, y2) mm with `bulge` to the current canvas path:
-   * a native arc, or a line when the arc's sagitta is below a fraction of a pixel. The y
-   * flip turns the model's counter-clockwise arcs into the canvas's anticlockwise ones.
-   */
-  function segment(ctx: CanvasRenderingContext2D, v: View, x1: number, y1: number, x2: number, y2: number, bulge: number) {
-    const [sx2, sy2] = project(v, x2, y2);
-    const chord = Math.hypot(x2 - x1, y2 - y1);
-    if (bulge === 0 || chord === 0 || (Math.abs(bulge) * chord * v.ppm) / 2 < 0.25) {
-      ctx.lineTo(sx2, sy2);
-      return;
-    }
-    // Centre: chord midpoint plus the left normal times chord (1 - b^2) / (4 b).
-    const mx = (x1 + x2) / 2;
-    const my = (y1 + y2) / 2;
-    const off = (1 - bulge * bulge) / (4 * bulge);
-    const cx = mx - (y2 - y1) * off;
-    const cy = my + (x2 - x1) * off;
-    const r = Math.hypot(x1 - cx, y1 - cy);
-    const [scx, scy] = project(v, cx, cy);
-    const [sx1, sy1] = project(v, x1, y1);
-    const a0 = Math.atan2(sy1 - scy, sx1 - scx);
-    const a1 = Math.atan2(sy2 - scy, sx2 - scx);
-    ctx.arc(scx, scy, r * v.ppm, a0, a1, bulge > 0);
   }
 
   function niceStep(pxPerMm: number): number {
@@ -361,12 +402,32 @@
       cx = dragging.cx - (e.clientX - dragging.x) / ppm;
       cy = dragging.cy + (e.clientY - dragging.y) / ppm;
       draw();
+      return;
+    }
+    // The order inspector: the path under the pointer, within a few pixels.
+    const ord = inspecting();
+    const next = ord ? ord.seq.pathAt(cursorMm[0], cursorMm[1], 5 / ppm) : -1;
+    hoverAt = next >= 0 ? { x: e.offsetX, y: e.offsetY } : null;
+    if (next !== hover) {
+      hover = next;
+      draw();
     }
   }
 
   function onPointerUp(e: PointerEvent) {
+    // A click (not a drag) on a path of the inspected sequence makes it the current one.
+    const click = dragging && Math.hypot(e.clientX - dragging.x, e.clientY - dragging.y) < 4;
     dragging = null;
     canvas.releasePointerCapture(e.pointerId);
+    if (click && hover >= 0 && inspecting()) store.orderIndex = hover;
+  }
+
+  function onPointerLeave() {
+    hoverAt = null;
+    if (hover >= 0) {
+      hover = -1;
+      draw();
+    }
   }
 
   // ---- minimap: the whole drawing with the view marked, like the graph's ---------------
@@ -497,6 +558,8 @@
     void store.showJumps;
     void store.showHeatmap;
     void store.showAudit;
+    void store.showOrder;
+    void orderGroup;
     void store.hiddenSourceLayers;
     void store.hiddenLayers;
     void store.hiddenPasses;
@@ -506,6 +569,9 @@
 
   $effect(() => {
     void store.selection;
+    void store.orderIndex;
+    void store.orderGradient;
+    void order;
     draw();
   });
 
@@ -523,14 +589,22 @@
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
+    onpointerleave={onPointerLeave}
     ondblclick={fit}
   ></canvas>
+  {#if hoverAt && hover >= 0 && order}
+    <div class="hover-label" style:left="{hoverAt.x + 12}px" style:top="{hoverAt.y + 12}px">#{(hover + 1).toLocaleString("en-US")}</div>
+  {/if}
+  {#if store.showOrder}
+    <OrderTimeline {store} seq={order?.seq ?? null} group={orderGroup} />
+  {/if}
   <div class="hud overlay-bar">
     <label><input type="checkbox" bind:checked={store.showSources} /> sources</label>
     <label><input type="checkbox" bind:checked={store.showLayers} /> regions</label>
     <label title="hypothetical straight beam-off jumps of the planned order; never exported"><input type="checkbox" bind:checked={store.showJumps} /> jumps</label>
     <label title="jump footprint coverage over protected regions (relative, not a dose)"><input type="checkbox" bind:checked={store.showHeatmap} /> heatmap</label>
     <label title="coverage audit: area the paths miss (red) and sweep outside the region (amber) at each group's assumed marking width"><input type="checkbox" bind:checked={store.showAudit} /> audit</label>
+    <label title="step through one group's marking order as the export writes it: marked paths shade from early to late, chevrons show the direction, a click on a path makes it the current one"><input type="checkbox" bind:checked={store.showOrder} /> order</label>
     {#if store.hiddenCount}<button onclick={() => store.showAll()} title="show every hidden source layer, region and pass">show all ({store.hiddenCount} hidden)</button>{/if}
     <span class="coords">
       {#if cursorMm}{cursorMm[0].toFixed(3)}, {cursorMm[1].toFixed(3)} mm{/if}
@@ -581,6 +655,16 @@
   .coords {
     font-family: ui-monospace, monospace;
     opacity: 0.8;
+  }
+  .hover-label {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    padding: 1px 4px;
+    font: 11px ui-monospace, monospace;
+    background: color-mix(in srgb, Canvas 90%, transparent);
+    border-radius: 3px;
+    box-shadow: 0 0 2px 1px rgba(0, 0, 0, 0.1);
   }
   /* Size, place and colours of Svelte Flow's minimap in the graph tab (both get the
      controls' shadow, so the edge shows on the preview's grey too). */

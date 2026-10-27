@@ -8,6 +8,7 @@ import type {
   Diagnostic,
   MatchRule,
   Operand,
+  OrderPreview,
   Preview,
   Profile,
   SourceSummary,
@@ -81,6 +82,15 @@ export class ProjectStore {
   showJumps = $state(false);
   showHeatmap = $state(false);
   showAudit = $state(false);
+  /** The order inspector: one group's marking sequence, stepped path by path. */
+  showOrder = $state(false);
+  /** The group it steps through (null: the first with paths). */
+  orderGroup: string | null = $state(null);
+  /** The current path of that sequence; the ones before it are marked. Clamped to the
+   * sequence where it is used: it starts past the end, so a group opens fully marked. */
+  orderIndex = $state(Number.MAX_SAFE_INTEGER);
+  /** Colour marked paths by their place in the order rather than by group. */
+  orderGradient = $state(true);
   showSources = $state(true);
   showLayers = $state(true);
 
@@ -354,6 +364,18 @@ export class ProjectStore {
   /** Hypothetical jumps of an output group's planned order. */
   previewJumps(groupId: string): Promise<Preview | null> {
     return this.worker.call({ kind: "previewJumps", id: groupId });
+  }
+
+  /** An output group's marking sequence as exported, for the order inspector. */
+  previewOrder(groupId: string): Promise<OrderPreview | null> {
+    return this.worker.call({ kind: "previewOrder", id: groupId });
+  }
+
+  /** Open the order inspector on a group. */
+  inspectOrder(groupId: string) {
+    if (this.orderGroup !== groupId) this.orderIndex = Number.MAX_SAFE_INTEGER;
+    this.orderGroup = groupId;
+    this.showOrder = true;
   }
 
   /** Missed area (or, with `spill`, swept area outside the region) of a pass's coverage audit. */

@@ -82,8 +82,8 @@
       </thead>
       <tbody>
         {#each groups as g (g.id)}
-          <tr class="group-row" data-group={g.id} title={details(g)}>
-            <td>{g.name}</td>
+          <tr class="group-row" class:inspected={store.showOrder && store.orderGroup === g.id} data-group={g.id} title={details(g)}>
+            <td><button class="inspect" title="step through this group's order in the preview" onclick={() => store.inspectOrder(g.id)}>{g.name}</button></td>
             <td class="num">{g.paths}</td>
             <td class="num">{pair(g.before.jumpLengthMm, g.after.jumpLengthMm)}</td>
           </tr>
@@ -179,6 +179,18 @@
   }
   .num {
     font-family: ui-monospace, monospace;
+  }
+  .inspect {
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline dotted;
+  }
+  .group-row.inspected {
+    background: color-mix(in srgb, #1f6feb 12%, transparent);
   }
   .hint {
     font-size: 11px;

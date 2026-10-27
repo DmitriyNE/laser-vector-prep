@@ -314,6 +314,19 @@ export interface Preview {
   closed: Uint8Array;
 }
 
+/**
+ * An output group's marking sequence as exported: its paths in order and direction, the
+ * pass each came from (an index into `passes`), and the optimizer's assumed start and end
+ * points, if set.
+ */
+export interface OrderPreview {
+  paths: Preview;
+  passOf: Uint32Array;
+  passes: string[];
+  start: [number, number] | null;
+  end: [number, number] | null;
+}
+
 export interface GroupPdf {
   group: string;
   name: string;

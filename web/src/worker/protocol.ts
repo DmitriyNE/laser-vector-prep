@@ -1,7 +1,7 @@
 // Message types between the main thread and the geometry worker. Small structured data
 // travels as parsed JSON objects; geometry and files as transferable typed arrays.
 
-import type { BindingsSummary, Diagnostic, EvaluationSummary, GroupPdf, Heatmap, Preview, Profile, SourceSummary } from "../core/types.js";
+import type { BindingsSummary, Diagnostic, EvaluationSummary, GroupPdf, Heatmap, OrderPreview, Preview, Profile, SourceSummary } from "../core/types.js";
 
 export type Payload =
   | { kind: "version" }
@@ -22,6 +22,7 @@ export type Payload =
   | { kind: "previewLayer"; id: string }
   | { kind: "previewSource"; file: number; layer: string }
   | { kind: "previewJumps"; id: string }
+  | { kind: "previewOrder"; id: string }
   | { kind: "previewAudit"; id: string; spill: boolean }
   | { kind: "heatmap"; id: string }
   | { kind: "exportPdf" }
@@ -68,6 +69,8 @@ export type ResultOf<K extends Kind> = K extends "version"
                     ? EvaluationSummary
                     : K extends "previewPass" | "previewLayer" | "previewSource" | "previewJumps" | "previewAudit"
                       ? Preview | null
+                      : K extends "previewOrder"
+                        ? OrderPreview | null
                       : K extends "heatmap"
                         ? Heatmap | null
                       : K extends "exportPdf" | "exportSvg" | "exportDxf"
