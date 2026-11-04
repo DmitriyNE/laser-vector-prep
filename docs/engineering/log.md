@@ -3,6 +3,35 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-11-05 — Nightly fuzz timeouts
+
+The owner added a KiCad heater board, the first real design kept in the repo
+(`fixtures/designs/heater/`, as exported, outside the generated fixtures).
+
+Checking CI after that showed the nightly fuzz run had failed every night since
+2026-10-26: the gerber and pipeline targets hit libFuzzer's 10 s timeout, on 13 distinct
+inputs. Sampling them found three causes:
+
+- Gerber files whose coordinate format put X 10⁵ times too far out were composited at
+  kilometre scale, where a 0.2 mm stroke is below the booleans' tolerances, before the
+  import's range check would have dropped them (DEF-25).
+- Pipeline inputs metres to hundreds of metres across, filled at the harness's 0.1 mm
+  floor pitch, handed the audit up to 1.9 million strokes to unite (DEF-27).
+- A cluster of loops that all cross each other made slice classification cubic (DEF-26).
+  The fix, one sweep for all of a boolean's winding probes, also halved the Altium board's
+  negative-hatch evaluation; Layer 2 went from 24.6 to 19.4 s, most of the rest now gap
+  fill's centrelines.
+
+All 13 inputs now take at most 0.8 s in a release build. Four are saved as regressions;
+two of the others replay for 5 to 8 s in a debug build and are left to the nightly run.
+
+Learned:
+
+- Watching CI on each commit never looked at the scheduled workflows; check their latest
+  runs too.
+- Readers that composite before the range check work on geometry that is then thrown away;
+  the Gerber reader now filters first, the others still do not (todo).
+
 ## 2026-10-27 — Order inspector
 
 The owner asked for a way to inspect path order, like a slicer's move slider (D39). The

@@ -186,12 +186,26 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] Bounded outward growth from a layer (isolation rings outside copper, clipped to a
       domain): the owner prefers layer operations (boundary trace outside with rings, or
       envelopes and subtraction) over a pattern for it
-- [ ] Coverage audit of a large plane: Layer 2 of the Altium board (a pour with 553
-      holes, 9,000 paths) takes 26 s natively, about 16 s of it uniting the strokes, where
-      winding probes cross thousands of rings. Layer 1 is now 4.5 s in all (D38).
+- [ ] Evaluation of a large plane: Layer 2 of the Altium board (a pour with 553 holes,
+      9,000 paths) took 26 s natively, about 16 s of it uniting the strokes for the audit,
+      where winding probes crossed thousands of rings; 19 s since DEF-26, most of it now
+      gap fill's centreline extraction (`gapfill::centrelines`, on one thread).
 - [ ] Booleans: some unions of capsules (strokes of a short, sharply turning path's
       segments, whose caps share circles) still need the polygon fallback; since D38 only
       their group loses its arcs
+
+## Fuzzing (2026-11-05)
+
+- [x] Nightly timeouts: Gerber range check before compositing (DEF-25), one sweep for a
+      boolean's winding probes (DEF-26), pipeline pitches bounded by the extent (DEF-27)
+- [ ] The other readers also run booleans before the range check (SVG and PDF clips, DXF
+      regions, IPC-2581, GDSII); drop out-of-range geometry before them, as the Gerber
+      reader now does
+- [ ] Clustering by bounding boxes is quadratic for many long boxes that overlap without
+      nesting (51,000 strokes of 45° hatch lines: 12 s); tens of milliseconds at board
+      scale
+- [ ] A winding probe is still tested exactly against every segment whose box holds it,
+      and the boxes of long arcs (strokes of a 200 m arc) hold most probes
 
 ## Order inspector (D39)
 
