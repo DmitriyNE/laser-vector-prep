@@ -19,10 +19,11 @@ use std::collections::HashMap;
 use cavalier_contours::core::math::Vector2;
 use cavalier_contours::polyline::{
     FindIntersectsOptions, PlineCreation, PlineIntersect, PlineSource, PlineSourceMut, PlineVertex,
-    PlineViewData, seg_closest_point, seg_length, seg_tangent_vector,
+    PlineViewData, seg_arc_radius_and_center, seg_closest_point, seg_fast_approx_bounding_box,
+    seg_length, seg_tangent_vector,
 };
 use cavalier_contours::shape_algorithms::{Shape, ShapeOffsetOptions};
-use cavalier_contours::static_aabb2d_index::StaticAABB2DIndex;
+use cavalier_contours::static_aabb2d_index::AABB;
 
 use crate::arc::Arc;
 use crate::flatten::FlattenError;
@@ -270,124 +271,120 @@ fn cell_count(x0: i32, y0: i32, x1: i32, y1: i32) -> i64 {
     (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1)
 }
 
-/// Sum of winding numbers of the loops of one operand around `p`.
-fn winding(loops: &[Tagged], grid: &BBoxGrid, operand: u8, p: Point, pad: f64) -> i32 {
-    winding_indexed(loops, None, grid, operand, p, pad)
-}
-
-/// Every segment of the loops of one operand in one spatial index, for winding numbers of a
-/// large boolean: a probe inside hundreds of nested loops (the strokes of a fill's rings)
-/// then visits only the segments its rightward ray can cross, not every loop's index.
-struct SegmentField {
-    index: Option<StaticAABB2DIndex<f64>>,
-    /// The loop and segment of each index entry.
-    refs: Vec<(u32, u32)>,
-    max_x: f64,
-}
-
-impl SegmentField {
-    fn new(loops: &[Tagged], operand: u8) -> SegmentField {
-        let mut refs = Vec::new();
-        let mut builder_boxes = Vec::new();
-        let mut max_x = f64::NEG_INFINITY;
-        for (li, l) in loops
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.operand == operand)
-        {
-            let n = l.pline.vertex_count();
-            for si in 0..n {
-                let b = cavalier_contours::polyline::seg_fast_approx_bounding_box(
-                    l.pline.at(si),
-                    l.pline.at((si + 1) % n),
-                );
-                max_x = max_x.max(b.max_x);
-                builder_boxes.push(b);
-                refs.push((li as u32, si as u32));
+/// Winding numbers about many points at once, `[operand 0, operand 1]` for each point: the
+/// sums of the loops' winding numbers, each loop counted `count` times.
+///
+/// A segment whose box ([`segment_box`]) lies wholly to the right of a point crosses the
+/// point's rightward ray as its chord does, since what lies between an arc and its chord is
+/// inside the box: once, up or down, where the point's height is in the half-open span of
+/// the segment's ends.
+/// Those crossings are counted for every point in one sweep from right to left over a
+/// Fenwick tree of heights, and only the segments whose box is at the point are tested
+/// against it ([`segment_winding`]). A ray cast per point visits every segment to its
+/// right instead, which made a cluster of loops that all cross each other (a pad array
+/// stepped over itself) cubic. `None` when cancelled.
+fn windings(loops: &[Tagged], points: &[Point]) -> Option<Vec<[i32; 2]>> {
+    let mut boxes = Vec::new();
+    // The loop and segment of each box.
+    let mut refs: Vec<(u32, u32)> = Vec::new();
+    // Each chord that rises or falls: (left edge of its segment's box, low end, high end,
+    // count signed by the direction, operand).
+    let mut chords: Vec<(f64, f64, f64, i32, usize)> = Vec::new();
+    for (li, l) in loops.iter().enumerate() {
+        let n = l.pline.vertex_count();
+        for si in 0..n {
+            let (a, b) = (l.pline.at(si), l.pline.at((si + 1) % n));
+            let bb = segment_box(a, b);
+            if a.y != b.y {
+                let (lo, hi, s) = if a.y < b.y {
+                    (a.y, b.y, 1)
+                } else {
+                    (b.y, a.y, -1)
+                };
+                chords.push((bb.min_x, lo, hi, s * l.count, usize::from(l.operand & 1)));
             }
+            boxes.push(bb);
+            refs.push((li as u32, si as u32));
         }
-        let index = (!builder_boxes.is_empty()).then(|| {
-            let mut builder = cavalier_contours::static_aabb2d_index::StaticAABB2DIndexBuilder::new(
-                builder_boxes.len(),
-            );
-            for b in &builder_boxes {
-                builder.add(b.min_x, b.min_y, b.max_x, b.max_y);
-            }
-            builder.build().expect("as many boxes as announced")
-        });
-        SegmentField { index, refs, max_x }
     }
+    let mut out = vec![[0; 2]; points.len()];
+    if boxes.is_empty() {
+        return Some(out);
+    }
+    // A chord counts for a point only this far clear of it, where which side the point is
+    // on cannot be in doubt; nearer segments are tested exactly. Increasing with x, so the
+    // sweep's order is the points' order.
+    let clear = |x: f64| x + 1e-9 * x.abs().max(1.0);
 
-    fn winding(&self, loops: &[Tagged], p: Point) -> i32 {
-        let Some(index) = &self.index else {
-            return 0;
-        };
-        let mut w = 0;
-        index.visit_query(p.x, p.y, self.max_x.max(p.x), p.y, &mut |k: usize| {
-            let (li, si) = self.refs[k];
+    let mut builder =
+        cavalier_contours::static_aabb2d_index::StaticAABB2DIndexBuilder::new(boxes.len());
+    for b in &boxes {
+        builder.add(b.min_x, b.min_y, b.max_x, b.max_y);
+    }
+    let index = builder.build().expect("as many boxes as announced");
+    for (k, (p, w)) in points.iter().zip(out.iter_mut()).enumerate() {
+        if k % 4096 == 0 && crate::cancel::cancelled() {
+            return None;
+        }
+        // Every box reaching the point's height from left of `clear` (the others are a
+        // chord's or miss the ray).
+        index.visit_query(p.x, p.y, clear(p.x), p.y, &mut |i: usize| {
+            let (li, si) = refs[i];
             let l = &loops[li as usize];
-            let n = l.pline.vertex_count();
-            let si = si as usize;
-            w += l.count * segment_winding(l.pline.at(si), l.pline.at((si + 1) % n), v2(p));
+            let (n, si) = (l.pline.vertex_count(), si as usize);
+            let s = segment_winding(l.pline.at(si), l.pline.at((si + 1) % n), v2(*p));
+            w[usize::from(l.operand & 1)] += l.count * s;
         });
-        w
     }
+
+    let mut heights: Vec<f64> = chords.iter().flat_map(|c| [c.1, c.2]).collect();
+    heights.sort_by(f64::total_cmp);
+    heights.dedup();
+    let slot = |y: f64| heights.partition_point(|&h| h < y);
+    // Fenwick tree over `heights`: a chord adds its count from its low end and takes it
+    // away again from its high end, so the prefix sum up to a height counts the chords
+    // whose half-open span holds it.
+    let mut tree = vec![[0i32; 2]; heights.len() + 1];
+    let add = |tree: &mut [[i32; 2]], at: usize, operand: usize, v: i32| {
+        let mut i = at + 1;
+        while i < tree.len() {
+            tree[i][operand] += v;
+            i += i.isolate_lowest_one();
+        }
+    };
+    chords.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut order: Vec<usize> = (0..points.len()).collect();
+    order.sort_by(|&a, &b| points[b].x.total_cmp(&points[a].x));
+    let mut next = 0;
+    for (k, &pi) in order.iter().enumerate() {
+        if k % 4096 == 0 && crate::cancel::cancelled() {
+            return None;
+        }
+        let p = points[pi];
+        while next < chords.len() && chords[next].0 > clear(p.x) {
+            let (_, lo, hi, s, operand) = chords[next];
+            add(&mut tree, slot(lo), operand, s);
+            add(&mut tree, slot(hi), operand, -s);
+            next += 1;
+        }
+        let mut i = heights.partition_point(|&h| h <= p.y);
+        while i > 0 {
+            out[pi][0] += tree[i][0];
+            out[pi][1] += tree[i][1];
+            i &= i - 1;
+        }
+    }
+    Some(out)
 }
 
-/// Resolves with more loop vertices than this take winding numbers from one index of all
-/// their segments ([`SegmentField`]).
-const SEGMENT_FIELD_FROM: usize = 4096;
-
-/// Spatial indexes of the segments of loops, built on first use, for winding numbers.
-type SegmentIndexes = [std::sync::OnceLock<StaticAABB2DIndex<f64>>];
-
-/// Loops with more vertices than this have their winding numbers taken through an index.
-const WINDING_INDEX_FROM: usize = 64;
-
-/// [`winding`], taking large loops' windings through `indexes` (one per loop).
-fn winding_indexed(
-    loops: &[Tagged],
-    indexes: Option<&SegmentIndexes>,
-    grid: &BBoxGrid,
-    operand: u8,
-    p: Point,
-    pad: f64,
-) -> i32 {
-    grid.query_point(p, pad)
-        .into_iter()
-        .filter(|&i| loops[i].operand == operand)
-        .map(|i| {
-            let l = &loops[i];
-            let w = match indexes {
-                Some(ix) if l.pline.vertex_count() > WINDING_INDEX_FROM => {
-                    let index = ix[i].get_or_init(|| l.pline.create_approx_aabb_index());
-                    loop_winding(&l.pline, index, l.bbox, p)
-                }
-                _ => l.pline.winding_number(v2(p)),
-            };
-            l.count * w
-        })
-        .sum()
-}
-
-/// The winding number of closed loop `pl` about `p`, from only the segments whose boxes
-/// reach `p`'s height: a segment that does not contributes nothing. The same sum as
-/// cavalier's `winding_number`, without visiting every segment of a large loop for every
-/// probe (the swept area of a fill has loops of thousands of vertices, probed thousands of
-/// times).
-fn loop_winding(pl: &Pline, index: &StaticAABB2DIndex<f64>, bbox: BBox, p: Point) -> i32 {
-    let n = pl.vertex_count();
-    let mut w = 0;
-    index.visit_query(
-        bbox.min.x - 1.0,
-        p.y,
-        bbox.max.x + 1.0,
-        p.y,
-        &mut |i: usize| {
-            w += segment_winding(pl.at(i), pl.at((i + 1) % n), v2(p));
-        },
-    );
-    w
+/// A box holding the segment from `a` to `b`: the kernel's quick one, the chord grown by the
+/// sagitta, for arcs up to a semicircle, and the whole circle's for larger ones.
+fn segment_box(a: PlineVertex<f64>, b: PlineVertex<f64>) -> AABB<f64> {
+    if a.bulge.abs() <= 1.0 {
+        return seg_fast_approx_bounding_box(a, b);
+    }
+    let (r, c) = seg_arc_radius_and_center(a, b);
+    AABB::new(c.x - r, c.y - r, c.x + r, c.y + r)
 }
 
 /// One segment's share of a winding number (cavalier_contours' `winding_number`, MIT or
@@ -1067,21 +1064,19 @@ fn is_valid_region(loops: &[Pline], probe: f64) -> bool {
     if tagged.len() != loops.len() {
         return false;
     }
-    let grid = BBoxGrid::new(tagged.iter().map(|l| l.bbox).collect());
-    tagged.iter().all(|l| {
+    let mut probes = Vec::with_capacity(2 * tagged.len());
+    for l in &tagged {
         let Some((mid, n)) = midpoint_and_left_normal(&l.pline) else {
             return false;
         };
-        let at = |d: f64| {
-            winding(
-                &tagged,
-                &grid,
-                0,
-                Point::new(mid.x + n.x * d, mid.y + n.y * d),
-                2.0 * probe,
-            )
-        };
-        at(probe) == 1 && at(-probe) == 0
+        probes.push(Point::new(mid.x + n.x * probe, mid.y + n.y * probe));
+        probes.push(Point::new(mid.x - n.x * probe, mid.y - n.y * probe));
+    }
+    windings(&tagged, &probes).is_some_and(|w| {
+        w.as_chunks::<2>()
+            .0
+            .iter()
+            .all(|[l, r]| l[0] == 1 && r[0] == 0)
     })
 }
 
@@ -1355,13 +1350,25 @@ fn resolve_tagged(
     for t in &mut rebuilt {
         t.bbox = pline::bounds(&t.pline).unwrap_or(t.bbox);
     }
-    let grid = BBoxGrid::new(rebuilt.iter().map(|l| l.bbox).collect());
     let loops = rebuilt;
-    let indexes: Vec<std::sync::OnceLock<_>> = loops.iter().map(|_| Default::default()).collect();
-    let fields = (loops.iter().map(|l| l.pline.vertex_count()).sum::<usize>() > SEGMENT_FIELD_FROM)
-        .then(|| [SegmentField::new(&loops, 0), SegmentField::new(&loops, 1)]);
 
     // 3. Classify and orient; drop coincident duplicates.
+    // Each slice is judged by the winding numbers just left and right of its midpoint.
+    let centres: Vec<Option<(Point, Point)>> =
+        slices.iter().map(midpoint_and_left_normal).collect();
+    let probes: Vec<Point> = centres
+        .iter()
+        .flatten()
+        .flat_map(|&(mid, n)| {
+            [
+                Point::new(mid.x + n.x * tol.probe, mid.y + n.y * tol.probe),
+                Point::new(mid.x - n.x * tol.probe, mid.y - n.y * tol.probe),
+            ]
+        })
+        .collect();
+    let Some(w) = windings(&loops, &probes) else {
+        return Err(Vec::new());
+    };
     let mut seen: HashMap<(i64, i64, i64, i64, i64, i64), ()> = HashMap::new();
     let q = |p: Point| {
         (
@@ -1370,22 +1377,14 @@ fn resolve_tagged(
         )
     };
     let mut kept: Vec<Pline> = Vec::new();
-    for (k, mut s) in slices.into_iter().enumerate() {
-        if k % 1024 == 0 && crate::cancel::cancelled() {
-            return Err(Vec::new());
-        }
-        let Some((mid, n)) = midpoint_and_left_normal(&s) else {
+    let mut sides = w.as_chunks::<2>().0.iter();
+    for (mut s, centre) in slices.into_iter().zip(centres) {
+        let Some((mid, _)) = centre else {
             continue;
         };
-        let left = Point::new(mid.x + n.x * tol.probe, mid.y + n.y * tol.probe);
-        let right = Point::new(mid.x - n.x * tol.probe, mid.y - n.y * tol.probe);
-        let pad = tol.probe * 2.0;
-        let w = |operand: u8, at| match &fields {
-            Some(f) => f[operand as usize].winding(&loops, at),
-            None => winding_indexed(&loops, Some(&indexes), &grid, operand, at, pad),
-        };
-        let in_left = rule.inside(w(0, left), w(1, left));
-        let in_right = rule.inside(w(0, right), w(1, right));
+        let [left, right] = sides.next().expect("two probes per slice");
+        let in_left = rule.inside(left[0], left[1]);
+        let in_right = rule.inside(right[0], right[1]);
         if in_left == in_right {
             continue;
         }
@@ -2171,30 +2170,44 @@ mod tests {
     }
 
     proptest! {
-        /// Winding numbers from the indexed segments equal cavalier's, for loops of lines
-        /// and arcs and probes anywhere, on vertex heights included.
+        /// The swept winding numbers equal cavalier's, for loops of lines and arcs and probes
+        /// anywhere: on vertex heights, on vertices, and just clear of a segment's box on
+        /// either side of where its chord starts to count.
         #[test]
-        fn indexed_winding_matches_the_kernel(
-            verts in prop::collection::vec((-5.0..5.0f64, -5.0..5.0f64, -0.9..0.9f64), 3..90),
-            probes in prop::collection::vec((-6.0..6.0f64, -6.0..6.0f64, 0usize..90, any::<bool>()), 1..40),
+        fn windings_match_the_kernel(
+            verts in prop::collection::vec((-5.0..5.0f64, -5.0..5.0f64, -1.0..1.0f64), 3..90),
+            probes in prop::collection::vec((-6.0..6.0f64, -6.0..6.0f64, 0usize..90, 0u8..5), 1..40),
         ) {
             let mut l = Pline::new_closed();
             for (x, y, b) in &verts {
                 l.add((x * 64.0).round() / 64.0, (y * 64.0).round() / 64.0, if b.abs() < 0.3 { 0.0 } else { *b });
             }
             let Some(l) = pline::sanitize(&l) else { return Ok(()) };
-            let index = l.create_approx_aabb_index();
-            let bbox = pline::bounds(&l).unwrap();
-            for (x, y, k, on_vertex) in probes {
-                let y = if on_vertex { l.at(k % l.vertex_count()).y } else { y };
-                let p = Point::new(x, y);
-                prop_assert_eq!(loop_winding(&l, &index, bbox, p), l.winding_number(v2(p)));
+            let loops = tag(std::slice::from_ref(&l), 0);
+            prop_assume!(loops.len() == 1);
+            let points: Vec<Point> = probes
+                .iter()
+                .map(|&(x, y, k, mode)| {
+                    let v = l.at(k % l.vertex_count());
+                    let left = |d: f64| v.x - d * v.x.abs().max(1.0);
+                    match mode {
+                        0 => Point::new(x, y),
+                        1 => Point::new(x, v.y),
+                        2 => Point::new(v.x, v.y),
+                        3 => Point::new(left(0.9e-9), v.y),
+                        _ => Point::new(left(1.1e-9), v.y),
+                    }
+                })
+                .collect();
+            let w = windings(&loops, &points).unwrap();
+            for (p, w) in points.iter().zip(w) {
+                prop_assert_eq!(w, [l.winding_number(v2(*p)), 0]);
             }
         }
 
-        /// One index of all segments gives the winding numbers the loops give one by one.
+        /// Windings sum the loops of each operand, each as many times as its count.
         #[test]
-        fn segment_field_winding_matches_loop_by_loop(
+        fn windings_sum_loops_by_operand(
             shapes in prop::collection::vec((-5.0..5.0f64, -5.0..5.0f64, 0.2..4.0f64, 0u8..2, any::<bool>()), 1..12),
             probes in prop::collection::vec((-9.0..9.0f64, -9.0..9.0f64), 1..40),
         ) {
@@ -2207,13 +2220,13 @@ mod tests {
                 };
                 loops.extend(tag(&[l], *operand).into_iter().map(|mut t| { t.count = 1 + (k as i32 % 2); t }));
             }
-            let grid = BBoxGrid::new(loops.iter().map(|l| l.bbox).collect());
-            let fields = [SegmentField::new(&loops, 0), SegmentField::new(&loops, 1)];
-            for (x, y) in probes {
-                let p = Point::new(x, y);
-                for operand in 0..2u8 {
-                    prop_assert_eq!(fields[operand as usize].winding(&loops, p), winding(&loops, &grid, operand, p, 1e-9));
-                }
+            let points: Vec<Point> = probes.iter().map(|&(x, y)| Point::new(x, y)).collect();
+            let w = windings(&loops, &points).unwrap();
+            for (p, w) in points.iter().zip(w) {
+                let sum = |operand: u8| -> i32 {
+                    loops.iter().filter(|l| l.operand == operand).map(|l| l.count * l.pline.winding_number(v2(*p))).sum()
+                };
+                prop_assert_eq!(w, [sum(0), sum(1)]);
             }
         }
 
