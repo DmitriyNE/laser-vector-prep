@@ -20,7 +20,7 @@ use crate::geom::Point;
 use crate::model::SourceFormat;
 use crate::pline::{self, Pline};
 use crate::region::{self, LoopRule, Region};
-use crate::source::{Budget, Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
+use crate::source::{self, Budget, Primitive, ReadError, ReadOptions, SourceDocument, SourceLayer};
 use crate::units::Unit;
 
 use macros::MacroDef;
@@ -1255,6 +1255,20 @@ impl<'a> Reader<'a> {
         if self.budget.exhausted() {
             return Err(self.budget.error(SourceFormat::Gerber));
         }
+        // Out-of-range features are dropped here, not after compositing: they would make
+        // the booleans work at a scale where the image's detail is below their tolerances,
+        // and the composited image is one primitive, dropped whole for one stray feature.
+        let before = self.items.len();
+        self.items.retain(|it| match &it.shape {
+            Shape::Fill { outers, holes } => outers.iter().chain(holes).all(source::in_range),
+            Shape::Stroke { pline, width } => {
+                source::in_range(pline) && source::width_in_range(*width)
+            }
+        });
+        if self.items.len() < before {
+            self.diags
+                .push(source::out_of_range(before - self.items.len(), name));
+        }
         let (primitives, incomplete) = composite(std::mem::take(&mut self.items));
         if incomplete {
             self.warn_once("gerber.incomplete_boolean", INCOMPLETE_BOOLEAN);
@@ -1551,6 +1565,32 @@ mod tests {
         );
         assert_eq!(r.outers().count(), 2);
         assert_eq!(r.holes().count(), 1);
+    }
+
+    #[test]
+    fn features_beyond_the_import_range_are_dropped_before_compositing() {
+        // The image above plus a flash 2 km away: the flash is dropped with an error, and the
+        // rest is composited as without it rather than dropped with it.
+        let g = format!(
+            "{HEAD}%ADD10C,2.0*%\n%ADD11C,1.0*%\n\
+             G36*X0Y0D02*X100000Y0D01*X100000Y100000D01*X0Y100000D01*X0Y0D01*G37*\n\
+             D11*X20000000000Y0D03*\n\
+             %LPC*%\nD10*X50000Y50000D03*\n%LPD*%\nD11*X50000Y50000D03*\nM02*"
+        );
+        let doc = read(&g);
+        let dropped: Vec<_> = doc
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "source.out_of_range")
+            .collect();
+        assert_eq!(dropped.len(), 1, "{:?}", doc.diagnostics);
+        assert!(dropped[0].message.starts_with("1 primitive(s)"));
+        let r = layer_region(&doc);
+        assert!(
+            (r.area() - (100.0 - PI + PI / 4.0)).abs() < 1e-6,
+            "{}",
+            r.area()
+        );
     }
 
     #[test]

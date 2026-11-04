@@ -321,31 +321,39 @@ pub fn read_as(
     Ok(doc)
 }
 
+/// Whether every vertex of `p` is finite and within [`MAX_COORDINATE_MM`] of the origin.
+pub(crate) fn in_range(p: &Pline) -> bool {
+    p.vertex_data.iter().all(|v| {
+        v.x.abs() <= MAX_COORDINATE_MM && v.y.abs() <= MAX_COORDINATE_MM && v.bulge.is_finite()
+    })
+}
+
+/// Whether a stroke width is one a drawing can have.
+pub(crate) fn width_in_range(w: f64) -> bool {
+    (0.0..=MAX_COORDINATE_MM).contains(&w)
+}
+
+/// The error for `dropped` primitives of `layer` left out by the range check.
+pub(crate) fn out_of_range(dropped: usize, layer: &str) -> Diagnostic {
+    Diagnostic::error(
+        "source.out_of_range",
+        format!(
+            "{dropped} primitive(s) dropped: coordinates or widths are not finite or lie more than 1 km from the origin"
+        ),
+    )
+    .with_context(layer.to_string())
+}
+
 fn drop_out_of_range(doc: &mut SourceDocument) {
-    let pline_ok = |p: &Pline| {
-        p.vertex_data.iter().all(|v| {
-            v.x.abs() <= MAX_COORDINATE_MM && v.y.abs() <= MAX_COORDINATE_MM && v.bulge.is_finite()
-        })
-    };
     for layer in &mut doc.layers {
         let before = layer.primitives.len();
         layer.primitives.retain(|prim| match prim {
-            Primitive::Path { pline, width } => {
-                pline_ok(pline) && width.is_none_or(|w| (0.0..=MAX_COORDINATE_MM).contains(&w))
-            }
-            Primitive::Hatch { loops, .. } => loops.iter().all(pline_ok),
+            Primitive::Path { pline, width } => in_range(pline) && width.is_none_or(width_in_range),
+            Primitive::Hatch { loops, .. } => loops.iter().all(in_range),
         });
         let dropped = before - layer.primitives.len();
         if dropped > 0 {
-            doc.diagnostics.push(
-                Diagnostic::error(
-                    "source.out_of_range",
-                    format!(
-                        "{dropped} primitive(s) dropped: coordinates or widths are not finite or lie more than 1 km from the origin"
-                    ),
-                )
-                .with_context(layer.name.clone()),
-            );
+            doc.diagnostics.push(out_of_range(dropped, &layer.name));
         }
     }
 }
