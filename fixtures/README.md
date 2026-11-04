@@ -32,10 +32,16 @@ reports no errors and its independent reading matches the manifest. Gerber files
 Known-good export outputs (PDF/SVG/DXF) will be added here once the exporters exist.
 Fixtures are test data only and are never bundled into the shipped site.
 
-Two directories are not generated:
+Three directories are not generated:
 
 - `profiles/` holds the four built-in presets exactly as the deployed v1 app (2026-10-25)
   and v2 app (2026-10-26) wrote them. They test the migrations and the published profile
   schema.
 - `fuzz/` holds inputs that once crashed, hung or exhausted memory in a fuzz target; see
   [`fuzz/README.md`](fuzz/README.md).
+- `designs/` holds real designs exported by CAD tools, one directory per design, kept as
+  exported:
+
+  | Design | Exercises |
+  |---|---|
+  | `designs/heater/` | KiCad 10 Gerber X2 set of a 2-layer heater board (top copper, mask, silkscreen, profile, `.gbrjob`): an `AM` outline macro for free-form pads, a profile of arcs and lines. |
