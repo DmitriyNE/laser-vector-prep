@@ -1,7 +1,7 @@
 # Fuzz regressions
 
 Inputs that crashed, hung or exhausted memory in a fuzz target (`fuzz/`), minimised with
-`cargo fuzz tmin`. One directory per target; `crates/lvp-core/tests/fuzz_regressions.rs`
+`cargo fuzz tmin` (inputs of a kilobyte or so are kept as found). One directory per target; `crates/lvp-core/tests/fuzz_regressions.rs`
 replays every file through the same entry point (`lvp_core::fuzz::run`) on each `just test`.
 For `pipeline`, the first byte selects the file name and preset (see `lvp_core::fuzz`).
 

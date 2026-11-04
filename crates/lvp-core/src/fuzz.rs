@@ -29,8 +29,10 @@ pub fn run(target: &str, bytes: &[u8]) {
 
 /// Import → evaluate → export. The first byte picks the file name (and so the format
 /// detection fallback) and the preset; every profile slot is mapped onto the file's layers
-/// in turn so the geometry stages see the input. Pitches are coarsened so that work stays
-/// proportional to the input rather than to the preset's 20 µm fill.
+/// in turn so the geometry stages see the input. Pitches are coarsened, to 0.1 mm and to a
+/// 256th of the drawing's extent, so that work stays proportional to the input rather than
+/// to its area: the preset's 20 µm fill, or a 0.1 mm one over a drawing a few hundred
+/// metres across, is millions of paths.
 pub fn pipeline(bytes: &[u8]) {
     let Some((&selector, file)) = bytes.split_first() else {
         return;
@@ -53,7 +55,10 @@ pub fn pipeline(bytes: &[u8]) {
             name: layers[i % layers.len()].clone(),
         }];
     }
-    coarsen(&mut profile, 0.1);
+    let extent = summary
+        .bounds_mm
+        .map_or(0.0, |[x0, y0, x1, y1]| (x1 - x0).max(y1 - y0));
+    coarsen(&mut profile, (extent / 256.0).max(0.1));
     project.set_profile(profile);
     let summary = project.evaluate();
     if summary.has_errors {
