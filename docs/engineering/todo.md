@@ -218,6 +218,8 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       line they should meet in a T, are not trimmed or extended
 - [ ] Doubled edges (the same piece drawn twice) block joining at both their ends; they
       could be dropped as duplicates first
+- [ ] Merge-then-nest still tests every pair of distinct loops whose boxes overlap; many
+      overlapping loops that are not copies stay quadratic (DEF-29 merged only copies)
 
 ## Order inspector (D39)
 

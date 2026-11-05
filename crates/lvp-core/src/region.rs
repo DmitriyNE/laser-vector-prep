@@ -1758,6 +1758,18 @@ fn merge_then_nest(ccw: Vec<Pline>) -> Result<Vec<Pline>, Vec<Pline>> {
         .map(|bb| bb.width().max(bb.height()))
         .unwrap_or(1.0);
     let tol = Tolerances::for_extent(extent);
+    // Copies of one loop would all join one cluster and unite into that loop; merged first,
+    // they cost no pairwise tests (a GDS array stacking 16,000 squares took 8 s).
+    let mut tagged = tag(&ccw, 0);
+    if tagged.len() == ccw.len() {
+        merge_duplicates(&mut tagged, tol.same);
+    }
+    let ccw: Vec<Pline> = if tagged.len() < ccw.len() {
+        tagged.into_iter().map(|t| t.pline).collect()
+    } else {
+        ccw
+    };
+    let boxes: Vec<BBox> = ccw.iter().filter_map(pline::bounds).collect();
 
     // Union-find over loops whose boundaries cross or overlap.
     let mut parent: Vec<usize> = (0..ccw.len()).collect();
@@ -2827,6 +2839,20 @@ mod tests {
             prop_assert!(mn <= nz + 1e-9 * (nz + 1.0));
             prop_assert!(eo <= nz + 1e-9 * (nz + 1.0));
         }
+    }
+
+    #[test]
+    fn merge_then_nest_takes_stacked_copies_as_one_loop() {
+        // Ten thousand copies of a square and of a hole in it: one pairwise test per copy
+        // would be fifty million.
+        let square = pline::rect(Point::new(0.0, 0.0), Point::new(1.0, 1.0));
+        let hole = pline::rect(Point::new(0.25, 0.25), Point::new(0.75, 0.75));
+        let loops = (0..10_000).flat_map(|_| [square.clone(), hole.clone()]);
+        let t = std::time::Instant::now();
+        let r = Region::from_loops(loops, LoopRule::MergeThenNest);
+        assert_eq!((r.outers().count(), r.holes().count()), (1, 1));
+        assert!((r.area() - 0.75).abs() < 1e-12);
+        assert!(t.elapsed().as_secs() < 5);
     }
 
     #[test]

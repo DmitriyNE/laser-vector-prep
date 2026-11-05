@@ -3,6 +3,15 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-11-05 — First nightly fuzz with heal layers
+
+The nightly run timed out on a GDS input under boundary cutting (DEF-29): its 16,392
+stacked squares used to reach the cut region as separate fills, united in one n-ary
+union, and now come through the heal layer as loops for merge-then-nest, whose pairwise
+crossing test was quadratic. Copies are merged first now. The input still takes 15.6 s to
+replay in a debug build, too slow for CI's regression replay, so it is left to the nightly
+run and a unit test of ten thousand stacked copies covers the case.
+
 ## 2026-11-05 — Tape measure
 
 The owner asked for point-to-point measuring. The preview has a tape tool (the ruler under
