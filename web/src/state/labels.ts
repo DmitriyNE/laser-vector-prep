@@ -47,12 +47,28 @@ export function envelopeLabel(l: WorkingLayer): string {
   }
 }
 
+/** A layer's kind as shown on its tag: linework that heals is a heal layer. */
+export function kindLabel(l: WorkingLayer): string {
+  return l.kind === "linework" && l.heal ? "heal" : l.kind;
+}
+
+/** A length in mm as nm, µm or mm, whichever reads shortest. */
+export function lengthLabel(mm: number): string {
+  const [v, unit] = mm < 1e-3 ? [mm * 1e6, "nm"] : mm < 1 ? [mm * 1e3, "µm"] : [mm, "mm"];
+  return `${Number(v.toPrecision(3))} ${unit}`;
+}
+
 export function opLabel(l: WorkingLayer): string {
   if (l.kind === "envelope") return envelopeLabel(l);
+  if (l.kind === "linework" && l.heal) return `joins ends ≤ ${lengthLabel(l.heal.toleranceMm)}`;
   return l.op === "union" ? "union" : l.op === "intersection" ? "A ∩ B" : l.op === "subtraction" ? "A − B" : "A xor B";
 }
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Path count of a linework layer, with the loose ends a heal layer left. */
+export const lineworkStats = (s: { paths: number; looseEnds: number }) =>
+  plural(s.paths, "path") + (s.looseEnds ? `, ${plural(s.looseEnds, "loose end")}` : "");
 
 export function ruleText(r: MatchRule): string {
   switch (r.kind) {

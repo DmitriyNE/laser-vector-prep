@@ -20,7 +20,8 @@
    * `group`: the output group a pass's paths or jumps belong to. `doc` and `extent`: the
    * paths in document space and their extent, made on first draw (see canvas.ts).
    */
-  type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; fill?: string; group?: string; doc?: Path2D; extent?: number };
+  /** A drawn buffer; `marks` draws its points as rings, for a layer (when selected, or always). */
+  type Item = { key: string; preview: Preview; color: string; width: number; dash: number[]; fill?: string; group?: string; doc?: Path2D; extent?: number; marks?: { layer: string; always: boolean } };
   let items: Item[] = [];
   /** The order inspector's sequence, and the path under the pointer (-1: none). */
   let order: { group: string; seq: Sequence; revision: number } | null = $state.raw(null);
@@ -136,6 +137,12 @@
         if (store.hiddenLayers.has(l.id)) continue;
         const p = await store.preview("layer", l.id);
         if (p) next.push({ key: `layer:${l.id}`, preview: p, color: "rgba(60,60,60,0.9)", width: 1.5, dash: [] });
+        // Loose ends: a region layer's keep it from closing (always shown); a heal layer's
+        // may be meant to be open (shown while it is selected).
+        if (l.looseEnds > 0) {
+          const ends = await store.previewLooseEnds(l.id);
+          if (ends) next.push({ key: `ends:${l.id}`, preview: ends, color: "rgba(220,30,30,0.95)", width: 1.5, dash: [], marks: { layer: l.id, always: l.kind !== "linework" } });
+        }
       }
     }
     const nextHeat: HeatImage[] = [];
@@ -259,6 +266,10 @@
     const ord = emphasis ? inspecting() : null;
     for (const it of items) {
       if (ord && it.group === ord.group) continue;
+      if (it.marks) {
+        if (it.marks.always || (sel.kind === "layer" && sel.id === it.marks.layer)) drawMarks(ctx, v, it);
+        continue;
+      }
       const selected =
         emphasis &&
         ((sel.kind === "pass" && it.key === `pass:${sel.id}`) ||
@@ -312,6 +323,24 @@
     }
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
+  }
+
+  /** Rings a few pixels across around the first point of every path of `it`. */
+  function drawMarks(ctx: CanvasRenderingContext2D, v: View, it: Item) {
+    const { originX: ox, originY: oy, coords, starts } = it.preview;
+    const r = 6;
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = it.color;
+    ctx.lineWidth = it.width;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    for (let i = 0; i + 1 < starts.length; i++) {
+      const k = starts[i]!;
+      const [sx, sy] = project(v, ox + coords[2 * k]!, oy + coords[2 * k + 1]!);
+      ctx.moveTo(sx + r, sy);
+      ctx.arc(sx, sy, r, 0, 2 * Math.PI);
+    }
+    ctx.stroke();
   }
 
   function niceStep(pxPerMm: number): number {

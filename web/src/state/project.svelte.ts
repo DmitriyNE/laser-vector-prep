@@ -29,6 +29,8 @@ export type Selection =
   | { kind: "group"; id: string };
 
 const LAST_PROFILE_KEY = "lastProfile";
+/** Default tolerance of a new heal layer (mm): the core's `heal::SNAP_MM`. */
+export const HEAL_TOLERANCE_MM = 0.001;
 
 export class ProjectStore {
   worker = new GeometryWorker();
@@ -357,6 +359,11 @@ export class ProjectStore {
       : this.worker.call({ kind: "previewLayer", id });
   }
 
+  /** A layer's loose ends, one single-point path each. */
+  previewLooseEnds(id: string): Promise<Preview | null> {
+    return this.worker.call({ kind: "previewLooseEnds", id });
+  }
+
   previewSource(file: number, layer: string): Promise<Preview | null> {
     return this.worker.call({ kind: "previewSource", file, layer });
   }
@@ -634,22 +641,24 @@ export class ProjectStore {
   // ---- structure: layers, passes, groups, and the edits drawn on the graph -------------
 
   /** Add a working layer (a region, or an envelope: a bounded domain) and select it. */
-  addLayer(kind: "region" | "envelope" = "region"): string {
+  addLayer(kind: "region" | "envelope" | "heal" = "region"): string {
     const id = shortId("wl");
     this.update((p) => {
+      const n = p.workingLayers.length + 1;
       p.workingLayers.push({
         id,
-        name: kind === "envelope" ? `Envelope ${p.workingLayers.length + 1}` : `Layer ${p.workingLayers.length + 1}`,
-        kind,
+        name: kind === "envelope" ? `Envelope ${n}` : kind === "heal" ? `Heal ${n}` : `Layer ${n}`,
+        kind: kind === "heal" ? "linework" : kind,
         inputs: [],
         operands: [],
         op: "union",
         envelope: kind === "envelope" ? { provider: "boundingBox", marginMm: 0.5 } : null,
+        heal: kind === "heal" ? { toleranceMm: HEAL_TOLERANCE_MM } : null,
         interpretation: { loopRule: "mergeThenNest", strokeWidth: "original" },
         passes: [],
         enabled: true,
-        // Envelopes are domains for other layers; they never mark unless asked explicitly.
-        referenceOnly: kind === "envelope",
+        // Envelopes and heal layers feed other layers; they never mark unless asked explicitly.
+        referenceOnly: kind !== "region",
       });
     });
     this.selection = { kind: "layer", id };

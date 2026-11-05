@@ -56,6 +56,8 @@ function handle(req: Payload): { result: unknown; transfer: Transferable[] } {
       return preview(wasm.preview_pass(req.id));
     case "previewLayer":
       return preview(wasm.preview_layer(req.id));
+    case "previewLooseEnds":
+      return preview(wasm.preview_loose_ends(req.id));
     case "previewSource":
       return preview(wasm.preview_source(req.file, req.layer));
     case "previewJumps":

@@ -82,6 +82,7 @@
       } else {
         layer.envelope = null;
       }
+      if (kind !== "linework") layer.heal = null;
     });
   }
 
@@ -248,6 +249,12 @@
         {#if layer.operands.length === 0}<p class="hint">Nothing in B yet: the result is {layer.op === "intersection" ? "empty" : "A unchanged"}.</p>{/if}
       </fieldset>
     {/if}
+    {/if}
+    {#if layer.kind === "linework"}
+      <label title="join open paths whose ends meet within this distance into longer paths and closed loops, so an outline drawn in pieces can bound a region; where three or more ends meet nothing is joined; gaps up to 1 µm close by moving the ends together, wider ones by a straight bridge; empty = off">Heal: join ends within (mm)
+        <input type="number" step="0.001" min="0" placeholder="off" value={layer.heal?.toleranceMm ?? ""}
+          oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value; store.update(() => { layer.heal = v === "" ? null : { toleranceMm: Number(v) }; }); }} />
+      </label>
     {/if}
     {#if layer.kind === "region"}
       <label title="applies to every source input of this layer (layer inputs are regions already)">Closed loops

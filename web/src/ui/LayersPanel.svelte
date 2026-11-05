@@ -2,7 +2,7 @@
   import type { WorkingLayer } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
   import { shortId } from "../util/download.js";
-  import { opLabel, patternLabel, plural } from "../state/labels.js";
+  import { kindLabel, lineworkStats, opLabel, patternLabel, plural } from "../state/labels.js";
   import Eye from "./Eye.svelte";
 
   let { store }: { store: ProjectStore } = $props();
@@ -41,7 +41,7 @@
 
   /** Second line of a layer row: kind, operation, flags and who reads it. */
   function layerDetail(l: WorkingLayer) {
-    const parts = [l.kind, opLabel(l)];
+    const parts = [kindLabel(l), opLabel(l)];
     if (l.referenceOnly) parts.push("reference");
     if (!l.enabled) parts.push("disabled");
     const users = usedBy(l.id);
@@ -52,7 +52,7 @@
   function layerStats(l: WorkingLayer) {
     const sum = summaryOf(l.id);
     if (!sum) return "";
-    return l.kind === "linework" ? plural(sum.paths, "path") : `${plural(sum.outers, "island")}, ${plural(sum.holes, "hole")}`;
+    return l.kind === "linework" ? lineworkStats(sum) : `${plural(sum.outers, "island")}, ${plural(sum.holes, "hole")}`;
   }
 
   function layerErrors(l: WorkingLayer) {
@@ -64,6 +64,7 @@
   <h2>
     Layers <button class="add" onclick={() => store.addLayer("region")}>+ layer</button>
     <button class="add" onclick={() => store.addLayer("envelope")} title="a bounded domain around a reference set, for negative regions">+ envelope</button>
+    <button class="add" onclick={() => store.addLayer("heal")} title="joins open paths whose ends meet within a tolerance into longer paths and closed loops, so an outline drawn in pieces can bound a region">+ heal</button>
   </h2>
   {#if store.profile.workingLayers.length === 0}
     <p class="hint">No working layers. Add one and pick its sources.</p>

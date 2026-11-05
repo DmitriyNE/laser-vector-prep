@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::diag::{Diagnostic, Severity};
 use crate::eval::{BindingStatus, Evaluation, Evaluator, Sources};
 use crate::export::{self, ExportError, GroupFile};
-use crate::geom::BBox;
+use crate::geom::{BBox, Point};
 use crate::model::*;
 use crate::order::{self, Heatmap, Stats};
 use crate::patterns::Geometry;
@@ -102,6 +102,8 @@ pub struct LayerSummary {
     pub paths: usize,
     pub area_mm2: Option<f64>,
     pub bounds_mm: Option<[f64; 4]>,
+    /// Ends of open paths a heal layer left, or that kept a region layer from closing.
+    pub loose_ends: usize,
     pub cached: bool,
     pub diagnostics: Vec<DiagnosticJson>,
 }
@@ -229,6 +231,24 @@ impl PreviewBuffer {
             }
             b.starts.push((b.coords.len() / 2) as u32);
             b.closed.push(u8::from(p.is_closed()));
+        }
+        b
+    }
+
+    /// One single-vertex open path per point.
+    pub fn from_points(points: &[Point]) -> Self {
+        let origin = lower_left(points.iter().map(|p| (p.x, p.y)));
+        let mut b = PreviewBuffer {
+            origin,
+            starts: vec![0],
+            ..Default::default()
+        };
+        for p in points {
+            b.coords.push((p.x - origin[0]) as f32);
+            b.coords.push((p.y - origin[1]) as f32);
+            b.bulges.push(0.0);
+            b.starts.push((b.coords.len() / 2) as u32);
+            b.closed.push(0);
         }
         b
     }
@@ -515,6 +535,7 @@ impl Project {
                     paths,
                     area_mm2: area,
                     bounds_mm: bbox_json(bounds),
+                    loose_ends: r.loose_ends.len(),
                     cached: r.cached,
                     diagnostics: diags(&r.diagnostics),
                 })
@@ -609,6 +630,12 @@ impl Project {
             Geometry::Region(reg) => PreviewBuffer::from_plines(reg.loops.iter()),
             Geometry::Linework(ps) => PreviewBuffer::from_plines(ps.iter()),
         })
+    }
+
+    /// A layer's loose ends, one single-point path each (markers in the preview).
+    pub fn preview_loose_ends(&self, id: &LayerId) -> Option<PreviewBuffer> {
+        let r = self.last.as_ref()?.0.layers.get(id)?;
+        Some(PreviewBuffer::from_points(&r.loose_ends))
     }
 
     /// Missed (`spill == false`) or spill area of a pass's coverage audit.

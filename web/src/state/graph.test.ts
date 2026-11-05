@@ -72,8 +72,8 @@ const evaluation: EvaluationSummary = {
   ],
   unboundLayers: [],
   layers: [
-    { id: "wl-cu", name: "wl-cu", kind: "region", outers: 3, holes: 1, paths: 0, areaMm2: 10, boundsMm: null, cached: false, diagnostics: [] },
-    { id: "wl-neg", name: "wl-neg", kind: "region", outers: 1, holes: 3, paths: 0, areaMm2: 5, boundsMm: null, cached: false, diagnostics: [{ severity: "warning", code: "x", message: "", context: null }] },
+    { id: "wl-cu", name: "wl-cu", kind: "region", outers: 3, holes: 1, paths: 0, areaMm2: 10, boundsMm: null, looseEnds: 0, cached: false, diagnostics: [] },
+    { id: "wl-neg", name: "wl-neg", kind: "region", outers: 1, holes: 3, paths: 0, areaMm2: 5, boundsMm: null, looseEnds: 0, cached: false, diagnostics: [{ severity: "warning", code: "x", message: "", context: null }] },
   ],
   passes: [],
   groups: [],

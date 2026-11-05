@@ -238,6 +238,12 @@ pub fn preview_layer(id: &str) -> Option<Preview> {
     with(|p| p.preview_layer(&LayerId::new(id)).map(Into::into))
 }
 
+/// A layer's loose ends (heal layers, region layers with open paths), one point per path.
+#[wasm_bindgen]
+pub fn preview_loose_ends(id: &str) -> Option<Preview> {
+    with(|p| p.preview_loose_ends(&LayerId::new(id)).map(Into::into))
+}
+
 #[wasm_bindgen]
 pub fn preview_source(file: usize, layer: &str) -> Option<Preview> {
     with(|p| p.preview_source(file, layer).map(Into::into))

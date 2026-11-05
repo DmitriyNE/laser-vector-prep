@@ -3,8 +3,8 @@
 // sources and the latest evaluation (no Svelte, no DOM), laid out by dagre.
 
 import { Graph, layout as dagreLayout } from "@dagrejs/dagre";
-import type { BindingSummary, EvaluationSummary, GeometryKind, MatchRule, Operand, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
-import { opLabel, patternLabel, plural } from "./labels.js";
+import type { BindingSummary, EvaluationSummary, MatchRule, Operand, Profile, SourceSummary, WorkingLayer } from "../core/types.js";
+import { kindLabel, lineworkStats, opLabel, patternLabel, plural } from "./labels.js";
 
 /** Worst diagnostic of a node; `idle` when it has no result (not evaluated, or blocked). */
 export type Status = "ok" | "warning" | "error" | "idle";
@@ -37,7 +37,8 @@ export interface LayerData {
   kind: "layer";
   id: string;
   name: string;
-  geometry: GeometryKind;
+  /** The kind shown on the tag ("heal" for a healing linework layer). */
+  geometry: string;
   op: string;
   /** The layer has a second operand group (B). */
   twoGroups: boolean;
@@ -182,7 +183,7 @@ export function buildGraph(
     const stats = !summary
       ? "not evaluated"
       : l.kind === "linework"
-        ? plural(summary.paths, "path")
+        ? lineworkStats(summary)
         : `${plural(summary.outers, "island")}, ${plural(summary.holes, "hole")}`;
     nodes.push({
       id: nodeId.layer(l.id),
@@ -190,7 +191,7 @@ export function buildGraph(
         kind: "layer",
         id: l.id,
         name: l.name,
-        geometry: l.kind,
+        geometry: kindLabel(l),
         op: opLabel(l),
         twoGroups: hasGroupB(l),
         stats,

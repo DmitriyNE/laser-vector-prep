@@ -20,6 +20,7 @@ export type Payload =
   | { kind: "evaluate"; epoch: number }
   | { kind: "previewPass"; id: string }
   | { kind: "previewLayer"; id: string }
+  | { kind: "previewLooseEnds"; id: string }
   | { kind: "previewSource"; file: number; layer: string }
   | { kind: "previewJumps"; id: string }
   | { kind: "previewOrder"; id: string }
@@ -67,7 +68,7 @@ export type ResultOf<K extends Kind> = K extends "version"
                   ? Diagnostic[]
                   : K extends "evaluate"
                     ? EvaluationSummary
-                    : K extends "previewPass" | "previewLayer" | "previewSource" | "previewJumps" | "previewAudit"
+                    : K extends "previewPass" | "previewLayer" | "previewLooseEnds" | "previewSource" | "previewJumps" | "previewAudit"
                       ? Preview | null
                       : K extends "previewOrder"
                         ? OrderPreview | null

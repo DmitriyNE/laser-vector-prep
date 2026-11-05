@@ -206,6 +206,7 @@
         <button onclick={() => store.addBinding(`Slot ${store.profile.sourceBindings.length + 1}`, null)}>+ slot</button>
         <button onclick={() => store.addLayer("region")}>+ layer</button>
         <button onclick={() => store.addLayer("envelope")}>+ envelope</button>
+        <button onclick={() => store.addLayer("heal")} title="joins open paths whose ends meet within a tolerance into longer paths and closed loops, so an outline drawn in pieces can bound a region">+ heal</button>
         <button onclick={() => selectedLayer && store.addPass(selectedLayer)} disabled={!selectedLayer} title="add a pass to the selected layer">+ pass</button>
         <button onclick={() => store.addGroup()}>+ group</button>
         <span class="help" title="Drag from a ● on a node's right to a ● on another's left to connect; × on a connection removes it; Delete removes what is selected; double-click fits the view.">?</span>

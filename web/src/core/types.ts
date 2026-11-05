@@ -142,6 +142,10 @@ export interface Pass {
   enabled: boolean;
 }
 
+export interface Heal {
+  toleranceMm: number;
+}
+
 export interface WorkingLayer {
   id: string;
   name: string;
@@ -153,6 +157,8 @@ export interface WorkingLayer {
   op: LayerOp;
   /** Required when kind is "envelope". */
   envelope?: EnvelopeProvider | null;
+  /** Linework only: join loose ends within the tolerance (a heal layer). */
+  heal?: Heal | null;
   interpretation: { loopRule: LoopRule; strokeWidth: StrokeWidth };
   passes: Pass[];
   enabled: boolean;
@@ -222,6 +228,8 @@ export interface LayerSummary {
   paths: number;
   areaMm2: number | null;
   boundsMm: Bounds | null;
+  /** Ends of open paths a heal layer left, or that kept a region layer from closing. */
+  looseEnds: number;
   cached: boolean;
   diagnostics: Diagnostic[];
 }
