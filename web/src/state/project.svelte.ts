@@ -93,6 +93,9 @@ export class ProjectStore {
   orderIndex = $state(Number.MAX_SAFE_INTEGER);
   /** Colour marked paths by their place in the order rather than by group. */
   orderGradient = $state(true);
+  /** Tape measure: on or off, and its points in document mm (`b` follows the pointer until fixed). */
+  measuring = $state(false);
+  tape: { a: [number, number]; b: [number, number] | null; fixed: boolean } | null = $state.raw(null);
   showSources = $state(true);
   showLayers = $state(true);
 

@@ -133,3 +133,27 @@ export function inDocument(ctx: CanvasRenderingContext2D, v: View, p: Preview, d
   draw(1 / v.ppm);
   ctx.restore();
 }
+
+/**
+ * The vertex of `previews` nearest to (x, y) within `radius`, all in document mm, if any:
+ * where the tape measure snaps. Path ends, corners and the ends of arcs are vertices.
+ */
+export function nearestVertex(previews: Preview[], x: number, y: number, radius: number): [number, number] | null {
+  let best: [number, number] | null = null;
+  let bestD = radius * radius;
+  for (const { originX: ox, originY: oy, coords } of previews) {
+    // In the buffer's own frame, where its f32 offsets are exact.
+    const lx = x - ox;
+    const ly = y - oy;
+    for (let k = 0; k + 1 < coords.length; k += 2) {
+      const dx = coords[k]! - lx;
+      const dy = coords[k + 1]! - ly;
+      const d = dx * dx + dy * dy;
+      if (d <= bestD) {
+        bestD = d;
+        best = [ox + coords[k]!, oy + coords[k + 1]!];
+      }
+    }
+  }
+  return best;
+}

@@ -3,6 +3,14 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-11-05 — Tape measure
+
+The owner asked for point-to-point measuring. The preview has a tape tool (the ruler under
+the zoom controls, or M): two clicks give the distance, Δx, Δy and angle; a point snaps to
+the nearest drawn vertex within 8 px (Shift places it freely), Esc clears the tape, then
+leaves the tool. It measures the preview buffers, whose single-precision offsets from each
+buffer's corner are good to nanometres at board size.
+
 ## 2026-11-05 — Heal layers
 
 The owner could not make a region of the heater board's outline, to cut along it with a

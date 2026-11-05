@@ -2,7 +2,7 @@
   import type { Heatmap, Preview } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
   import { Sequence } from "../state/sequence.js";
-  import { documentPath, documentSpaceOk, extent, inDocument, project, segment, tracePath, type View } from "./canvas.js";
+  import { documentPath, documentSpaceOk, extent, inDocument, nearestVertex, project, segment, tracePath, type View } from "./canvas.js";
   import { drawOrder, drawOrderBase, type OrderState } from "./orderDraw.js";
   import OrderTimeline from "./OrderTimeline.svelte";
 
@@ -27,6 +27,9 @@
   let order: { group: string; seq: Sequence; revision: number } | null = $state.raw(null);
   let hover = $state(-1);
   let hoverAt: { x: number; y: number } | null = $state(null);
+  const TAPE_COLOR = "rgb(0, 150, 170)";
+  /** The tape measure's point under the pointer, and whether it snapped to a vertex. */
+  let tapeAt: { at: [number, number]; snapped: boolean } | null = $state.raw(null);
   /** The scene under the order overlay while only the overlay changes, and what it shows. */
   let base: { canvas: HTMLCanvasElement; key: string } | null = null;
   let itemsVersion = 0;
@@ -235,6 +238,7 @@
       drawGrid(ctx, w, h);
       drawScene(ctx, v, true);
     }
+    drawTape(ctx, v);
     drawRulers(ctx, w, h);
     drawMinimap();
   }
@@ -343,6 +347,50 @@
     ctx.stroke();
   }
 
+  /** The tape measure: the vertex it would snap to, its two points and the distance. */
+  function drawTape(ctx: CanvasRenderingContext2D, v: View) {
+    if (!store.measuring) return;
+    ctx.save();
+    ctx.strokeStyle = ctx.fillStyle = TAPE_COLOR;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+    if (tapeAt?.snapped) {
+      const [sx, sy] = project(v, ...tapeAt.at);
+      ctx.strokeRect(sx - 5, sy - 5, 10, 10);
+    }
+    const dot = (x: number, y: number) => {
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, 2 * Math.PI);
+      ctx.fill();
+    };
+    const t = store.tape;
+    if (t) {
+      const [ax, ay] = project(v, ...t.a);
+      dot(ax, ay);
+      if (t.b) {
+        const [bx, by] = project(v, ...t.b);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        dot(bx, by);
+        const dx = t.b[0] - t.a[0];
+        const dy = t.b[1] - t.a[1];
+        const text = `${Math.hypot(dx, dy).toFixed(3)} mm · Δx ${dx.toFixed(3)} · Δy ${dy.toFixed(3)} · ${((Math.atan2(dy, dx) * 180) / Math.PI).toFixed(1)}°`;
+        ctx.font = "12px ui-monospace, monospace";
+        const tw = ctx.measureText(text).width + 8;
+        const lx = Math.min(Math.max((ax + bx) / 2 + 10, 2), v.w - tw - 2);
+        const ly = Math.min(Math.max((ay + by) / 2 + 10, 2), v.h - 20);
+        ctx.fillStyle = dark?.matches ? "rgba(30,30,30,0.92)" : "rgba(255,255,255,0.92)";
+        ctx.fillRect(lx, ly, tw, 18);
+        ctx.fillStyle = dark?.matches ? "#eee" : "#111";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, lx + 4, ly + 9);
+      }
+    }
+    ctx.restore();
+  }
+
   function niceStep(pxPerMm: number): number {
     const target = 80 / pxPerMm; // mm per ~80 px
     const pow = Math.pow(10, Math.floor(Math.log10(target)));
@@ -418,6 +466,20 @@
     draw();
   }
 
+  /** The tape's point under the pointer: the nearest drawn vertex within a few pixels, or
+   * with Shift (or nothing near) the pointer itself. */
+  function tapePoint(px: number, py: number, free: boolean): { at: [number, number]; snapped: boolean } {
+    const at = toMm(px, py, canvas.clientWidth, canvas.clientHeight);
+    const vertex = free ? null : nearestVertex(items.map((it) => it.preview), at[0], at[1], 8 / ppm);
+    return vertex ? { at: vertex, snapped: true } : { at, snapped: false };
+  }
+
+  function toggleTape() {
+    store.measuring = !store.measuring;
+    store.tape = null;
+    tapeAt = null;
+  }
+
   function onPointerDown(e: PointerEvent) {
     dragging = { x: e.clientX, y: e.clientY, cx, cy };
     canvas.setPointerCapture(e.pointerId);
@@ -431,6 +493,12 @@
       cx = dragging.cx - (e.clientX - dragging.x) / ppm;
       cy = dragging.cy + (e.clientY - dragging.y) / ppm;
       draw();
+      return;
+    }
+    if (store.measuring) {
+      tapeAt = tapePoint(e.offsetX, e.offsetY, e.shiftKey);
+      const t = store.tape;
+      if (t && !t.fixed) store.tape = { ...t, b: tapeAt.at };
       return;
     }
     // The order inspector: the path under the pointer, within a few pixels.
@@ -448,11 +516,19 @@
     const click = dragging && Math.hypot(e.clientX - dragging.x, e.clientY - dragging.y) < 4;
     dragging = null;
     canvas.releasePointerCapture(e.pointerId);
+    // Measuring, a click places the tape's first point, then its second; a third starts over.
+    if (click && store.measuring) {
+      const p = tapePoint(e.offsetX, e.offsetY, e.shiftKey).at;
+      const t = store.tape;
+      store.tape = !t || t.fixed ? { a: p, b: null, fixed: false } : { a: t.a, b: p, fixed: true };
+      return;
+    }
     if (click && hover >= 0 && inspecting()) store.orderIndex = hover;
   }
 
   function onPointerLeave() {
     hoverAt = null;
+    tapeAt = null;
     if (hover >= 0) {
       hover = -1;
       draw();
@@ -601,7 +677,24 @@
     void store.orderIndex;
     void store.orderGradient;
     void order;
+    void store.measuring;
+    void store.tape;
+    void tapeAt;
     draw();
+  });
+
+  // M toggles the tape measure; Esc clears it, then turns it off.
+  $effect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || (e.target as Element | null)?.closest?.("input, select, textarea, [contenteditable]")) return;
+      if (e.key === "m" || e.key === "M") toggleTape();
+      else if (e.key === "Escape" && store.measuring) {
+        if (store.tape) store.tape = null;
+        else toggleTape();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   });
 
   $effect(() => {
@@ -614,6 +707,7 @@
 <div class="preview">
   <canvas
     bind:this={canvas}
+    class:measuring={store.measuring}
     onwheel={onWheel}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
@@ -655,6 +749,17 @@
         /></svg
       >
     </button>
+    <button
+      title="Measure (M): click two points; snaps to the nearest vertex, Shift places freely; Esc clears"
+      aria-label="Measure"
+      aria-pressed={store.measuring}
+      class:active={store.measuring}
+      onclick={toggleTape}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"
+        ><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" d="M2 22 22 2l8 8-20 20zM7 17l4 4M11 13l2.5 2.5M15 9l4 4M19 5l2.5 2.5" /></svg
+      >
+    </button>
   </div>
   <canvas
     class="minimap"
@@ -680,6 +785,9 @@
     display: block;
     cursor: grab;
     background: color-mix(in srgb, Canvas 97%, CanvasText 3%);
+  }
+  canvas.measuring {
+    cursor: crosshair;
   }
   .coords {
     font-family: ui-monospace, monospace;
@@ -737,6 +845,9 @@
   .controls button:hover {
     background: #f4f4f4;
   }
+  .controls button.active {
+    background: #dcdcdc;
+  }
   .controls svg {
     width: 100%;
     max-width: 12px;
@@ -755,6 +866,9 @@
     .controls button:hover {
       background: #3e3e3e;
       color: #fff;
+    }
+    .controls button.active {
+      background: #555;
     }
   }
 </style>

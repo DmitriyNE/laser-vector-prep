@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Preview } from "../core/types.js";
 import { seg, segPoint } from "../state/sequence.js";
-import { documentSpaceOk, project, traceDocument, tracePath, type View } from "./canvas.js";
+import { documentSpaceOk, nearestVertex, project, traceDocument, tracePath, type View } from "./canvas.js";
 
 /** Records the arcs a tracer adds, standing in for a canvas path. */
 class Recorder {
@@ -75,5 +75,15 @@ describe("tracing arcs", () => {
     const v = (ppm: number): View => ({ cx: 0, cy: 0, ppm, w: 100, h: 100 });
     expect(documentSpaceOk(ctx, v(100), 50)).toBe(true);
     expect(documentSpaceOk(ctx, v(1e5), 50)).toBe(false);
+  });
+});
+
+describe("tape measure snapping", () => {
+  it("finds the nearest vertex of any buffer within the radius, in absolute mm", () => {
+    const far = buffer(1000.25, 2000.5, 1003, 2000.5, 0, 1000, 2000);
+    const near = buffer(0, 0, 10, 5, 0.3, 0, 0);
+    expect(nearestVertex([far, near], 1000.3, 2000.45, 0.1)).toEqual([1000.25, 2000.5]);
+    expect(nearestVertex([far, near], 9.9, 5.05, 0.2)).toEqual([10, 5]);
+    expect(nearestVertex([far, near], 5, 2.5, 1)).toBeNull();
   });
 });
