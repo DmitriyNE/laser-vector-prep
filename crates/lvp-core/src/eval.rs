@@ -10,6 +10,7 @@ use cavalier_contours::polyline::PlineSource;
 use crate::cancel::{self, Cancelled};
 use crate::diag::{Diagnostic, Severity};
 use crate::geom::{self, BBox, Point};
+use crate::heal;
 use crate::model::*;
 use crate::order::{self, GroupPlan, PassPaths};
 use crate::par;
@@ -147,6 +148,8 @@ pub fn resolve_bindings(
 pub struct LayerResult {
     pub geometry: Geometry,
     pub diagnostics: Vec<Diagnostic>,
+    /// Ends of the open paths a heal layer left, or that kept a region layer from closing.
+    pub loose_ends: Vec<Point>,
     pub fingerprint: u64,
     pub cached: bool,
 }
@@ -234,7 +237,7 @@ impl Evaluation {
 /// Holds caches between evaluations of the same project.
 #[derive(Default)]
 pub struct Evaluator {
-    layer_cache: HashMap<LayerId, (u64, Geometry, Vec<Diagnostic>)>,
+    layer_cache: HashMap<LayerId, (u64, Computed)>,
     pass_cache: HashMap<PassId, CachedPass>,
     plan_cache: HashMap<GroupId, (u64, GroupPlan)>,
     audit_cache: HashMap<PassId, (u64, patterns::Audit)>,
@@ -423,12 +426,13 @@ impl Evaluator {
                 let layer = profile.layer(id).expect("ordered layer exists");
                 let fp = self.layer_fingerprint(layer, sources, &bindings, &ev.layers);
                 match self.layer_cache.get(id) {
-                    Some((cfp, geom, diags)) if *cfp == fp => {
+                    Some((cfp, c)) if *cfp == fp => {
                         ev.layers.insert(
                             id.clone(),
                             LayerResult {
-                                geometry: geom.clone(),
-                                diagnostics: diags.clone(),
+                                geometry: c.geometry.clone(),
+                                diagnostics: c.diagnostics.clone(),
+                                loose_ends: c.loose_ends.clone(),
                                 fingerprint: fp,
                                 cached: true,
                             },
@@ -448,17 +452,17 @@ impl Evaluator {
             });
             let mut stopped = false;
             for r in computed {
-                let Some((id, fp, (geometry, diagnostics))) = r else {
+                let Some((id, fp, c)) = r else {
                     stopped = true;
                     continue;
                 };
-                self.layer_cache
-                    .insert(id.clone(), (fp, geometry.clone(), diagnostics.clone()));
+                self.layer_cache.insert(id.clone(), (fp, c.clone()));
                 ev.layers.insert(
                     id,
                     LayerResult {
-                        geometry,
-                        diagnostics,
+                        geometry: c.geometry,
+                        diagnostics: c.diagnostics,
+                        loose_ends: c.loose_ends,
                         fingerprint: fp,
                         cached: false,
                     },
@@ -722,6 +726,7 @@ fn source_geometry(
     interp: &Interpretation,
     prims: &[Primitive],
     diags: &mut Vec<Diagnostic>,
+    loose: &mut Vec<Point>,
 ) -> Geometry {
     match kind {
         // An envelope's reference set is read like a region layer's inputs, except that open
@@ -732,9 +737,9 @@ fn source_geometry(
                 .any(|p| matches!(p, Primitive::Path { pline, width: None } if !pline.is_closed()))
                 && !matches!(interp.stroke_width, StrokeWidth::Fixed { .. });
             if has_open_widthless {
-                source_geometry(GeometryKind::Linework, interp, prims, diags)
+                source_geometry(GeometryKind::Linework, interp, prims, diags, loose)
             } else {
-                source_geometry(GeometryKind::Region, interp, prims, diags)
+                source_geometry(GeometryKind::Region, interp, prims, diags, loose)
             }
         }
         GeometryKind::Linework => {
@@ -750,7 +755,7 @@ fn source_geometry(
         GeometryKind::Region => {
             let mut closed_loops: Vec<Pline> = Vec::new();
             let mut parts: Vec<Part<'_>> = Vec::new();
-            let mut open_without_width = 0usize;
+            let mut open_without_width: Vec<Pline> = Vec::new();
             for p in prims {
                 match p {
                     Primitive::Path { pline, width } => {
@@ -762,46 +767,114 @@ fn source_geometry(
                         match (pline.is_closed(), w) {
                             (_, Some(w)) if w > 0.0 => parts.push(Part::Stroke(pline, w)),
                             (true, _) => closed_loops.push(pline.clone()),
-                            (false, _) => open_without_width += 1,
+                            (false, _) => open_without_width.push(pline.clone()),
                         }
                     }
                     Primitive::Hatch { loops, rule, .. } => parts.push(Part::Fill(loops, *rule)),
                 }
             }
-            if open_without_width > 0 {
-                diags.push(Diagnostic::error(
-                    "eval.open_linework_in_region",
-                    format!("{open_without_width} open path(s) cannot bound a region; set a stroke width or use a linework layer"),
-                ));
-            }
+            close_pieces(
+                open_without_width,
+                &mut closed_loops,
+                diags,
+                loose,
+                "route them through a heal layer or set a stroke width",
+            );
             Geometry::Region(compose(closed_loops, interp.loop_rule.into(), parts))
         }
     }
 }
 
-fn to_region(g: &Geometry, interp: &Interpretation, diags: &mut Vec<Diagnostic>) -> Region {
+fn to_region(
+    g: &Geometry,
+    interp: &Interpretation,
+    diags: &mut Vec<Diagnostic>,
+    loose: &mut Vec<Point>,
+) -> Region {
     match g {
         Geometry::Region(r) => r.clone(),
         Geometry::Linework(paths) => {
             let mut closed = Vec::new();
             let mut parts = Vec::new();
-            let mut open = 0usize;
+            let mut open = Vec::new();
             for p in paths {
                 match (p.is_closed(), interp.stroke_width) {
                     (_, StrokeWidth::Fixed { mm }) if mm > 0.0 => parts.push(Part::Stroke(p, mm)),
                     (true, _) => closed.push(p.clone()),
-                    (false, _) => open += 1,
+                    (false, _) => open.push(p.clone()),
                 }
             }
-            if open > 0 {
-                diags.push(Diagnostic::error(
-                    "eval.open_linework_in_region",
-                    format!("{open} open path(s) from a linework input cannot bound a region; set a fixed stroke width"),
-                ));
-            }
+            close_pieces(
+                open,
+                &mut closed,
+                diags,
+                loose,
+                "heal them with a large enough tolerance or set a fixed stroke width",
+            );
             compose(closed, interp.loop_rule.into(), parts)
         }
     }
+}
+
+/// Open paths read as region boundaries: pieces that meet end to end exactly, in either
+/// direction, form closed loops (CAD draws outlines that way) and join `closed`. The rest
+/// cannot bound a region and are reported with the gap between the nearest loose ends,
+/// which are kept for the preview. Joining across gaps is left to heal layers (D40).
+fn close_pieces(
+    open: Vec<Pline>,
+    closed: &mut Vec<Pline>,
+    diags: &mut Vec<Diagnostic>,
+    loose: &mut Vec<Point>,
+    remedy: &str,
+) {
+    if open.is_empty() {
+        return;
+    }
+    let (paths, report) = heal::heal(open, pline::REPEAT_EPS);
+    let before = closed.len();
+    closed.extend(paths.iter().filter(|p| p.is_closed()).cloned());
+    let left = paths.len() - (closed.len() - before);
+    if left > 0 {
+        let mut notes: Vec<String> = Vec::new();
+        if let Some(d) = report.nearest_loose {
+            notes.push(format!(
+                "the nearest two loose ends are {} apart",
+                length_text(d)
+            ));
+        }
+        if report.ambiguous > 0 {
+            notes.push(format!("{} end(s) meet at junctions", report.ambiguous));
+        }
+        let nearest = if notes.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", notes.join("; "))
+        };
+        diags.push(Diagnostic::error(
+            "eval.open_linework_in_region",
+            format!("{left} open path(s) cannot bound a region{nearest}; {remedy}"),
+        ));
+        loose.extend(report.loose_ends);
+    }
+}
+
+/// A length for messages, to three significant digits in nm, µm or mm.
+fn length_text(mm: f64) -> String {
+    let (v, unit) = if mm < 1e-3 {
+        (mm * 1e6, "nm")
+    } else if mm < 1.0 {
+        (mm * 1e3, "µm")
+    } else {
+        (mm, "mm")
+    };
+    let decimals = if v >= 100.0 {
+        0
+    } else if v >= 10.0 {
+        1
+    } else {
+        2
+    };
+    format!("{v:.decimals$} {unit}")
 }
 
 /// A piece of a region layer besides its plain closed loops.
@@ -829,61 +902,69 @@ fn compute_layer(
     sources: &Sources,
     bindings: &BTreeMap<SourceId, BindingStatus>,
     done: &BTreeMap<LayerId, LayerResult>,
-) -> (Geometry, Vec<Diagnostic>) {
+) -> Computed {
     let mut diags = Vec::new();
+    let mut loose = Vec::new();
+    let blocked = |diags| Computed {
+        geometry: empty_geometry(layer.kind),
+        diagnostics: diags,
+        loose_ends: Vec::new(),
+    };
     // Resolve one operand; `None` means the layer is blocked.
-    let resolve = |op: &Operand, diags: &mut Vec<Diagnostic>| -> Option<Geometry> {
-        match op {
-            Operand::Source(sid) => match bindings.get(sid) {
-                Some(BindingStatus::Matched(i, name)) => {
-                    let prims = sources.files[*i]
-                        .doc
-                        .layer(name)
-                        .map(|l| l.primitives.as_slice())
-                        .unwrap_or(&[]);
-                    Some(source_geometry(
-                        layer.kind,
-                        &layer.interpretation,
-                        prims,
-                        diags,
-                    ))
-                }
-                _ => {
-                    if profile.binding(sid).is_some_and(|b| b.required) {
+    let resolve =
+        |op: &Operand, diags: &mut Vec<Diagnostic>, loose: &mut Vec<Point>| -> Option<Geometry> {
+            match op {
+                Operand::Source(sid) => match bindings.get(sid) {
+                    Some(BindingStatus::Matched(i, name)) => {
+                        let prims = sources.files[*i]
+                            .doc
+                            .layer(name)
+                            .map(|l| l.primitives.as_slice())
+                            .unwrap_or(&[]);
+                        Some(source_geometry(
+                            layer.kind,
+                            &layer.interpretation,
+                            prims,
+                            diags,
+                            loose,
+                        ))
+                    }
+                    _ => {
+                        if profile.binding(sid).is_some_and(|b| b.required) {
+                            diags.push(Diagnostic::error(
+                                "eval.input_unavailable",
+                                format!("source {sid} is not bound; layer output is blocked"),
+                            ));
+                            None
+                        } else {
+                            Some(empty_geometry(layer.kind))
+                        }
+                    }
+                },
+                Operand::Layer(lid) => match done.get(lid) {
+                    Some(r) => Some(r.geometry.clone()),
+                    None => {
                         diags.push(Diagnostic::error(
                             "eval.input_unavailable",
-                            format!("source {sid} is not bound; layer output is blocked"),
+                            format!("input layer {lid} did not evaluate (cycle or missing)"),
                         ));
                         None
-                    } else {
-                        Some(empty_geometry(layer.kind))
                     }
-                }
-            },
-            Operand::Layer(lid) => match done.get(lid) {
-                Some(r) => Some(r.geometry.clone()),
-                None => {
-                    diags.push(Diagnostic::error(
-                        "eval.input_unavailable",
-                        format!("input layer {lid} did not evaluate (cycle or missing)"),
-                    ));
-                    None
-                }
-            },
-        }
-    };
+                },
+            }
+        };
     let mut group_a: Vec<Geometry> = Vec::new();
     let mut group_b: Vec<Geometry> = Vec::new();
     for op in &layer.inputs {
-        match resolve(op, &mut diags) {
+        match resolve(op, &mut diags, &mut loose) {
             Some(g) => group_a.push(g),
-            None => return (empty_geometry(layer.kind), diags),
+            None => return blocked(diags),
         }
     }
     for op in &layer.operands {
-        match resolve(op, &mut diags) {
+        match resolve(op, &mut diags, &mut loose) {
             Some(g) => group_b.push(g),
-            None => return (empty_geometry(layer.kind), diags),
+            None => return blocked(diags),
         }
     }
     let geometry = match layer.kind {
@@ -893,28 +974,38 @@ fn compute_layer(
                     "eval.envelope_provider",
                     "envelope layer has no provider",
                 ));
-                return (Geometry::Region(Region::empty()), diags);
+                return blocked(diags);
             };
             Geometry::Region(envelope(
                 provider,
                 &group_a,
                 &layer.interpretation,
                 &mut diags,
+                &mut loose,
             ))
         }
-        // Linework only merges; validation rejects other ops.
-        GeometryKind::Linework => Geometry::Linework(
-            group_a
+        // Linework only merges (validation rejects other ops), then heals if asked to.
+        GeometryKind::Linework => {
+            let paths: Vec<Pline> = group_a
                 .iter()
                 .chain(&group_b)
                 .flat_map(|g| g.paths())
-                .collect(),
-        ),
+                .collect();
+            match layer.heal {
+                Some(h) => {
+                    let (paths, report) = heal::heal(paths, h.tolerance_mm);
+                    diags.extend(heal_diagnostics(&report));
+                    loose = report.loose_ends;
+                    Geometry::Linework(paths)
+                }
+                None => Geometry::Linework(paths),
+            }
+        }
         GeometryKind::Region => {
             let mut united = |gs: &[Geometry]| {
                 let regions: Vec<Region> = gs
                     .iter()
-                    .map(|g| to_region(g, &layer.interpretation, &mut diags))
+                    .map(|g| to_region(g, &layer.interpretation, &mut diags, &mut loose))
                     .collect();
                 Region::union_all(regions)
             };
@@ -955,7 +1046,55 @@ fn compute_layer(
             "part of this region's boundary could not be resolved and was left out: the input has boundaries within nanometres of each other that the geometry kernel cannot intersect consistently",
         ));
     }
-    (geometry, diags)
+    Computed {
+        geometry,
+        diagnostics: diags,
+        loose_ends: loose,
+    }
+}
+
+/// A layer's geometry with what computing it reported.
+#[derive(Clone, Debug)]
+struct Computed {
+    geometry: Geometry,
+    diagnostics: Vec<Diagnostic>,
+    loose_ends: Vec<Point>,
+}
+
+/// What a heal layer joined and what it left open (info: open linework is no error until a
+/// region layer needs it closed).
+fn heal_diagnostics(r: &heal::HealReport) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    if r.joints > 0 {
+        out.push(Diagnostic::info(
+            "eval.heal_joined",
+            format!(
+                "{} gap(s) closed, {} closed loop(s) made; the widest gap was {}",
+                r.joints,
+                r.closed,
+                length_text(r.largest_gap)
+            ),
+        ));
+    }
+    if !r.loose_ends.is_empty() {
+        let nearest = r.nearest_loose.map_or(String::new(), |d| {
+            format!("; the nearest two are {} apart", length_text(d))
+        });
+        out.push(Diagnostic::info(
+            "eval.heal_loose_ends",
+            format!("{} loose end(s) left{nearest}", r.loose_ends.len()),
+        ));
+    }
+    if r.ambiguous > 0 {
+        out.push(Diagnostic::info(
+            "eval.heal_ambiguous",
+            format!(
+                "{} end(s) left loose where more than two ends meet within the tolerance",
+                r.ambiguous
+            ),
+        ));
+    }
+    out
 }
 
 /// Flattening tolerance for point-based envelope providers (box, circle, hull).
@@ -981,6 +1120,7 @@ fn envelope(
     refs: &[Geometry],
     interp: &Interpretation,
     diags: &mut Vec<Diagnostic>,
+    loose: &mut Vec<Point>,
 ) -> Region {
     if refs.iter().all(Geometry::is_empty) {
         diags.push(Diagnostic::error(
@@ -989,8 +1129,11 @@ fn envelope(
         ));
         return Region::empty();
     }
-    let union_ref = |diags: &mut Vec<Diagnostic>| {
-        let regions: Vec<Region> = refs.iter().map(|g| to_region(g, interp, diags)).collect();
+    let mut union_ref = |diags: &mut Vec<Diagnostic>| {
+        let regions: Vec<Region> = refs
+            .iter()
+            .map(|g| to_region(g, interp, diags, loose))
+            .collect();
         Region::union_all(regions)
     };
     match provider {
@@ -1265,6 +1408,7 @@ mod tests {
             operands: Vec::new(),
             op: LayerOp::Union,
             envelope: None,
+            heal: None,
             interpretation: Interpretation::default(),
             passes: vec![],
             enabled: true,
@@ -1380,6 +1524,106 @@ mod tests {
         assert!((r.area() - (10.0 + std::f64::consts::PI * 0.25)).abs() < 1e-9);
     }
 
+    /// One layer `PADS` of zero-width open paths.
+    fn pieces(paths: &[&[(f64, f64, f64)]]) -> Sources {
+        let primitives = paths
+            .iter()
+            .map(|pts| {
+                let mut p = Pline::new();
+                for &(x, y, b) in *pts {
+                    cavalier_contours::polyline::PlineSourceMut::add(&mut p, x, y, b);
+                }
+                Primitive::Path {
+                    pline: p,
+                    width: None,
+                }
+            })
+            .collect();
+        let mut sources = Sources::default();
+        sources.add(
+            "pads.dxf",
+            SourceDocument {
+                format: SourceFormat::Dxf,
+                version: None,
+                units: Some(Unit::Millimetre),
+                layers: vec![crate::source::SourceLayer {
+                    name: "PADS".into(),
+                    primitives,
+                    ..Default::default()
+                }],
+                diagnostics: Vec::new(),
+            },
+        );
+        sources
+    }
+
+    #[test]
+    fn pieces_meeting_exactly_bound_a_region_and_the_rest_report_their_gap() {
+        // A 2 mm square of four lines (out of order, one reversed) and a D of a line and a
+        // half circle close; a chain of two lines, a triangle with a spur at one corner (three
+        // ends there) and a line stopping 9 nm short of another stay open.
+        let sources = pieces(&[
+            &[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)],
+            &[(2.0, 2.0, 0.0), (0.0, 2.0, 0.0)],
+            &[(2.0, 2.0, 0.0), (2.0, 0.0, 0.0)],
+            &[(0.0, 2.0, 0.0), (0.0, 0.0, 0.0)],
+            &[(10.0, -1.0, 0.0), (10.0, 1.0, 0.0)],
+            &[(10.0, 1.0, 1.0), (10.0, -1.0, 0.0)],
+            &[(20.0, 0.0, 0.0), (21.0, 0.0, 0.0)],
+            &[(21.0, 0.0, 0.0), (21.0, 1.0, 0.0)],
+            &[(30.0, 0.0, 0.0), (32.0, 0.0, 0.0)],
+            &[(31.0, 0.0, 0.0), (31.0, 1.0, 0.0)],
+            &[(32.0, 0.0, 0.0), (31.0, 1.0, 0.0)],
+            &[(31.0, 1.0, 0.0), (30.0, 0.0, 0.0)],
+            &[(40.0, 0.0, 0.0), (41.0, 0.0, 0.0)],
+            &[(41.000009, 0.0, 0.0), (42.0, 0.0, 0.0)],
+        ]);
+        let mut profile = Profile::empty("p", "pieces");
+        profile.source_bindings = vec![SourceBinding {
+            id: SourceId::new("src"),
+            name: "Pads".into(),
+            required: true,
+            rules: vec![MatchRule::LayerName {
+                format: None,
+                name: "PADS".into(),
+            }],
+        }];
+        profile.working_layers = vec![WorkingLayer {
+            id: LayerId::new("wl"),
+            name: "Pads".into(),
+            kind: GeometryKind::Region,
+            inputs: vec![Operand::Source(SourceId::new("src"))],
+            operands: Vec::new(),
+            op: LayerOp::Union,
+            envelope: None,
+            heal: None,
+            interpretation: Interpretation::default(),
+            passes: Vec::new(),
+            enabled: true,
+            reference_only: true,
+        }];
+        let e = Evaluator::new().evaluate(&profile, &sources);
+        let r = &e.layers[&LayerId::new("wl")];
+        let Geometry::Region(region) = &r.geometry else {
+            panic!()
+        };
+        assert_eq!(region.outers().count(), 2);
+        assert!((region.area() - (4.0 + std::f64::consts::FRAC_PI_2)).abs() < 1e-9);
+        // The chain, the triangle with its spur (two paths) and the two lines.
+        let open = r
+            .diagnostics
+            .iter()
+            .find(|d| d.code == "eval.open_linework_in_region")
+            .unwrap();
+        assert!(
+            open.message
+                .starts_with("5 open path(s) cannot bound a region (the nearest two loose ends are 9.00 nm apart; 3 end(s) meet at junctions)"),
+            "{}",
+            open.message
+        );
+        assert_eq!(r.loose_ends.len(), 10);
+    }
+
     #[test]
     fn subtraction_and_intersection_follow_dependencies_not_order() {
         let mut d = Document::new(Unit::Millimetre);
@@ -1418,6 +1662,7 @@ mod tests {
                 operands,
                 op,
                 envelope: None,
+                heal: None,
                 interpretation: Interpretation::default(),
                 passes: vec![],
                 enabled: true,
@@ -1490,6 +1735,7 @@ mod tests {
             operands: vec![],
             op: LayerOp::Union,
             envelope: Some(provider),
+            heal: None,
             interpretation: Interpretation::default(),
             passes: vec![],
             enabled: true,
@@ -1506,6 +1752,7 @@ mod tests {
             operands: vec![Operand::Layer(LayerId::new(subject))],
             op: LayerOp::Subtraction,
             envelope: None,
+            heal: None,
             interpretation: Interpretation::default(),
             passes: vec![],
             enabled: true,
@@ -1736,6 +1983,7 @@ mod tests {
                 distance_mm: 1.0,
                 join: JoinStyle::Miter { limit: 4.0 },
             }),
+            heal: None,
             interpretation: Interpretation {
                 loop_rule: LoopRuleCfg::MergeThenNest,
                 stroke_width: StrokeWidth::None,

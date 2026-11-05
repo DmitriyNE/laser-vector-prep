@@ -222,6 +222,18 @@
       "description": "Stable id of an output colour group.",
       "type": "string"
     },
+    "Heal": {
+      "description": "Healing of a linework layer (a heal layer): open paths whose ends meet within the\ntolerance are joined into longer paths and closed loops, so that an outline drawn in\nseparate pieces can bound a region (D40).",
+      "properties": {
+        "toleranceMm": {
+          "default": 0.001,
+          "description": "Largest gap between two ends that are joined (mm). Gaps up to 1 µm close by moving\nboth ends together; wider ones are bridged by a straight segment.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "Interpretation": {
       "properties": {
         "loopRule": {
@@ -1159,6 +1171,17 @@
           ],
           "description": "Required when `kind` is `Envelope`; ignored otherwise."
         },
+        "heal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Heal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Linework only: join the loose ends of the merged inputs. Schema v4."
+        },
         "id": {
           "$ref": "#/$defs/LayerId"
         },
@@ -1217,7 +1240,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Profile schema version 3. Older versions are migrated on import; newer ones are rejected. Lengths are millimetres, angles degrees.",
+  "description": "Profile schema version 4. Older versions are migrated on import; newer ones are rejected. Lengths are millimetres, angles degrees.",
   "properties": {
     "export": {
       "$ref": "#/$defs/ExportSettings",

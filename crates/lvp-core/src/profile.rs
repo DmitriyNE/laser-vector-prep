@@ -51,7 +51,7 @@ impl std::error::Error for ProfileError {}
 /// One step migrations: `(from, f)` maps schema `from` to `from + 1`; the caller then sets
 /// `schemaVersion`. Version 1 is the first deployed schema (2026-10-25).
 type Migration = fn(Value) -> Result<Value, String>;
-const MIGRATIONS: &[(u32, Migration)] = &[(1, v1_to_v2), (2, v2_to_v3)];
+const MIGRATIONS: &[(u32, Migration)] = &[(1, v1_to_v2), (2, v2_to_v3), (3, v3_to_v4)];
 
 /// v2 adds the optional per-group `auditWidthMm`. A v1 profile has no audit widths, which is
 /// exactly "audit off", so the data carries over unchanged; only the shape is checked.
@@ -75,6 +75,12 @@ fn v2_to_v3(value: Value) -> Result<Value, String> {
         return Err("workingLayers is not a list".into());
     }
     Ok(value)
+}
+
+/// v4 adds the optional `heal` of linework layers; a v3 profile heals nothing, so it carries
+/// over unchanged (the version again exists so that a v3 app rejects a v4 profile).
+fn v3_to_v4(value: Value) -> Result<Value, String> {
+    v2_to_v3(value)
 }
 
 /// Parse (and migrate) a profile JSON document.
@@ -284,6 +290,17 @@ pub fn validate(profile: &Profile) -> Vec<Diagnostic> {
             ),
             (k, Some(_)) if k != GeometryKind::Envelope => out.push(
                 Diagnostic::warning("profile.envelope_unused", format!("layer {:?} has an envelope provider but is not an envelope layer", l.name)).with_context(l.id.to_string()),
+            ),
+            _ => {}
+        }
+        match (l.kind, l.heal) {
+            (GeometryKind::Linework, Some(h)) if !(h.tolerance_mm > 0.0 && h.tolerance_mm.is_finite()) => out.push(
+                Diagnostic::error("profile.heal_tolerance", format!("heal layer {:?} needs a positive tolerance, not {} mm", l.name, h.tolerance_mm))
+                    .with_context(l.id.to_string()),
+            ),
+            (k, Some(_)) if k != GeometryKind::Linework => out.push(
+                Diagnostic::warning("profile.heal_unused", format!("layer {:?} has heal settings but is not a linework layer; only linework is healed", l.name))
+                    .with_context(l.id.to_string()),
             ),
             _ => {}
         }
@@ -654,6 +671,7 @@ fn layer(
         operands: Vec::new(),
         op: LayerOp::Union,
         envelope: None,
+        heal: None,
         interpretation: Interpretation::default(),
         passes,
         enabled: true,
@@ -663,6 +681,13 @@ fn layer(
 
 fn reference(mut l: WorkingLayer) -> WorkingLayer {
     l.reference_only = true;
+    l
+}
+
+/// A linework layer that joins its inputs' loose ends at the default tolerance (D40):
+/// outlines arrive in pieces, KiCad's a few nanometres apart.
+fn healed(mut l: WorkingLayer) -> WorkingLayer {
+    l.heal = Some(Heal::default());
     l
 }
 
@@ -750,7 +775,7 @@ pub fn pcb_negative_hatch() -> Profile {
                 "wl-board",
                 "Board interior",
                 EnvelopeProvider::NamedBoundary,
-                vec![Operand::Source(SourceId::new("src-outline"))],
+                vec![Operand::Layer(LayerId::new("wl-outline"))],
             );
             board.interpretation = contour_interpretation();
             board
@@ -765,13 +790,13 @@ pub fn pcb_negative_hatch() -> Profile {
             vec![Operand::Layer(LayerId::new("wl-copper"))],
         ),
         background,
-        layer(
+        healed(layer(
             "wl-outline",
             "Outline",
             GeometryKind::Linework,
             vec![Operand::Source(SourceId::new("src-outline"))],
             vec![outline_passthrough()],
-        ),
+        )),
     ];
     // Ablation of the background. Jumps run with the beam not Q-switched, far too weak to
     // ablate, so jump placement does not matter physically; bleed-aware keeps jumps off the
@@ -842,8 +867,9 @@ pub fn general_marking() -> Profile {
     p
 }
 
-/// Cutting along a closed outline: one trace on the boundary, inner cut-outs before the
-/// outer contour. Kerf compensation is left at zero for the user to enter.
+/// Cutting along a closed outline, its pieces joined by a heal layer: one trace on the
+/// boundary, inner cut-outs before the outer contour. Kerf compensation is left at zero for
+/// the user to enter.
 pub fn boundary_cutting() -> Profile {
     let mut p = Profile::empty(
         "builtin-boundary-cutting",
@@ -857,11 +883,18 @@ pub fn boundary_cutting() -> Profile {
     rules.extend(outline_rules().into_iter().skip(1));
     p.source_bindings = vec![slot("src-cut", "Cut outline", true, rules)];
     p.output_groups = vec![group("grp-cut", "Cut", Rgb::RED)];
+    let outline = reference(healed(layer(
+        "wl-outline",
+        "Outline (healed)",
+        GeometryKind::Linework,
+        vec![Operand::Source(SourceId::new("src-cut"))],
+        Vec::new(),
+    )));
     let mut cut = layer(
         "wl-cut",
         "Cut",
         GeometryKind::Region,
-        vec![Operand::Source(SourceId::new("src-cut"))],
+        vec![Operand::Layer(LayerId::new("wl-outline"))],
         vec![pass(
             "pass-cut",
             "Boundary trace, holes first",
@@ -879,7 +912,7 @@ pub fn boundary_cutting() -> Profile {
         )],
     );
     cut.interpretation = contour_interpretation();
-    p.working_layers = vec![cut];
+    p.working_layers = vec![outline, cut];
     // Holes stay before their outline: the trace emits that constraint.
     p.optimizer.mode = OptimizerMode::MinimumJump;
     p
@@ -928,6 +961,7 @@ pub fn pcb_positive_ldi() -> Profile {
             operands: Vec::new(),
             op: LayerOp::Union,
             envelope: None,
+            heal: None,
             interpretation: Interpretation::default(),
             passes: vec![Pass {
                 id: PassId::new("pass-copper-fill"),
@@ -956,6 +990,7 @@ pub fn pcb_positive_ldi() -> Profile {
             operands: Vec::new(),
             op: LayerOp::Union,
             envelope: None,
+            heal: Some(Heal::default()),
             interpretation: Interpretation::default(),
             passes: vec![Pass {
                 id: PassId::new("pass-outline"),
@@ -1017,7 +1052,7 @@ mod tests {
             let json = to_json(p);
             let back = parse_profile(&json).unwrap();
             assert_eq!(&back, p, "{}", p.name);
-            assert!(json.contains("\"schemaVersion\": 3"));
+            assert!(json.contains("\"schemaVersion\": 4"));
             assert!(
                 p.working_layers
                     .iter()
@@ -1127,8 +1162,23 @@ mod tests {
             let json = std::fs::read_to_string(format!("{root}/v2-{name}.json")).unwrap();
             assert!(json.contains("\"schemaVersion\": 2,"));
             let migrated = parse_profile(&json).unwrap();
-            assert_eq!(migrated.schema_version, 3);
+            assert_eq!(migrated.schema_version, SCHEMA_VERSION);
             assert_eq!(migrated, as_saved(&json, 2), "{name}");
+        }
+    }
+
+    #[test]
+    fn v3_profiles_migrate_to_v4_unchanged() {
+        // The built-in presets exactly as the v3 app wrote them, before heal layers.
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/profiles");
+        for preset in builtin_presets() {
+            let name = preset.profile_id.trim_start_matches("builtin-").to_string();
+            let json = std::fs::read_to_string(format!("{root}/v3-{name}.json")).unwrap();
+            assert!(json.contains("\"schemaVersion\": 3,"));
+            let migrated = parse_profile(&json).unwrap();
+            assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+            assert!(migrated.working_layers.iter().all(|l| l.heal.is_none()));
+            assert_eq!(migrated, as_saved(&json, 3), "{name}");
         }
     }
 

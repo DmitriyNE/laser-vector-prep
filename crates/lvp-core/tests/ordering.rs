@@ -142,7 +142,12 @@ fn tabs_keep_holes_before_their_outer_under_optimisation() {
     );
     let whole = Evaluator::new().evaluate(&profile, &sources);
     let loops = whole.pass(&PassId::new("pass-cut")).unwrap().paths.len();
-    profile.working_layers[0].passes[0].breaks = Some(Breaks::Tabs {
+    let cut = profile
+        .working_layers
+        .iter_mut()
+        .find(|l| l.id == LayerId::new("wl-cut"))
+        .unwrap();
+    cut.passes[0].breaks = Some(Breaks::Tabs {
         count: 4,
         width_mm: 0.5,
     });

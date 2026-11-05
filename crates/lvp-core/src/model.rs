@@ -11,8 +11,8 @@ use crate::region::LoopRule;
 
 /// Current profile schema version. Every change after deployment bumps it together with a
 /// migration in `profile` (v1 was deployed on 2026-10-25; v2 adds the audit width, v3 the
-/// patterns of 2026-10-26).
-pub const SCHEMA_VERSION: u32 = 3;
+/// patterns of 2026-10-26, v4 heal layers).
+pub const SCHEMA_VERSION: u32 = 4;
 
 macro_rules! id_type {
     ($name:ident, $doc:literal) => {
@@ -149,6 +149,30 @@ pub enum EnvelopeProvider {
         #[serde(default, skip_serializing_if = "JoinStyle::is_round")]
         join: JoinStyle,
     },
+}
+
+/// Healing of a linework layer (a heal layer): open paths whose ends meet within the
+/// tolerance are joined into longer paths and closed loops, so that an outline drawn in
+/// separate pieces can bound a region (D40).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Heal {
+    /// Largest gap between two ends that are joined (mm). Gaps up to 1 µm close by moving
+    /// both ends together; wider ones are bridged by a straight segment.
+    #[serde(default = "default_heal_tolerance")]
+    pub tolerance_mm: f64,
+}
+
+fn default_heal_tolerance() -> f64 {
+    crate::heal::SNAP_MM
+}
+
+impl Default for Heal {
+    fn default() -> Self {
+        Self {
+            tolerance_mm: default_heal_tolerance(),
+        }
+    }
 }
 
 /// How an offset turns a corner it moves away from: an exact arc around the corner (round),
@@ -540,6 +564,9 @@ pub struct WorkingLayer {
     /// Required when `kind` is `Envelope`; ignored otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelope: Option<EnvelopeProvider>,
+    /// Linework only: join the loose ends of the merged inputs. Schema v4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heal: Option<Heal>,
     #[serde(default)]
     pub interpretation: Interpretation,
     #[serde(default)]

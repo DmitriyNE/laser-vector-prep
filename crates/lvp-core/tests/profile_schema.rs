@@ -40,7 +40,8 @@ fn presets_and_saved_profiles_conform() {
             )
         })
         .collect();
-    // Profiles written by the deployed v1 app have the same shape (v2 only adds a field).
+    // Profiles written by older apps have the same shape (later versions only add optional
+    // fields).
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/profiles");
     for e in std::fs::read_dir(root).unwrap() {
         let path = e.unwrap().path();

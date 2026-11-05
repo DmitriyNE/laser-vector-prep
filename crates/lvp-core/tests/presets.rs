@@ -3,6 +3,7 @@
 //! cutting). The positive LDI preset is covered by `export_pipeline.rs`.
 
 use cavalier_contours::polyline::PlineSource;
+use lvp_core::diag::Severity;
 use lvp_core::dxf::read::{ReadOptions, read_str};
 use lvp_core::dxf::write::{Document, Entity};
 use lvp_core::eval::{BindingStatus, Evaluator, Sources};
@@ -13,6 +14,7 @@ use lvp_core::patterns::Geometry;
 use lvp_core::pline::{self, Pline};
 use lvp_core::profile::{boundary_cutting, general_marking, pcb_negative_hatch};
 use lvp_core::region::Region;
+use lvp_core::source::{ReadOptions as AnyOptions, read_any};
 use lvp_core::units::Unit;
 
 fn fixture(name: &str) -> Sources {
@@ -212,4 +214,78 @@ fn boundary_cutting_preset_traces_outline_holes_first() {
         ev.pass(&PassId::new("pass-cut"))
             .is_none_or(|p| p.paths.is_empty())
     );
+}
+
+fn heater(files: &[&str]) -> Sources {
+    let mut s = Sources::default();
+    for f in files {
+        let path = format!(
+            "{}/../../fixtures/designs/heater/{f}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bytes = std::fs::read(&path).unwrap();
+        s.add(*f, read_any(f, &bytes, &AnyOptions::default()).unwrap());
+    }
+    s
+}
+
+fn errors(ev: &lvp_core::eval::Evaluation) -> Vec<String> {
+    ev.layers
+        .values()
+        .flat_map(|l| &l.diagnostics)
+        .chain(&ev.diagnostics)
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect()
+}
+
+#[test]
+fn a_kicad_profile_drawn_in_pieces_is_healed_for_cutting_and_inversion() {
+    // KiCad 10 writes the heater's outline as eight separate draws, arcs all clockwise and
+    // two joints 9 nm apart: the presets' heal layers close it into one loop.
+    let sources = heater(&["heater-Edge_Cuts.gm1", "heater-F_Cu.gtl"]);
+    let profile = boundary_cutting();
+    let ev = Evaluator::new().evaluate(&profile, &sources);
+    assert!(errors(&ev).is_empty(), "{:?}", errors(&ev));
+    let Geometry::Linework(outline) = &ev.layers[&LayerId::new("wl-outline")].geometry else {
+        panic!()
+    };
+    assert_eq!(outline.len(), 1);
+    assert!(outline[0].is_closed());
+    let cut = region_of(&ev, "wl-cut");
+    assert_eq!((cut.outers().count(), cut.holes().count()), (1, 0));
+    assert!((cut.area() - outline[0].area().abs()).abs() < 1e-6);
+    // A disc of radius 25.5 mm less its cap above y = 24.31 (2030.6 mm²), with a 14 mm
+    // wide tab up to y = 36.5 (170.7 mm², less 0.4 mm² of rounded corners).
+    assert!((cut.area() - 2201.1).abs() < 0.5, "{}", cut.area());
+    let trace = &ev.pass(&PassId::new("pass-cut")).unwrap().paths;
+    assert_eq!(trace.len(), 1);
+    assert!(trace[0].is_closed());
+
+    // Without healing, region reading joins only the exact joints and names the gap.
+    let mut unhealed = profile.clone();
+    unhealed.working_layers[0].heal = None;
+    let ev = Evaluator::new().evaluate(&unhealed, &sources);
+    let open = ev.layers[&LayerId::new("wl-cut")]
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "eval.open_linework_in_region")
+        .unwrap();
+    assert!(
+        open.message.starts_with(
+            "2 open path(s) cannot bound a region (the nearest two loose ends are 9.00 nm apart)"
+        ),
+        "{}",
+        open.message
+    );
+    assert_eq!(ev.layers[&LayerId::new("wl-cut")].loose_ends.len(), 4);
+
+    // The negative preset's board interior is the same healed outline.
+    let mut negative = pcb_negative_hatch();
+    coarsen(&mut negative, 0.2);
+    let ev = Evaluator::new().evaluate(&negative, &sources);
+    assert!(errors(&ev).is_empty(), "{:?}", errors(&ev));
+    assert!((region_of(&ev, "wl-board").area() - cut.area()).abs() < 1e-6);
+    let outline = &ev.pass(&PassId::new("pass-outline")).unwrap().paths;
+    assert_eq!(outline.len(), 1);
 }

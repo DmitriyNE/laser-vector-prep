@@ -16,6 +16,7 @@ pub mod fuzz;
 pub mod gds;
 pub mod geom;
 pub mod gerber;
+pub mod heal;
 pub mod ipc;
 pub mod model;
 pub mod order;
