@@ -34,9 +34,9 @@ Fixtures are test data only and are never bundled into the shipped site.
 
 Three directories are not generated:
 
-- `profiles/` holds the four built-in presets exactly as the deployed v1 app (2026-10-25)
-  and v2 app (2026-10-26) wrote them. They test the migrations and the published profile
-  schema.
+- `profiles/` holds the four built-in presets exactly as the deployed v1 app (2026-10-25),
+  v2 app (2026-10-26) and v3 app (before heal layers, 2026-11-05) wrote them. They test the
+  migrations and the published profile schema.
 - `fuzz/` holds inputs that once crashed, hung or exhausted memory in a fuzz target; see
   [`fuzz/README.md`](fuzz/README.md).
 - `designs/` holds real designs exported by CAD tools, one directory per design, kept as

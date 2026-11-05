@@ -207,6 +207,18 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
 - [ ] A winding probe is still tested exactly against every segment whose box holds it,
       and the boxes of long arcs (strokes of a 200 m arc) hold most probes
 
+## Heal layers (D40)
+
+- [x] `heal` module: ends paired within a tolerance, midpoint snaps up to 1 µm, straight
+      bridges beyond, junctions left and counted, nearest loose ends reported
+- [x] Heal layers (linework with `heal`, schema v4), exact joining in region reading
+      instead of the DXF reader, presets reading outlines through heal layers
+- [x] Loose ends in layer summaries and the preview; "+ heal", the tolerance field
+- [ ] Overshoots and undershoots: lines that cross just past a corner, or stop short of a
+      line they should meet in a T, are not trimmed or extended
+- [ ] Doubled edges (the same piece drawn twice) block joining at both their ends; they
+      could be dropped as duplicates first
+
 ## Order inspector (D39)
 
 - [x] A group's marking sequence shared by the exporters and the preview

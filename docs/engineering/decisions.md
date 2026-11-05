@@ -659,3 +659,45 @@ transforms are single precision, so when a buffer's extent times the device scal
 the scene under the inspector (including the whole sequence, faint) is kept in an
 offscreen canvas and only the marked paths and the current path are drawn again.
 
+## D40 — Heal layers: outlines drawn in pieces joined in the layer graph (2026-11-05)
+
+The owner's KiCad heater board (`fixtures/designs/heater/`) has an outline that looks
+closed but could not bound a region, so no board interior and no cut. KiCad 10 writes it
+as eight separate draws, each arc clockwise whichever way the outline runs, and two joints
+are 9 and 9.5 nm apart (its arc ends are rounded apart from its lines'). The Gerber reader
+chains only draws that continue one another; the DXF reader joined separate pieces, but
+only those whose ends met within 1 nm.
+
+Asked whether the readers should heal, the owner chose (2026-11-05): healing is not a
+property of the reader but a layer in the graph, configurable, 1 µm by default.
+
+- **Heal layer**: a linework layer with `heal: { toleranceMm }` (schema v4). After merging
+  its inputs it joins open paths: an end joins the one other end within the tolerance,
+  when that end has no other candidate either, and a path whose own ends meet closes.
+  Junctions and doubled edges stay as they are and are counted. Gaps up to 1 µm close by
+  moving both ends to their midpoint; wider gaps (a raised tolerance) are bridged by a
+  straight segment, so arcs keep their shape. Chains become longer paths and cycles closed
+  loops, except a cycle that encloses nothing (a piece drawn there and back). Ends are
+  paired by nearest-neighbour searches in a static box index, which stop at the tolerance,
+  so ends piled at one point cost no more than any others.
+- **Readers keep paths as drawn.** The DXF reader's joining moved out of it. Region
+  reading (region and envelope layers, every format) still joins pieces whose ends
+  coincide within 1 nm, in either direction: a boundary drawn in pieces that meet is no
+  repair, and DXF pads drawn as lines and arcs keep working without a heal layer each.
+- **Telling what is open**: a region layer reports open paths with the distance between
+  the nearest two loose ends away from junctions (the tolerance that would join them) and
+  the number of ends at junctions. The loose ends are kept with the layer result and
+  ringed in the preview: always on a region layer, on a heal layer while it is selected,
+  since linework may be meant to be open.
+- **Presets**: the PCB presets' outline layers heal, so the outline passthrough is one loop
+  and the negative preset's board interior reads it; boundary cutting reads its outline
+  through a reference-only heal layer.
+
+A DXF outline drawn in pieces now passes through as pieces unless a heal layer joins
+them. The migration from v3 changes nothing.
+
+Alternatives offered: healing in the readers (every consumer sees healed geometry, but
+the source view no longer shows the file as drawn and the tolerance belongs to nothing);
+a stage between import and the profile with a per-file tolerance (the same, and not
+saved, as only profiles are); a "join ends within" setting on each region layer (lightest,
+but invisible in the graph).

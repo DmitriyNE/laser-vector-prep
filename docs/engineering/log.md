@@ -3,6 +3,27 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-11-05 — Heal layers
+
+The owner could not make a region of the heater board's outline, to cut along it with a
+thicker boundary: closed to the eye, open to the app (DEF-28). Its profile is eight
+separate Gerber draws, arcs all clockwise, two joints 9 and 9.5 nm apart. Offered healing
+in the readers, in a stage before the profile or in a layer, the owner chose a layer with a
+configurable tolerance, 1 µm by default (D40).
+
+The heal module pairs ends by nearest-neighbour search and walks the pairs into chains and
+loops; a proptest cuts random line-and-arc loops into shuffled, partly reversed pieces
+pulled apart by less than the tolerance and checks they heal back into one loop of the same
+area. Region reading joins only exact joints now that the DXF reader no longer does; what
+stays open is reported with the gap between the nearest loose ends, and those ends are
+ringed in the preview. The presets read their outlines through heal layers; the heater now
+cuts as one closed trace and its board interior is 2201.1 mm².
+
+Learned:
+
+- A hint that names the nearest loose ends must skip junctions: three ends at one point
+  are 0 nm apart, and no tolerance joins them.
+
 ## 2026-11-05 — Nightly fuzz timeouts
 
 The owner added a KiCad heater board, the first real design kept in the repo

@@ -42,6 +42,12 @@ come within a few nanometres of each other can occasionally not be resolved comp
 the reader then warns that part of the layer was left out instead of dropping it
 silently.
 
+Paths stay as the file draws them. Outlines that CAD draws as separate lines and arcs
+(DXF pads and cut-outs, KiCad's Gerber profiles) become closed loops in the layer graph:
+a region layer reads pieces whose ends coincide as the loop they form, and a **heal
+layer** joins ends within a tolerance (1 µm by default), which also closes the few
+nanometres KiCad rounds its arc ends apart from its lines.
+
 A layer may also carry a declared **function** (Gerber X2 `TF.FileFunction`, IPC-2581
 `layerFunction,side`), which profile slots can match with a `function` rule.
 
@@ -55,7 +61,6 @@ A layer may also carry a declared **function** (Gerber X2 `TF.FileFunction`, IPC
 | HATCH | Polyline and edge boundaries (lines, arcs, ellipses, splines), nesting styles. |
 | SOLID, TRACE | Filled quadrilaterals. |
 | REGION | Planar regions from the ACIS text DXF R13 to R2010 embed (SAT 1.x to 7.x): each face a filled area, straight and circular edges exact, elliptic ones flattened. Regions DXF 2013 and later store in binary (ACDSDATA) are reported, not read. |
-| Outlines in pieces | Zero-width lines, arcs and open polylines of one layer that meet end to end in a closed cycle (every joint shared by exactly two pieces) become one closed outline, as CAD often draws pads and cut-outs (info). Open chains and junctions are left as they are. |
 | INSERT | Blocks expanded with scale, rotation and translation; entities on layer 0 inherit the insert's layer. Non-uniform scale flattens arcs (warning). Depth limited to 32. |
 | `$INSUNITS` | in, mm, cm, m, mil, µm. Unitless files use the assumed unit (mm), reported. |
 
