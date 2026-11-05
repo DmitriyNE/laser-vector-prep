@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Heatmap, Preview } from "../core/types.js";
   import { rgbCss, type ProjectStore } from "../state/project.svelte.js";
-  import { Sequence } from "../state/sequence.js";
+  import { Sequence, Timing } from "../state/sequence.js";
   import { documentPath, documentSpaceOk, extent, inDocument, nearestVertex, project, segment, tracePath, type View } from "./canvas.js";
   import { drawOrder, drawOrderBase, type OrderState } from "./orderDraw.js";
   import OrderTimeline from "./OrderTimeline.svelte";
@@ -39,6 +39,8 @@
     return gs.find((g) => g.id === store.orderGroup && g.paths > 0)?.id ?? gs.find((g) => g.paths > 0)?.id ?? null;
   });
   const inspecting = () => (store.showOrder && order ? order : null);
+  /** Trajectory mode's timeline of the inspected sequence at the chosen speeds. */
+  const timing = $derived.by(() => (order && store.orderMode === "trajectory" ? new Timing(order.seq, store.markSpeed, store.jumpSpeed) : null));
   /** Heatmap images in document mm: drawn under the geometry when enabled. */
   type HeatImage = { key: string; canvas: HTMLCanvasElement; x: number; top: number; wMm: number; hMm: number };
   let heatImages: HeatImage[] = [];
@@ -255,6 +257,7 @@
       hidden: (i) => hidden[ord.seq.order.passOf[i]!] === 1,
       hiddenKey: hidden.join(""),
       hover,
+      beam: timing?.seq === ord.seq ? timing.at(store.orderTime) : null,
     };
   }
 
@@ -523,7 +526,10 @@
       store.tape = !t || t.fixed ? { a: p, b: null, fixed: false } : { a: t.a, b: p, fixed: true };
       return;
     }
-    if (click && hover >= 0 && inspecting()) store.orderIndex = hover;
+    if (click && hover >= 0 && inspecting()) {
+      store.orderIndex = hover;
+      if (timing) store.orderTime = timing.markStart(hover);
+    }
   }
 
   function onPointerLeave() {
@@ -677,6 +683,8 @@
     void store.orderIndex;
     void store.orderGradient;
     void order;
+    void timing;
+    void store.orderTime;
     void store.measuring;
     void store.tape;
     void tapeAt;
@@ -719,7 +727,7 @@
     <div class="hover-label" style:left="{hoverAt.x + 12}px" style:top="{hoverAt.y + 12}px">#{(hover + 1).toLocaleString("en-US")}</div>
   {/if}
   {#if store.showOrder}
-    <OrderTimeline {store} seq={order?.seq ?? null} group={orderGroup} />
+    <OrderTimeline {store} seq={order?.seq ?? null} {timing} group={orderGroup} />
   {/if}
   <div class="hud overlay-bar">
     <label><input type="checkbox" bind:checked={store.showSources} /> sources</label>

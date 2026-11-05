@@ -29,6 +29,16 @@ export type Selection =
   | { kind: "group"; id: string };
 
 const LAST_PROFILE_KEY = "lastProfile";
+
+/** A positive number kept in this browser's storage, else `fallback`. */
+function stored(key: string, fallback: number): number {
+  try {
+    const v = Number(localStorage.getItem(key));
+    return v > 0 && Number.isFinite(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
 /** Default tolerance of a new heal layer (mm): the core's `heal::SNAP_MM`. */
 export const HEAL_TOLERANCE_MM = 0.001;
 
@@ -93,6 +103,15 @@ export class ProjectStore {
   orderIndex = $state(Number.MAX_SAFE_INTEGER);
   /** Colour marked paths by their place in the order rather than by group. */
   orderGradient = $state(true);
+  /** Step the order path by path, or follow the beam through it in time. */
+  orderMode: "paths" | "trajectory" = $state("paths");
+  /** Trajectory mode: the moment shown, seconds from the group's start (clamped where used,
+   * so it starts at the end like `orderIndex`). */
+  orderTime = $state(Number.MAX_VALUE);
+  /** Trajectory mode's mark and jump speeds (mm/s): preview settings kept in this browser,
+   * never in the profile, which holds no machine settings. */
+  markSpeed = $state(stored("lvp.markSpeed", 1000));
+  jumpSpeed = $state(stored("lvp.jumpSpeed", 3000));
   /** Tape measure: on or off, and its points in document mm (`b` follows the pointer until fixed). */
   measuring = $state(false);
   tape: { a: [number, number]; b: [number, number] | null; fixed: boolean } | null = $state.raw(null);
@@ -381,9 +400,23 @@ export class ProjectStore {
     return this.worker.call({ kind: "previewOrder", id: groupId });
   }
 
+  /** Set a trajectory speed (mm/s) and remember it in this browser. */
+  setSpeed(which: "markSpeed" | "jumpSpeed", mmPerS: number) {
+    if (!(mmPerS > 0) || !Number.isFinite(mmPerS)) return;
+    this[which] = mmPerS;
+    try {
+      localStorage.setItem(`lvp.${which}`, String(mmPerS));
+    } catch {
+      // Storage unavailable (private window, blocked site data): the speed lasts the session.
+    }
+  }
+
   /** Open the order inspector on a group. */
   inspectOrder(groupId: string) {
-    if (this.orderGroup !== groupId) this.orderIndex = Number.MAX_SAFE_INTEGER;
+    if (this.orderGroup !== groupId) {
+      this.orderIndex = Number.MAX_SAFE_INTEGER;
+      this.orderTime = Number.MAX_VALUE;
+    }
     this.orderGroup = groupId;
     this.showOrder = true;
   }

@@ -6,6 +6,9 @@ const url = "http://localhost:4180/";
 type Lvp = {
   evaluation: { groups: { id: string; name: string; paths: number }[] };
   orderIndex: number;
+  orderTime: number;
+  orderMode: string;
+  markSpeed: number;
   previewOrder: (id: string) => Promise<{ paths: { originX: number; originY: number; coords: Float32Array; starts: Uint32Array } } | null>;
 };
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -90,4 +93,58 @@ test("the order inspector steps through a group's marking order", async ({ page 
   // Off again: the timeline goes away.
   await page.locator(".hud").getByLabel("order").uncheck();
   await expect(timeline).toBeHidden();
+});
+
+test("trajectory playback follows the beam along the paths at the mark and jump speeds", async ({ page }) => {
+  await page.goto(url);
+  await waitForApp(page);
+  await importDxf(page, fixture("board-islands.dxf"));
+  const lvp = <K extends keyof Lvp>(key: K) => page.evaluate((k) => (globalThis as unknown as { lvp: Lvp }).lvp[k], key) as Promise<Lvp[K]>;
+  await page.locator(".hud").getByLabel("order").check();
+  const timeline = page.locator(".timeline");
+  const count = timeline.locator(".count");
+  const readout = timeline.locator(".readout");
+  const groups = await lvp("evaluation");
+  const n = groups.groups.find((g) => g.name === "Copper")!.paths;
+  await expect(count).toHaveText(`${fmt(n)} / ${fmt(n)}`);
+
+  // Switching keeps the place: the group stays fully marked, the slider now runs over time.
+  await timeline.getByLabel("trajectory").check();
+  expect(await lvp("orderMode")).toBe("trajectory");
+  const slider = timeline.getByRole("slider", { name: "time" });
+  const total = Number(await slider.getAttribute("max"));
+  expect(total).toBeGreaterThan(0);
+  await expect(count).toHaveText(`${fmt(n)} / ${fmt(n)}`);
+  await expect(readout).toContainText(/ \/ ([\d.]+ s|\d+:[\d.]+)$/);
+
+  // Home goes to the start; the arrows step to where each path begins to be marked.
+  await slider.focus();
+  await page.keyboard.press("Home");
+  expect(await lvp("orderTime")).toBe(0);
+  await page.keyboard.press("ArrowRight");
+  await expect(count).toHaveText(`2 / ${fmt(n)}`);
+  await expect(readout).toContainText("marking 0.000 of");
+
+  // Slower marking stretches the timeline and keeps the beam on its path.
+  await timeline.getByLabel("mark", { exact: true }).fill("100");
+  await timeline.getByLabel("mark", { exact: true }).press("Enter");
+  await expect.poll(() => lvp("markSpeed")).toBe(100);
+  expect(Number(await slider.getAttribute("max"))).toBeGreaterThan(total * 2);
+  await expect(count).toHaveText(`2 / ${fmt(n)}`);
+
+  // Play moves the beam on in time; pause holds it.
+  await timeline.locator("select.speed").selectOption("10");
+  await timeline.getByRole("button", { name: "play" }).click();
+  await expect.poll(() => lvp("orderTime"), { timeout: 10_000 }).toBeGreaterThan(1);
+  await timeline.getByRole("button", { name: "pause" }).click();
+  const paused = await lvp("orderTime");
+  await page.waitForTimeout(200);
+  expect(await lvp("orderTime")).toBe(paused);
+
+  // Back to stepping paths, on the path the beam was marking.
+  const shown = await count.textContent();
+  await timeline.getByLabel("trajectory").uncheck();
+  expect(await lvp("orderMode")).toBe("paths");
+  await expect(timeline.getByRole("slider", { name: "current path" })).toBeVisible();
+  await expect(count).toHaveText(shown!);
 });

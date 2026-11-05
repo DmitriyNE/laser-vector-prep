@@ -3,6 +3,15 @@
 Newest entry first. Record what was done, what broke, and what was learned; decisions
 with lasting effect go to `decisions.md`.
 
+## 2026-11-05 — Trajectory playback
+
+The owner wanted to watch the beam inside paths, not only step from path to path (D41).
+The sequence now has a `Timing` at a mark and a jump speed, which places the beam at any
+moment, and the inspector's trajectory mode draws the current path up to it, the jump it
+is on as far as it has come, and the beam itself. Arcs are cut short on their own circle
+(the bulge of the part is tan(f · sweep / 4)), so the marked part of an arc is drawn as an
+arc.
+
 ## 2026-11-05 — First nightly fuzz with heal layers
 
 The nightly run timed out on a GDS input under boundary cutting (DEF-29): its 16,392

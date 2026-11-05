@@ -236,5 +236,5 @@ Order: Gerber → optimizer → SVG → PDF → GDSII → IPC-2581 → SVG/DXF e
       (2026-10-27)
 - [ ] Every visibility toggle re-requests every preview buffer from the worker (about
       0.3 s on the Altium board); keep the buffers of an unchanged revision
-- [ ] Optionally trace the current path part way (the beam's position by length), if
-      stepping whole paths turns out too coarse for long linked fills
+- [x] Trace the current path part way: trajectory playback follows the beam in time at a
+      mark and a jump speed (D41)

@@ -1,6 +1,7 @@
 // The marking sequence of one output group, for the preview's order inspector: path
-// lengths and bounds, the jumps between paths, hit testing, and points along a path for
-// direction marks. No canvas and no Svelte here, so all of it is unit tested.
+// lengths and bounds, the jumps between paths, hit testing, points along a path for
+// direction marks, and the beam's place in time at given speeds. No canvas and no Svelte
+// here, so all of it is unit tested.
 
 import type { OrderPreview } from "../core/types.js";
 
@@ -207,6 +208,20 @@ export class Sequence {
     return out;
   }
 
+  /** The point at arc length `s` along path `i`, with the direction of travel there. */
+  pointAt(i: number, s: number): Mark {
+    let base = 0;
+    let last: Seg | null = null;
+    for (const g of this.segments(i)) {
+      if (s <= base + g.length) return segPoint(g, Math.max(0, s - base));
+      base += g.length;
+      last = g;
+    }
+    if (last) return segPoint(last, last.length);
+    const [x, y] = this.first(i);
+    return { x, y, dx: 1, dy: 0 };
+  }
+
   /** The path nearest to (x, y) within `tol` mm, or -1; the later of equally near ones. */
   pathAt(x: number, y: number, tol: number): number {
     const grid = (this.#grid ??= new Grid(this));
@@ -300,6 +315,101 @@ class Grid {
         for (let j = this.#rows[c]!; j < this.#rows[c + 1]!; j++) yield this.#items[j]!;
       }
     }
+  }
+}
+
+// ---- trajectory: where the beam is at a moment, at given mark and jump speeds ----------
+
+/** The end point and bulge of the first `s` mm of a segment (an arc keeps its circle). */
+export function segUpTo(g: Seg, s: number): { x: number; y: number; bulge: number } {
+  const f = g.length > 0 ? Math.min(1, Math.max(0, s / g.length)) : 1;
+  if (f >= 1) return { x: g.x2, y: g.y2, bulge: g.arc ? Math.tan(g.sweep / 4) : 0 };
+  const p = segPoint(g, f * g.length);
+  return { x: p.x, y: p.y, bulge: g.arc ? Math.tan((g.sweep * f) / 4) : 0 };
+}
+
+/** Where the beam is at a moment of a group's trajectory. */
+export interface BeamAt {
+  /** The current path: the ones before it are marked. */
+  index: number;
+  /** Travelling the jump into `index`, marking it, or jumping from the last path to the end point. */
+  phase: "jump" | "mark" | "end";
+  /** Distance travelled along that jump or path (mm). */
+  s: number;
+  /** The beam's position (mm). */
+  point: Pt;
+}
+
+const along = ([a, b]: [Pt, Pt], s: number): Pt => {
+  const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const t = d > 0 ? Math.min(1, s / d) : 1;
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+};
+
+/**
+ * A group's trajectory in time at a mark and a jump speed (mm/s): the jump into each path,
+ * then the path; after the last, the jump to the end point. Acceleration, galvo settling
+ * and laser delays are not modelled.
+ */
+export class Timing {
+  /** When the jump into each path begins (s); `starts[count]`, when the final jump does. */
+  readonly starts: Float64Array;
+  /** Time spent marking and in all, start to end (s). */
+  readonly marking: number;
+  readonly total: number;
+
+  constructor(
+    readonly seq: Sequence,
+    readonly markSpeed: number,
+    readonly jumpSpeed: number,
+  ) {
+    const n = seq.count;
+    this.starts = new Float64Array(n + 1);
+    let t = 0;
+    for (let i = 0; i < n; i++) {
+      this.starts[i] = t;
+      t += seq.jumps[i]! / jumpSpeed + seq.lengths[i]! / markSpeed;
+    }
+    this.starts[n] = t;
+    const end = seq.finalJump();
+    this.total = t + (end ? Math.hypot(end[1][0] - end[0][0], end[1][1] - end[0][1]) / jumpSpeed : 0);
+    this.marking = n ? seq.markedTo[n - 1]! / markSpeed : 0;
+  }
+
+  /** When path `i` begins to be marked (after the jump into it). */
+  markStart(i: number): number {
+    return this.starts[i]! + this.seq.jumps[i]! / this.jumpSpeed;
+  }
+
+  /** Where the beam is at time `t`, clamped to the trajectory; null for an empty group. */
+  at(t: number): BeamAt | null {
+    const seq = this.seq;
+    const n = seq.count;
+    if (!n) return null;
+    const time = Math.min(Math.max(t, 0), this.total);
+    if (time >= this.starts[n]!) {
+      const end = seq.finalJump();
+      if (!end) return { index: n - 1, phase: "mark", s: seq.lengths[n - 1]!, point: seq.last(n - 1) };
+      const s = (time - this.starts[n]!) * this.jumpSpeed;
+      return { index: n - 1, phase: "end", s, point: along(end, s) };
+    }
+    // The last path whose jump has begun.
+    let lo = 0;
+    let hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.starts[mid]! <= time) lo = mid;
+      else hi = mid - 1;
+    }
+    // Compared with `markStart` itself, so a seek to where a path begins lands on it.
+    const markFrom = this.markStart(lo);
+    if (time < markFrom) {
+      const s = (time - this.starts[lo]!) * this.jumpSpeed;
+      return { index: lo, phase: "jump", s, point: along(seq.jumpInto(lo)!, s) };
+    }
+    const s = Math.min((time - markFrom) * this.markSpeed, seq.lengths[lo]!);
+    const m = seq.pointAt(lo, s);
+    return { index: lo, phase: "mark", s, point: [m.x, m.y] };
   }
 }
 

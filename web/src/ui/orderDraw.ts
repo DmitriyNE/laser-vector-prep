@@ -3,8 +3,8 @@
 // while stepping); over it, marked paths are coloured by their place in the order (or by
 // group), chevrons along them give the direction of travel, and the current path stands out.
 
-import { BUCKET_COLORS, bucketOf, ORDER_BUCKETS, type Mark, type Sequence } from "../state/sequence.js";
-import { documentSpaceOk, extent, inDocument, project, traceDocument, tracePath, viewBounds, type View } from "./canvas.js";
+import { BUCKET_COLORS, bucketOf, ORDER_BUCKETS, segUpTo, type BeamAt, type Mark, type Pt, type Sequence } from "../state/sequence.js";
+import { documentSpaceOk, extent, inDocument, project, segment, traceDocument, tracePath, viewBounds, type View } from "./canvas.js";
 
 export interface OrderState {
   /** The current path; the ones before it are marked. */
@@ -20,6 +20,8 @@ export interface OrderState {
   hiddenKey: string;
   /** Path under the pointer, or -1. */
   hover: number;
+  /** Trajectory mode: where the beam is. Its path is the current one, marked up to it. */
+  beam: BeamAt | null;
 }
 
 /** Screen distance between direction chevrons on marked paths (px). */
@@ -30,6 +32,8 @@ const FAINT = "rgba(128, 128, 128, 0.3)";
 const JUMP = "rgba(220, 0, 200, 0.8)";
 const HALO = "rgba(255, 190, 0, 0.5)";
 const HOVER = "rgba(31, 111, 235, 0.9)";
+const BEAM = "rgb(255, 40, 40)";
+const BEAM_GLOW = "rgba(255, 60, 60, 0.25)";
 
 /** An open arrowhead of `size` px pointing along the travel at mark `m`. */
 function chevron(path: Path2D, v: View, m: Mark, size: number) {
@@ -115,9 +119,45 @@ function dot(ctx: CanvasRenderingContext2D, v: View, p: [number, number], r: num
   ctx.stroke();
 }
 
+/** Path `i` from its start to arc length `s`, in screen space. */
+function traceTo(v: View, seq: Sequence, i: number, s: number): Path2D {
+  const path = new Path2D();
+  const [x0, y0] = project(v, ...seq.first(i));
+  path.moveTo(x0, y0);
+  let base = 0;
+  for (const g of seq.segments(i)) {
+    if (base >= s) break;
+    const end = segUpTo(g, s - base);
+    segment(path, v, g.x1, g.y1, end.x, end.y, end.bulge);
+    base += g.length;
+  }
+  return path;
+}
+
+/** A jump from `a` to `b`, travelled as far as `to`: done solid, the rest dashed. */
+function partJump(ctx: CanvasRenderingContext2D, v: View, a: Pt, to: Pt, b: Pt) {
+  const [ax, ay] = project(v, ...a);
+  const [ex, ey] = project(v, ...to);
+  const [bx, by] = project(v, ...b);
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(bx, by);
+  ctx.setLineDash([4, 3]);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = JUMP;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(ex, ey);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
 export function drawOrder(ctx: CanvasRenderingContext2D, v: View, seq: Sequence, st: OrderState) {
   if (!seq.count) return;
-  const index = Math.min(Math.max(st.index, 0), seq.count - 1);
+  const beam = st.beam;
+  const index = beam ? beam.index : Math.min(Math.max(st.index, 0), seq.count - 1);
   const p = seq.order.paths;
   const visible = inView(v, seq);
   const colorOf = (i: number) => (st.gradient ? BUCKET_COLORS[bucketOf(i, seq.count)]! : st.color);
@@ -191,29 +231,33 @@ export function drawOrder(ctx: CanvasRenderingContext2D, v: View, seq: Sequence,
   ctx.lineWidth = 8;
   ctx.strokeStyle = HALO;
   ctx.stroke(cur);
+  // Following the beam, the jump and the path are drawn as far as it has come.
   const jump = seq.jumpInto(index);
-  if (jump) {
-    const [ax, ay] = project(v, jump[0][0], jump[0][1]);
-    const [bx, by] = project(v, jump[1][0], jump[1][1]);
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = JUMP;
-    ctx.stroke();
-  }
+  if (jump) partJump(ctx, v, jump[0], beam?.phase === "jump" ? beam.point : jump[1], jump[1]);
+  const length = seq.lengths[index]!;
+  const marked = !beam || beam.phase === "end" ? length : beam.phase === "mark" ? beam.s : 0;
   const color = colorOf(index);
-  const len = seq.lengths[index]! * v.ppm;
-  const step = Math.min(40, len / 3) / v.ppm;
+  const step = Math.min(40, (length * v.ppm) / 3) / v.ppm;
+  const count = marked >= length ? 400 : step > 0 ? Math.min(400, Math.max(0, Math.floor((marked - step / 2) / step) + 1)) : 0;
   const heads = new Path2D();
-  for (const m of seq.marks(index, step / 2, step, 400)) chevron(heads, v, m, 8);
+  for (const m of seq.marks(index, step / 2, step, count)) chevron(heads, v, m, 8);
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = color;
-  ctx.stroke(cur);
+  if (marked > 0) ctx.stroke(marked >= length ? cur : traceTo(v, seq, index, marked));
   ctx.lineWidth = 2;
   ctx.stroke(heads);
   if (!seq.closed(index)) dot(ctx, v, seq.last(index), 3.5, null, color);
   dot(ctx, v, seq.first(index), 4, color, "white");
+  if (beam) {
+    const end = seq.finalJump();
+    if (beam.phase === "end" && end) partJump(ctx, v, end[0], beam.point, end[1]);
+    const [bx, by] = project(v, ...beam.point);
+    ctx.beginPath();
+    ctx.arc(bx, by, 9, 0, 2 * Math.PI);
+    ctx.fillStyle = BEAM_GLOW;
+    ctx.fill();
+    dot(ctx, v, beam.point, 4.5, BEAM, "white");
+  }
   ctx.lineCap = "butt";
   ctx.lineJoin = "miter";
 }

@@ -701,3 +701,25 @@ the source view no longer shows the file as drawn and the tolerance belongs to n
 a stage between import and the profile with a per-file tolerance (the same, and not
 saved, as only profiles are); a "join ends within" setting on each region layer (lightest,
 but invisible in the graph).
+
+## D41 — Trajectory playback: the beam in time at preview-only speeds (2026-11-05)
+
+The order inspector stepped whole paths (D39), which shows the order but not what happens
+inside a long path or a linked fill. The owner asked for a trajectory option and chose,
+of three timings offered (2026-11-05), mark and jump speeds:
+
+- **The timeline is time.** The beam travels each jump at the jump speed, then the path at
+  the mark speed, and after the last path the jump to the end point. The slider runs over
+  that time; the current path is marked up to the beam, a jump is drawn solid as far as
+  the beam has come, and the beam is a red dot. The readout gives the time so far and in
+  all, and its tooltip the split into marking and jumping.
+- **The speeds are preview settings**, kept in the browser (1000 and 3000 mm/s at first),
+  never in the profile, which stores no velocity or other machine setting (spec §9). Acceleration, galvo
+  settling and laser on/off delays are not modelled, and the tooltip says so: the time is
+  a lower bound, not a job time.
+- **A rate** (0.01× to 100×) scales playback, since at real speeds a board takes seconds.
+- The arrow keys, ‹ › and a click on a path go to where that path begins to be marked;
+  switching between the modes keeps the current path.
+
+Rejected: one travel speed for marks and jumps (says nothing about time), and marking only
+with instant jumps.

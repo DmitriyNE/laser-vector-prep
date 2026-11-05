@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OrderPreview } from "../core/types.js";
-import { BUCKET_COLORS, bucketOf, ORDER_BUCKETS, rampColor, seg, segBounds, segDistance, segPoint, Sequence } from "./sequence.js";
+import { BUCKET_COLORS, bucketOf, ORDER_BUCKETS, rampColor, seg, segBounds, segDistance, segPoint, segUpTo, Sequence, Timing } from "./sequence.js";
 
 type Path = { pts: [number, number][]; bulges?: number[]; closed: boolean; pass?: number };
 
@@ -158,5 +158,63 @@ describe("order colours", () => {
       prev = b;
     }
     expect(new Set(BUCKET_COLORS).size).toBe(ORDER_BUCKETS);
+  });
+});
+
+describe("trajectory timing", () => {
+  // Two paths: a 10 mm line from (0, 0), then a half circle of radius 1 from (12, 0) to
+  // (14, 0) (π mm); start at (0, -3), end at (14, 4).
+  const s = new Sequence(
+    order(
+      [
+        { pts: [[0, 0], [10, 0]], closed: false },
+        { pts: [[12, 0], [14, 0]], bulges: [1, 0], closed: false },
+      ],
+      [0, -3],
+      [14, 4],
+    ),
+  );
+  const t = new Timing(s, 10, 100);
+
+  it("lays the jumps and paths end to end at their speeds", () => {
+    expect(t.starts[0]).toBe(0);
+    expect(t.markStart(0)).toBeCloseTo(0.03, 12);
+    expect(t.starts[1]).toBeCloseTo(1.03, 12);
+    expect(t.markStart(1)).toBeCloseTo(1.05, 12);
+    expect(t.starts[2]).toBeCloseTo(1.05 + Math.PI / 10, 12);
+    expect(t.total).toBeCloseTo(1.05 + Math.PI / 10 + 0.04, 12);
+    expect(t.marking).toBeCloseTo((10 + Math.PI) / 10, 12);
+  });
+
+  it("places the beam on jumps, along paths and on the final jump", () => {
+    expect(t.at(-1)).toEqual({ index: 0, phase: "jump", s: 0, point: [0, -3] });
+    const jumping = t.at(0.015)!;
+    expect(jumping.phase).toBe("jump");
+    expect(jumping.point[1]).toBeCloseTo(-1.5, 9);
+    const marking = t.at(0.53)!;
+    expect(marking).toMatchObject({ index: 0, phase: "mark" });
+    expect(marking.s).toBeCloseTo(5, 9);
+    expect(marking.point[0]).toBeCloseTo(5, 9);
+    // A quarter of the way round the half circle (counter-clockwise from (12, 0) about
+    // (13, 0), so below the axis): 45 degrees.
+    const arc = t.at(1.05 + Math.PI / 40)!;
+    expect(arc).toMatchObject({ index: 1, phase: "mark" });
+    expect(arc.point[0]).toBeCloseTo(13 - Math.SQRT1_2, 6);
+    expect(arc.point[1]).toBeCloseTo(-Math.SQRT1_2, 6);
+    const end = t.at(t.total + 1)!;
+    expect(end).toMatchObject({ index: 1, phase: "end" });
+    expect(end.point[0]).toBeCloseTo(14, 6);
+    expect(end.point[1]).toBeCloseTo(4, 6);
+  });
+
+  it("cuts a segment short on its own circle", () => {
+    const g = seg(12, 0, 14, 0, 1);
+    for (const f of [0.1, 0.5, 0.9]) {
+      const p = segUpTo(g, f * g.length);
+      const h = seg(12, 0, p.x, p.y, p.bulge);
+      expect(h.arc && g.arc && Math.hypot(h.cx - g.cx, h.cy - g.cy)).toBeLessThan(1e-9);
+      expect(h.length).toBeCloseTo(f * g.length, 9);
+    }
+    expect(segUpTo(seg(0, 0, 10, 0, 0), 4)).toEqual({ x: 4, y: 0, bulge: 0 });
   });
 });
